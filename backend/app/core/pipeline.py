@@ -322,7 +322,10 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
     ``project`` приходит уже проверенным (``compose.prepare``): пути внутри
     рабочих папок, про каждый ролик известно, есть ли у него звук.
     """
-    total = project.duration
+    # Отрезок сборки: без меток берём всё от начала до конца последнего клипа.
+    begin = max(request.start or 0.0, 0.0)
+    finish = min(request.end, project.duration) if request.end else project.duration
+    total = max(finish - begin, 0.0)
     first = next(
         (clip.source for track in project.tracks for clip in track.clips), None
     )
@@ -351,7 +354,9 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         try:
             codec = encode.video_codec_args(video, encode.effective_crf(video, None))
             codec += encode.audio_codec_args(audio)
-            args = compose.build_segment(project, output, codec=codec)
+            args = compose.build_segment(
+                project, output, at=begin, span=total or None, codec=codec
+            )
             ctx.log("$ " + encode.to_display_string(args))
             ctx.meta(command=encode.to_display_string(args))
 

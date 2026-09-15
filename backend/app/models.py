@@ -340,3 +340,7 @@ class ComposeBuildRequest(ComposeModel):
     output_name: str = "Монтаж"
     #: Пресет сжатия из общего каталога. ``None`` = «Баланс».
     preset_id: str | None = None
+    #: Отрезок монтажа, который собираем. ``None`` = от начала и до конца
+    #: последнего клипа. Метки ставит человек клавишами I и O.
+    start: float | None = Field(default=None, ge=0)
+    end: float | None = Field(default=None, ge=0)

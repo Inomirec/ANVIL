@@ -36,7 +36,10 @@ export function ComposeTab() {
   const setCustomSize = useCompose((state) => state.setCustomSize)
   const useCustom = useCompose((state) => state.useCustom)
   const addClip = useCompose((state) => state.addClip)
+  const addPair = useCompose((state) => state.addPair)
   const clearAll = useCompose((state) => state.clearAll)
+  const renderIn = useCompose((state) => state.renderIn)
+  const renderOut = useCompose((state) => state.renderOut)
 
   const toast = useStore((state) => state.toast)
   const setQueueOpen = useStore((state) => state.setQueueOpen)
@@ -128,7 +131,13 @@ export function ComposeTab() {
         fadeOut: 0,
         muted: false,
       }
-      addClip(clip, trackId)
+      if (clip.kind === 'video' && clip.hasAudio) {
+        // У ролика со звуком на таймлайне два клипа: видно, что звук есть,
+        // и его можно убавить или убрать, не трогая картинку.
+        addPair(clip, trackId)
+      } else {
+        addClip(clip, trackId)
+      }
       // Игла переезжает на положенный клип: иначе она осталась бы на пустом
       // месте, и окно просмотра показало бы чёрный кадр — как будто файл
       // не добавился вовсе.
@@ -147,6 +156,8 @@ export function ComposeTab() {
         output_dir: outputDir,
         output_name: outputName.trim() || 'Монтаж',
         preset_id: presetId,
+        start: renderIn,
+        end: renderOut,
       })
       setQueueOpen(true)
     } catch (error) {
@@ -160,13 +171,20 @@ export function ComposeTab() {
   // Ищем по списку дорожек, а не через getState(): иначе панель справа не
   // узнает, что клип подвинули или растянули, — снимок хранилища не
   // подписывает компонент на изменения.
-  const current = tracks.flatMap((track) => track.clips).find((clip) => clip.id === selected)
+  const current =
+    selected.length === 1
+      ? tracks.flatMap((track) => track.clips).find((clip) => clip.id === selected[0])
+      : undefined
 
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Окно просмотра */}
-        <div className="flex min-h-0 flex-1 items-center justify-center bg-black/40 p-4">
+        {/* Окно просмотра.
+
+            Фон не чёрный, и у кадра есть рамка: иначе чёрные поля вокруг
+            вертикального видео сливались с фоном, и понять, какой формы
+            получится кадр, было невозможно — всё выглядело прямоугольником. */}
+        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface-2/60 p-5">
           {!clips ? (
             <Empty
               icon={<Film size={44} />}
@@ -175,18 +193,15 @@ export function ComposeTab() {
             />
           ) : frameError ? (
             <p className="max-w-md text-center text-[12px] leading-snug text-danger">{frameError}</p>
-          ) : frameUrl ? (
-            <img
-              src={frameUrl}
-              alt=""
-              className="max-h-full max-w-full rounded-lg object-contain shadow-lg"
-              style={{ aspectRatio: `${width} / ${height}` }}
-            />
           ) : (
+            // Рамка показывает границы кадра проекта: по ней видно и форму
+            // (квадрат, вертикаль), и то, сколько места занимают чёрные поля.
             <div
-              className="rounded-lg bg-surface-2"
-              style={{ aspectRatio: `${width} / ${height}`, width: '60%' }}
-            />
+              className="relative max-h-full max-w-full overflow-hidden rounded-lg bg-black ring-1 ring-line shadow-xl"
+              style={{ aspectRatio: `${width} / ${height}`, height: '100%' }}
+            >
+              {frameUrl && <img src={frameUrl} alt="" className="h-full w-full object-contain" />}
+            </div>
           )}
         </div>
 
@@ -291,12 +306,14 @@ export function ComposeTab() {
             </p>
           </Section>
 
-          <Section title="Выбранный клип">
+          <Section title="Клип">
             {current ? (
               <ClipInfo clip={current} />
             ) : (
               <p className="text-[11.5px] leading-snug text-ink-faint">
-                Клип не выбран. Нажмите на него на дорожке — здесь появятся его данные.
+                {selected.length > 1
+                  ? `Выбрано клипов: ${selected.length}. Их можно двигать вместе и удалить клавишей Delete.`
+                  : 'Клип не выбран. Нажмите на него — здесь появятся громкость и затухания.'}
               </p>
             )}
           </Section>
@@ -384,29 +401,20 @@ export function ComposeTab() {
   )
 }
 
-/** Что показываем про выбранный клип. */
+/**
+ * Настройки выбранного клипа.
+ *
+ * Только то, что нельзя сделать прямо на дорожке: начало, длительность и тип
+ * человек и так видит перед собой, и повторять их числами здесь незачем.
+ */
 function ClipInfo({ clip }: { clip: ComposeClip }) {
-  const removeClip = useCompose((state) => state.removeClip)
+  const removeClips = useCompose((state) => state.removeClips)
   const updateClip = useCompose((state) => state.updateClip)
   const update = (patch: Partial<ComposeClip>) => updateClip(clip.id, patch)
   return (
     <div className="space-y-2">
       <p className="truncate text-[12.5px] font-medium text-ink" title={clip.name}>
         {clip.name}
-      </p>
-      <dl className="space-y-1 rounded-lg bg-surface-2 px-3 py-2 text-[11.5px]">
-        <Row label="Начало" value={timecode(clip.start, true)} />
-        <Row label="Длительность" value={timecode(clip.duration, true)} />
-        {clip.kind !== 'image' && <Row label="Взято с" value={timecode(clip.sourceIn, true)} />}
-        <Row
-          label="Тип"
-          value={clip.kind === 'image' ? 'картинка' : clip.kind === 'audio' ? 'звук' : 'видео'}
-        />
-      </dl>
-      <p className="text-[11px] leading-snug text-ink-faint">
-        {clip.kind === 'image'
-          ? 'Тяните за края на дорожке — столько картинка и будет висеть.'
-          : 'Тяните за края, чтобы отрезать лишнее с начала или с конца.'}
       </p>
 
       {/* Звук есть у музыки и у роликов с дорожкой. У картинки его нет. */}
@@ -471,7 +479,12 @@ function ClipInfo({ clip }: { clip: ComposeClip }) {
           )}
         </div>
       )}
-      <Button className="w-full" onClick={() => removeClip(clip.id)}>
+      <p className="text-[11px] leading-snug text-ink-faint">
+        {clip.kind === 'image'
+          ? 'Тяните клип за края на дорожке — столько картинка и будет висеть.'
+          : 'Тяните за края, чтобы отрезать лишнее с начала или с конца.'}
+      </p>
+      <Button className="w-full" onClick={() => removeClips([clip.id])}>
         <Trash2 size={14} />
         Убрать с дорожки
       </Button>
@@ -479,11 +492,3 @@ function ClipInfo({ clip }: { clip: ComposeClip }) {
   )
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <dt className="text-ink-faint">{label}</dt>
-      <dd className="font-mono tabular-nums text-ink-dim">{value}</dd>
-    </div>
-  )
-}

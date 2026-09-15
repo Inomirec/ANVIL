@@ -33,8 +33,15 @@ export interface ComposeClip {
   /** Плавное появление и уход звука, в секундах. */
   fadeIn: number
   fadeOut: number
-  /** Выбросить звук клипа — когда под видео кладут свою музыку. */
+  /** Выбросить звук клипа. */
   muted: boolean
+  /**
+   * Связка видео и его звука. У ролика со звуком на таймлайне два клипа:
+   * картинка на верхней дорожке и дорожка звука под ней. Общая метка держит
+   * их вместе — двигаются, режутся и удаляются они как одно целое, как в
+   * монтажных программах.
+   */
+  linkId?: string
 }
 
 export interface ComposeTrack {
@@ -95,11 +102,15 @@ interface Saved {
   /** Размер задан вручную — качество и форма тогда не применяются. */
   custom: boolean
   tracks: ComposeTrack[]
+  /** Метки отрезка сборки. ``null`` = собрать всё. */
+  renderIn: number | null
+  renderOut: number | null
 }
 
 interface State extends Saved {
   playhead: number
-  selected: string | null
+  /** Выбранные клипы. Несколько — когда обвели рамкой. */
+  selected: string[]
   /** Пикселей в секунде: масштаб таймлайна. */
   scale: number
 
@@ -111,14 +122,19 @@ interface State extends Saved {
   setFps: (fps: number) => void
   setPlayhead: (at: number) => void
   setScale: (scale: number) => void
-  select: (id: string | null) => void
+  select: (ids: string[]) => void
+
+  markIn: () => void
+  markOut: () => void
+  clearMarks: () => void
 
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
+  addPair: (video: Omit<ComposeClip, 'id'>, trackId?: string) => string
   updateClip: (id: string, patch: Partial<ComposeClip>) => void
-  moveClip: (id: string, start: number) => void
-  resizeClip: (id: string, edge: 'left' | 'right', start: number, duration: number, sourceIn: number) => void
+  moveClips: (ids: string[], shift: number) => void
+  resizeClip: (id: string, start: number, duration: number, sourceIn: number) => void
   splitAtPlayhead: () => void
-  removeClip: (id: string) => void
+  removeClips: (ids: string[]) => void
   clearAll: () => void
 
   duration: () => number
@@ -138,6 +154,8 @@ function loadSaved(): Saved {
       { id: 'v1', kind: 'video', clips: [] },
       { id: 'a1', kind: 'audio', clips: [] },
     ],
+    renderIn: null,
+    renderOut: null,
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -167,10 +185,12 @@ function loadSaved(): Saved {
 /** Монтаж запоминается сам: закрытое окно не должно стоить часа работы. */
 function save(state: State): void {
   try {
-    const { width, height, fps, quality, shape, turned, custom, tracks } = state
+    const { width, height, fps, quality, shape, turned, custom, tracks, renderIn, renderOut } = state
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ width, height, fps, quality, shape, turned, custom, tracks }),
+      JSON.stringify({
+        width, height, fps, quality, shape, turned, custom, tracks, renderIn, renderOut,
+      }),
     )
   } catch {
     // Приватный режим браузера — тогда просто не запомним.
@@ -181,12 +201,89 @@ let counter = 0
 const nextId = () => `c${Date.now().toString(36)}${(counter++).toString(36)}`
 
 /** Клипы дорожки по порядку. */
-const ordered = (track: ComposeTrack) => [...track.clips].sort((a, b) => a.start - b.start)
+const ordered = (clips: ComposeClip[]) => [...clips].sort((a, b) => a.start - b.start)
+
+const overlap = (a: ComposeClip, b: ComposeClip) =>
+  a.start < b.start + b.duration && a.start + a.duration > b.start
+
+/**
+ * Расталкивает клипы, чтобы они не лежали друг на друге.
+ *
+ * Те, кого двигает человек, остаются на месте — расступаются остальные,
+ * съезжая вправо. Так конец ролика можно перенести в начало, а картинку
+ * положить между двумя видео: соседи подвинутся сами, вместо того чтобы
+ * упираться в них, как в стенку, или улетать в конец таймлайна.
+ */
+function resolveOverlaps(clips: ComposeClip[], keep: string[]): ComposeClip[] {
+  const fixed = clips.filter((clip) => keep.includes(clip.id))
+  const movable = ordered(clips.filter((clip) => !keep.includes(clip.id)))
+
+  const placed = [...fixed]
+  const result: ComposeClip[] = [...fixed]
+  for (const clip of movable) {
+    let start = clip.start
+    // Пока мешаем кому-то из уже разложенных — отступаем правее.
+    for (let guard = 0; guard < placed.length + 1; guard++) {
+      const hit = placed.find((other) => overlap({ ...clip, start }, other))
+      if (!hit) break
+      start = hit.start + hit.duration
+    }
+    const moved = { ...clip, start }
+    placed.push(moved)
+    result.push(moved)
+  }
+  return ordered(result)
+}
+
+/**
+ * Подтягивает звук ролика под его картинку.
+ *
+ * Ведущий в связке — видеоклип: звук ходит за картинкой, а не наоборот. Без
+ * этого они разъезжались, стоило вставить что-нибудь между роликами — на
+ * видеодорожке соседи расступались, а их звук оставался на прежнем месте.
+ */
+function syncLinked(tracks: ComposeTrack[]): ComposeTrack[] {
+  const leaders = new Map<string, ComposeClip>()
+  for (const track of tracks) {
+    if (track.kind !== 'video') continue
+    for (const clip of track.clips) {
+      if (clip.linkId) leaders.set(clip.linkId, clip)
+    }
+  }
+  if (!leaders.size) return tracks
+
+  return tracks.map((track) => {
+    if (track.kind === 'video') return track
+    let changed = false
+    const clips = track.clips.map((clip) => {
+      const lead = clip.linkId ? leaders.get(clip.linkId) : undefined
+      if (!lead) return clip
+      if (
+        lead.start === clip.start &&
+        lead.duration === clip.duration &&
+        lead.sourceIn === clip.sourceIn
+      ) {
+        return clip
+      }
+      changed = true
+      return { ...clip, start: lead.start, duration: lead.duration, sourceIn: lead.sourceIn }
+    })
+    if (!changed) return track
+    // Связанные стоят там, где скажет картинка, а музыка вокруг расступается.
+    const linked = clips.filter((clip) => clip.linkId).map((clip) => clip.id)
+    return { ...track, clips: resolveOverlaps(clips, linked) }
+  })
+}
+
+/** Раскладка после любой правки: расталкивание плюс связки. */
+function settle(tracks: ComposeTrack[]): ComposeTrack[] {
+  return syncLinked(tracks)
+}
 
 export const useCompose = create<State>((set, get) => ({
   ...loadSaved(),
   playhead: 0,
-  selected: null,
+  selected: [],
   scale: 60,
 
   setQuality(quality) {
@@ -237,10 +334,36 @@ export const useCompose = create<State>((set, get) => ({
     set({ scale: Math.min(400, Math.max(4, scale)) })
   },
 
-  select(id) {
-    set({ selected: id })
+  select(ids) {
+    set({ selected: ids })
   },
 
+  // --- метки отрезка сборки ---------------------------------------------
+  markIn() {
+    const { playhead, renderOut } = get()
+    set({
+      renderIn: playhead,
+      // Метка начала позже конца — конец сбрасываем, иначе отрезок пустой.
+      renderOut: renderOut !== null && renderOut <= playhead ? null : renderOut,
+    })
+    save(get())
+  },
+
+  markOut() {
+    const { playhead, renderIn } = get()
+    set({
+      renderOut: playhead,
+      renderIn: renderIn !== null && renderIn >= playhead ? null : renderIn,
+    })
+    save(get())
+  },
+
+  clearMarks() {
+    set({ renderIn: null, renderOut: null })
+    save(get())
+  },
+
+  // --- клипы -------------------------------------------------------------
   addClip(clip, trackId) {
     const id = nextId()
     set((state) => {
@@ -253,20 +376,59 @@ export const useCompose = create<State>((set, get) => ({
         asked && asked.kind === wanted
           ? asked
           : state.tracks.find((track) => track.kind === wanted) ?? state.tracks[0]
-      // Место под клип ищем свободное: два клипа в одной точке дорожки не
-      // помещаются, и брошенный поверх соседа просто перекрыл бы его.
-      const start = target ? freeStart(target, clip.start, clip.duration) : clip.start
       return {
-        tracks: state.tracks.map((track) =>
-          track.id === target?.id
-            ? { ...track, clips: [...track.clips, { ...clip, id, start }] }
-            : track,
+        tracks: settle(
+          state.tracks.map((track) =>
+            track.id === target?.id
+              ? { ...track, clips: resolveOverlaps([...track.clips, { ...clip, id }], [id]) }
+              : track,
+          ),
         ),
-        selected: id,
+        selected: [id],
       }
     })
     save(get())
     return id
+  },
+
+  /**
+   * Кладёт ролик вместе с его звуком: картинку на видеодорожку, звук —
+   * отдельным клипом под ней. Человек видит, что звук есть, и может отдельно
+   * убавить его или убрать совсем.
+   */
+  addPair(video, trackId) {
+    const linkId = nextId()
+    const videoId = nextId()
+    const audioId = nextId()
+    set((state) => {
+      const videoTrack =
+        state.tracks.find((track) => track.id === trackId && track.kind === 'video') ??
+        state.tracks.find((track) => track.kind === 'video')
+      const audioTrack = state.tracks.find((track) => track.kind === 'audio')
+      const sound: ComposeClip = {
+        ...video,
+        id: audioId,
+        kind: 'audio',
+        linkId,
+        // Звук ролика живёт в звуковом клипе, поэтому у картинки он выключен —
+        // иначе одна и та же дорожка попала бы в сборку дважды.
+      }
+      return {
+        tracks: settle(state.tracks.map((track) => {
+          if (track.id === videoTrack?.id) {
+            const clip: ComposeClip = { ...video, id: videoId, linkId, muted: true }
+            return { ...track, clips: resolveOverlaps([...track.clips, clip], [videoId]) }
+          }
+          if (track.id === audioTrack?.id) {
+            return { ...track, clips: resolveOverlaps([...track.clips, sound], [audioId]) }
+          }
+          return track
+        })),
+        selected: [videoId],
+      }
+    })
+    save(get())
+    return videoId
   },
 
   updateClip(id, patch) {
@@ -279,91 +441,135 @@ export const useCompose = create<State>((set, get) => ({
     save(get())
   },
 
-  moveClip(id, start) {
-    set((state) => ({
-      tracks: state.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) =>
-          clip.id === id ? { ...clip, start: Math.max(0, start) } : clip,
+  /** Двигает выбранные клипы (и связанные с ними) на ``shift`` секунд. */
+  moveClips(ids, shift) {
+    set((state) => {
+      const all = state.tracks.flatMap((track) => track.clips)
+      const links = new Set(
+        all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.linkId).filter(Boolean),
+      )
+      const moving = all
+        .filter((clip) => ids.includes(clip.id) || (clip.linkId && links.has(clip.linkId)))
+        .map((clip) => clip.id)
+
+      return {
+        tracks: settle(
+          state.tracks.map((track) => {
+            const touched = track.clips.some((clip) => moving.includes(clip.id))
+            if (!touched) return track
+            const shifted = track.clips.map((clip) =>
+              moving.includes(clip.id)
+                ? { ...clip, start: Math.max(0, clip.start + shift) }
+                : clip,
+            )
+            return { ...track, clips: resolveOverlaps(shifted, moving) }
+          }),
         ),
-      })),
-    }))
+      }
+    })
     save(get())
   },
 
-  resizeClip(id, _edge, start, duration, sourceIn) {
-    set((state) => ({
-      tracks: state.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) =>
-          clip.id === id
-            ? {
-                ...clip,
-                start: Math.max(0, start),
-                duration: Math.max(MIN_CLIP_SECONDS, duration),
-                sourceIn: Math.max(0, sourceIn),
-              }
-            : clip,
+  resizeClip(id, start, duration, sourceIn) {
+    set((state) => {
+      const all = state.tracks.flatMap((track) => track.clips)
+      const link = all.find((clip) => clip.id === id)?.linkId
+      const family = all
+        .filter((clip) => clip.id === id || (link && clip.linkId === link))
+        .map((clip) => clip.id)
+
+      return {
+        tracks: settle(
+          state.tracks.map((track) => {
+            if (!track.clips.some((clip) => family.includes(clip.id))) return track
+            const next = track.clips.map((clip) =>
+              family.includes(clip.id)
+                ? {
+                    ...clip,
+                    start: Math.max(0, start),
+                    duration: Math.max(MIN_CLIP_SECONDS, duration),
+                    sourceIn: Math.max(0, sourceIn),
+                  }
+                : clip,
+            )
+            return { ...track, clips: resolveOverlaps(next, family) }
+          }),
         ),
-      })),
-    }))
+      }
+    })
     save(get())
   },
 
   /**
-   * Режет клип под иглой надвое.
+   * Режет клипы под иглой надвое.
    *
    * Это и есть способ убрать кусок из середины ролика: режем дважды и
    * удаляем средний клип. Отдельного инструмента «вырезать» не нужно —
-   * в монтажных программах делают ровно так же.
+   * в монтажных программах делают ровно так же. Связанные видео и звук
+   * режутся вместе, иначе они разъехались бы.
    */
   splitAtPlayhead() {
     const at = get().playhead
-    let madeId: string | null = null
+    const made: string[] = []
     set((state) => ({
       tracks: state.tracks.map((track) => {
         const next: ComposeClip[] = []
         for (const clip of track.clips) {
-          const inside = at > clip.start + MIN_CLIP_SECONDS && at < clip.start + clip.duration - MIN_CLIP_SECONDS
+          const inside =
+            at > clip.start + MIN_CLIP_SECONDS && at < clip.start + clip.duration - MIN_CLIP_SECONDS
           if (!inside) {
             next.push(clip)
             continue
           }
           const passed = at - clip.start
+          const rightId = nextId()
           const right: ComposeClip = {
             ...clip,
-            id: nextId(),
+            id: rightId,
             start: at,
             duration: clip.duration - passed,
             // У картинки своего времени нет, а ролик продолжаем с той же точки.
             sourceIn: clip.kind === 'image' ? clip.sourceIn : clip.sourceIn + passed,
+            // Половинки связаны между собой заново: старая связка осталась у
+            // левых кусков, правым нужна своя.
+            linkId: clip.linkId ? `${clip.linkId}-r` : undefined,
           }
-          madeId = right.id
+          made.push(rightId)
           next.push({ ...clip, duration: passed }, right)
         }
         return { ...track, clips: next }
       }),
     }))
-    if (madeId) set({ selected: madeId })
+    if (made.length) set({ selected: made.slice(0, 1) })
     save(get())
   },
 
-  removeClip(id) {
-    set((state) => ({
-      tracks: state.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.filter((clip) => clip.id !== id),
-      })),
-      selected: state.selected === id ? null : state.selected,
-    }))
+  removeClips(ids) {
+    set((state) => {
+      const all = state.tracks.flatMap((track) => track.clips)
+      const links = new Set(
+        all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.linkId).filter(Boolean),
+      )
+      return {
+        tracks: state.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.filter(
+            (clip) => !ids.includes(clip.id) && !(clip.linkId && links.has(clip.linkId)),
+          ),
+        })),
+        selected: [],
+      }
+    })
     save(get())
   },
 
   clearAll() {
     set((state) => ({
       tracks: state.tracks.map((track) => ({ ...track, clips: [] })),
-      selected: null,
+      selected: [],
       playhead: 0,
+      renderIn: null,
+      renderOut: null,
     }))
     save(get())
   },
@@ -386,53 +592,11 @@ export const useCompose = create<State>((set, get) => ({
   },
 }))
 
-/**
- * Ближайшее свободное место для нового клипа.
- *
- * Если в желаемой точке уже кто-то лежит, клип сдвигается вправо за его край
- * и проверяет снова. Так брошенный на занятое место файл встаёт следом за
- * соседом, а не поверх него.
- */
-export function freeStart(track: ComposeTrack, wanted: number, duration: number): number {
-  let start = Math.max(0, wanted)
-  // Дорожка не бесконечная, но и цикл не должен быть: клипов конечное число,
-  // а каждый шаг сдвигает нас правее — хватит одного прохода по списку.
-  for (const clip of ordered(track)) {
-    if (start < clip.start + clip.duration && start + duration > clip.start) {
-      start = clip.start + clip.duration
-    }
-  }
-  return start
-}
-
-/**
- * Куда встанет клип, чтобы не залезть на соседей.
- *
- * На одной дорожке два клипа в одном месте не помещаются: программа не может
- * решить за человека, какой из них показывать. Поэтому клип упирается в
- * соседа, как в стенку, — и заодно к нему прилипает.
- */
-export function limitStart(
-  track: ComposeTrack,
-  clip: ComposeClip,
-  wanted: number,
-): number {
-  const others = ordered(track).filter((item) => item.id !== clip.id)
-  let low = 0
-  let high = Number.POSITIVE_INFINITY
-  for (const other of others) {
-    const otherEnd = other.start + other.duration
-    if (otherEnd <= clip.start) low = Math.max(low, otherEnd)
-    if (other.start >= clip.start + clip.duration) high = Math.min(high, other.start - clip.duration)
-  }
-  return Math.min(Math.max(wanted, low), high)
-}
-
 /** Точки, к которым липнут края клипов: границы соседей, ноль и игла. */
-export function magnets(track: ComposeTrack, skipId: string, playhead: number): number[] {
+export function magnets(track: ComposeTrack, skipIds: string[], playhead: number): number[] {
   const points = [0, playhead]
   for (const clip of track.clips) {
-    if (clip.id === skipId) continue
+    if (skipIds.includes(clip.id)) continue
     points.push(clip.start, clip.start + clip.duration)
   }
   return points

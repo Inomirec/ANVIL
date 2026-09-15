@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Music2, Scissors, Trash2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react'
+import {
+  FlagTriangleLeft,
+  FlagTriangleRight,
+  Music2,
+  Scissors,
+  Trash2,
+  VolumeX,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react'
 import { timecode } from '../lib/format'
 import {
-  limitStart,
   magnets,
   MIN_CLIP_SECONDS,
   snap,
   useCompose,
   type ComposeClip,
+  type ComposeTrack,
 } from '../composeStore'
 import { IconButton } from './ui'
 
@@ -21,17 +31,19 @@ const AUDIO_HEIGHT = 52
 const TAIL_SECONDS = 8
 
 type Drag =
-  | { kind: 'move'; id: string; grabbedAt: number; origin: number }
-  | { kind: 'edge'; id: string; side: 'left' | 'right'; startX: number; clip: ComposeClip }
+  | { kind: 'move'; ids: string[]; grab: number; lastAt: number }
+  | { kind: 'edge'; id: string; side: 'left' | 'right'; clip: ComposeClip }
   | { kind: 'playhead' }
+  | { kind: 'marquee'; fromAt: number; fromY: number }
   | null
 
 /**
- * Таймлайн монтажа: дорожка с клипами, игла, зум.
+ * Таймлайн монтажа: дорожки с клипами, игла, метки отрезка, зум.
  *
- * От таймлайна одного файла отличается тем, что здесь живут отдельные куски,
- * которые можно двигать, тянуть за края и резать. Общее у них — привычки из
- * монтажных программ: прилипание к соседям и к игле, зум колесом.
+ * Привычки из монтажных программ: прилипание к соседям и к игле, зум колесом
+ * с Ctrl, выделение рамкой, клавиши S (разрезать), I и O (метки отрезка).
+ * Клипы не лежат друг на друге: когда один переносят на занятое место,
+ * соседи расступаются, а не упираются в него.
  */
 export function ComposeTimeline({
   onDropFile,
@@ -43,16 +55,20 @@ export function ComposeTimeline({
   const playhead = useCompose((state) => state.playhead)
   const selected = useCompose((state) => state.selected)
   const scale = useCompose((state) => state.scale)
+  const renderIn = useCompose((state) => state.renderIn)
+  const renderOut = useCompose((state) => state.renderOut)
   const setPlayhead = useCompose((state) => state.setPlayhead)
   const setScale = useCompose((state) => state.setScale)
   const select = useCompose((state) => state.select)
-  const moveClip = useCompose((state) => state.moveClip)
-  const resizeClip = useCompose((state) => state.resizeClip)
   const splitAtPlayhead = useCompose((state) => state.splitAtPlayhead)
-  const removeClip = useCompose((state) => state.removeClip)
+  const removeClips = useCompose((state) => state.removeClips)
+  const markIn = useCompose((state) => state.markIn)
+  const markOut = useCompose((state) => state.markOut)
+  const clearMarks = useCompose((state) => state.clearMarks)
 
   const [dropAt, setDropAt] = useState<number | null>(null)
-  const lane = useRef<HTMLDivElement>(null)
+  const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const canvas = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag>(null)
 
   const duration = tracks.reduce(
@@ -65,14 +81,12 @@ export function ComposeTimeline({
 
   /** Секунда под курсором.
    *
-   * Прокрутку отдельно прибавлять не нужно: у прокрученной дорожки левый
-   * край и так уезжает влево вместе с полотном, и разница до курсора уже
-   * посчитана правильно. Прибавить её ещё раз значило бы промахнуться ровно
-   * на величину прокрутки.
+   * Прокрутку отдельно прибавлять не нужно: у прокрученного полотна левый
+   * край и так уезжает влево, и разница до курсора уже посчитана правильно.
    */
   const secondsAt = useCallback(
     (clientX: number) => {
-      const box = lane.current?.getBoundingClientRect()
+      const box = canvas.current?.getBoundingClientRect()
       if (!box) return 0
       return Math.max(0, (clientX - box.left) / scale)
     },
@@ -94,26 +108,51 @@ export function ComposeTimeline({
         return
       }
 
-      const found = state.findClip(current.id)
-      if (!found) return
-      const { clip, track } = found
-      const points = magnets(track, clip.id, state.playhead)
-      const nearby = SNAP_PIXELS / state.scale
+      if (current.kind === 'marquee') {
+        const box = canvas.current?.getBoundingClientRect()
+        if (!box) return
+        setMarquee({
+          x1: current.fromAt * state.scale,
+          y1: current.fromY,
+          x2: at * state.scale,
+          y2: event.clientY - box.top,
+        })
+        return
+      }
 
       if (current.kind === 'move') {
-        const wanted = snap(at - current.grabbedAt, points, nearby)
-        state.moveClip(clip.id, limitStart(track, clip, wanted))
+        // Один клип липнет к соседям и к игле, у пачки прилипание только
+        // мешало бы: у каждого клипа свои края, и к чему липнуть — непонятно.
+        if (current.ids.length === 1) {
+          const found = state.findClip(current.ids[0])
+          if (!found) return
+          const points = magnets(found.track, current.ids, state.playhead)
+          const wanted = snap(at - current.grab, points, SNAP_PIXELS / state.scale)
+          const delta = wanted - found.clip.start
+          if (Math.abs(delta) > 1e-6) state.moveClips(current.ids, delta)
+        } else {
+          const delta = at - current.lastAt
+          if (Math.abs(delta) > 1e-6) {
+            state.moveClips(current.ids, delta)
+            current.lastAt = at
+          }
+        }
         return
       }
 
       const origin = current.clip
+      const found = state.findClip(current.id)
+      if (!found) return
+      const points = magnets(found.track, [current.id], state.playhead)
+      const nearby = SNAP_PIXELS / state.scale
+
       if (current.side === 'right') {
         let end = snap(at, points, nearby)
         // У ролика нельзя взять больше, чем в нём есть.
         if (origin.sourceDuration) {
           end = Math.min(end, origin.start + (origin.sourceDuration - origin.sourceIn))
         }
-        state.resizeClip(clip.id, 'right', origin.start, end - origin.start, origin.sourceIn)
+        state.resizeClip(current.id, origin.start, end - origin.start, origin.sourceIn)
       } else {
         let begin = snap(at, points, nearby)
         begin = Math.min(begin, origin.start + origin.duration - MIN_CLIP_SECONDS)
@@ -123,8 +162,7 @@ export function ComposeTimeline({
         const sourceIn = origin.kind === 'image' ? 0 : Math.max(0, origin.sourceIn + shift)
         const limited = origin.kind === 'image' ? begin : origin.start + (sourceIn - origin.sourceIn)
         state.resizeClip(
-          clip.id,
-          'left',
+          current.id,
           Math.max(0, limited),
           origin.duration - (limited - origin.start),
           sourceIn,
@@ -133,6 +171,20 @@ export function ComposeTimeline({
     }
 
     const onUp = () => {
+      const current = drag.current
+      if (current?.kind === 'marquee') {
+        const box = canvas.current?.getBoundingClientRect()
+        const area = marquee
+        if (area && box) {
+          const from = Math.min(area.x1, area.x2) / useCompose.getState().scale
+          const to = Math.max(area.x1, area.x2) / useCompose.getState().scale
+          const top = Math.min(area.y1, area.y2)
+          const bottom = Math.max(area.y1, area.y2)
+          const caught = clipsInside(useCompose.getState().tracks, from, to, top, bottom)
+          useCompose.getState().select(caught)
+        }
+      }
+      setMarquee(null)
       drag.current = null
     }
 
@@ -142,25 +194,31 @@ export function ComposeTimeline({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [secondsAt])
+  }, [secondsAt, marquee])
 
-  // Клавиши как в монтажных программах: разрезать и удалить.
+  // Клавиши как в монтажных программах.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const tag = (event.target as HTMLElement | null)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
-      if (event.key === 's' || event.key === 'ы') {
+      const key = event.key.toLowerCase()
+      if (key === 's' || key === 'ы') {
         event.preventDefault()
         splitAtPlayhead()
-      }
-      if (event.key === 'Delete') {
-        const id = useCompose.getState().selected
-        if (id) removeClip(id)
+      } else if (key === 'i' || key === 'ш') {
+        event.preventDefault()
+        markIn()
+      } else if (key === 'o' || key === 'щ') {
+        event.preventDefault()
+        markOut()
+      } else if (event.key === 'Delete') {
+        const ids = useCompose.getState().selected
+        if (ids.length) removeClips(ids)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [splitAtPlayhead, removeClip])
+  }, [splitAtPlayhead, removeClips, markIn, markOut])
 
   const onWheel = (event: React.WheelEvent) => {
     if (!event.ctrlKey && !event.shiftKey) return
@@ -168,27 +226,51 @@ export function ComposeTimeline({
     setScale(scale * (event.deltaY < 0 ? 1.2 : 1 / 1.2))
   }
 
+  const from = renderIn ?? 0
+  const to = renderOut ?? duration
+
   return (
     <div className="flex h-full flex-col">
       {/* Панель инструментов */}
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line-soft px-3">
-        <IconButton
-          title="Разрезать клип под иглой (S)"
-          onClick={() => splitAtPlayhead()}
-        >
+      <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-3">
+        <IconButton title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
           <Scissors size={14} />
         </IconButton>
         <IconButton
-          title="Удалить выбранный клип (Delete)"
-          onClick={() => selected && removeClip(selected)}
-          disabled={!selected}
+          title="Удалить выбранное (Delete)"
+          onClick={() => selected.length && removeClips(selected)}
+          disabled={!selected.length}
         >
           <Trash2 size={14} />
         </IconButton>
+
+        <span className="mx-1 h-4 w-px bg-line-soft" />
+
+        <IconButton title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
+          <FlagTriangleRight size={14} />
+        </IconButton>
+        <IconButton title="Конец отрезка сборки (O)" onClick={markOut} active={renderOut !== null}>
+          <FlagTriangleLeft size={14} />
+        </IconButton>
+        {(renderIn !== null || renderOut !== null) && (
+          <IconButton title="Собрать всё целиком" onClick={clearMarks}>
+            <X size={14} />
+          </IconButton>
+        )}
+
         <span className="ml-1 font-mono text-[11px] tabular-nums text-ink-dim">
           {timecode(playhead, true)}
         </span>
-        <span className="text-[11px] text-ink-faint">из {timecode(duration, true)}</span>
+        {renderIn !== null || renderOut !== null ? (
+          <span className="text-[11px] text-accent-soft">
+            соберётся {timecode(from, true)} → {timecode(to, true)}
+          </span>
+        ) : (
+          <span className="text-[11px] text-ink-faint">из {timecode(duration, true)}</span>
+        )}
+        {selected.length > 1 && (
+          <span className="text-[11px] text-accent-soft">выбрано: {selected.length}</span>
+        )}
 
         <div className="ml-auto flex items-center gap-1">
           <IconButton title="Отдалить" onClick={() => setScale(scale / 1.4)}>
@@ -202,11 +284,13 @@ export function ComposeTimeline({
 
       {/* Полотно */}
       <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden" onWheel={onWheel}>
-        <div style={{ width }} className="relative select-none">
-          {/* Линейка времени */}
+        <div ref={canvas} style={{ width }} className="relative select-none">
           <Ruler
             span={span}
             scale={scale}
+            renderIn={renderIn}
+            renderOut={renderOut}
+            duration={duration}
             onSeek={(at) => {
               drag.current = { kind: 'playhead' }
               setPlayhead(at)
@@ -216,11 +300,22 @@ export function ComposeTimeline({
           {tracks.map((track) => (
             <div
               key={track.id}
-              ref={track.kind === 'video' ? lane : undefined}
               className={`relative border-b border-line-soft ${
                 track.kind === 'audio' ? 'bg-ok/5' : 'bg-surface-2/40'
               }`}
               style={{ height: track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT }}
+              onMouseDown={(event) => {
+                // Нажали по пустому месту дорожки — тянем рамку выделения.
+                if (event.button !== 0 || event.target !== event.currentTarget) return
+                const box = canvas.current?.getBoundingClientRect()
+                if (!box) return
+                select([])
+                drag.current = {
+                  kind: 'marquee',
+                  fromAt: secondsAt(event.clientX),
+                  fromY: event.clientY - box.top,
+                }
+              }}
               onDragOver={(event) => {
                 event.preventDefault()
                 event.dataTransfer.dropEffect = 'copy'
@@ -238,7 +333,7 @@ export function ComposeTimeline({
                 const at = secondsAt(event.clientX)
                 onDropFile(
                   path,
-                  snap(at, magnets(track, '', playhead), (SNAP_PIXELS * 2) / scale),
+                  snap(at, magnets(track, [], playhead), (SNAP_PIXELS * 2) / scale),
                   track.id,
                 )
               }}
@@ -249,23 +344,25 @@ export function ComposeTimeline({
                   clip={clip}
                   scale={scale}
                   height={track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT}
-                  active={clip.id === selected}
+                  active={selected.includes(clip.id)}
                   onGrab={(event, where) => {
-                    select(clip.id)
+                    const state = useCompose.getState()
+                    const many = event.ctrlKey || event.shiftKey
+                    const ids = many
+                      ? [...new Set([...state.selected, clip.id])]
+                      : state.selected.includes(clip.id) && state.selected.length > 1
+                        ? state.selected
+                        : [clip.id]
+                    select(ids)
+                    const at = secondsAt(event.clientX)
                     drag.current =
                       where === 'move'
-                        ? {
-                            kind: 'move',
-                            id: clip.id,
-                            grabbedAt: secondsAt(event.clientX) - clip.start,
-                            origin: clip.start,
-                          }
-                        : { kind: 'edge', id: clip.id, side: where, startX: event.clientX, clip }
+                        ? { kind: 'move', ids, grab: at - clip.start, lastAt: at }
+                        : { kind: 'edge', id: clip.id, side: where, clip }
                   }}
                 />
               ))}
 
-              {/* Куда ляжет файл, который сейчас тащат */}
               {dropAt !== null && (
                 <div
                   className="pointer-events-none absolute top-0 h-full w-0.5 bg-accent"
@@ -274,6 +371,19 @@ export function ComposeTimeline({
               )}
             </div>
           ))}
+
+          {/* Рамка выделения */}
+          {marquee && (
+            <div
+              className="pointer-events-none absolute z-10 rounded border border-accent bg-accent/15"
+              style={{
+                left: Math.min(marquee.x1, marquee.x2),
+                top: Math.min(marquee.y1, marquee.y2),
+                width: Math.abs(marquee.x2 - marquee.x1),
+                height: Math.abs(marquee.y2 - marquee.y1),
+              }}
+            />
+          )}
 
           {/* Игла поверх всего */}
           <div
@@ -288,20 +398,54 @@ export function ComposeTimeline({
   )
 }
 
-/** Линейка с делениями. Шаг подбирается так, чтобы подписи не сливались. */
+/** Какие клипы попали в рамку выделения. */
+function clipsInside(
+  tracks: ComposeTrack[],
+  from: number,
+  to: number,
+  top: number,
+  bottom: number,
+): string[] {
+  const caught: string[] = []
+  // Линейка занимает верхние 24 пикселя, дорожки идут под ней.
+  let offset = 24
+  for (const track of tracks) {
+    const height = track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT
+    const crossed = offset < bottom && offset + height > top
+    if (crossed) {
+      for (const clip of track.clips) {
+        if (clip.start < to && clip.start + clip.duration > from) caught.push(clip.id)
+      }
+    }
+    offset += height
+  }
+  return caught
+}
+
+/** Линейка с делениями и метками отрезка сборки. */
 function Ruler({
   span,
   scale,
+  renderIn,
+  renderOut,
+  duration,
   onSeek,
 }: {
   span: number
   scale: number
+  renderIn: number | null
+  renderOut: number | null
+  duration: number
   onSeek: (at: number) => void
 }) {
   const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
   const step = steps.find((value) => value * scale >= 70) ?? 900
   const marks: number[] = []
   for (let at = 0; at <= span; at += step) marks.push(at)
+
+  const from = renderIn ?? 0
+  const to = renderOut ?? duration
+  const marked = renderIn !== null || renderOut !== null
 
   return (
     <div
@@ -311,6 +455,13 @@ function Ruler({
         onSeek(Math.max(0, (event.clientX - box.left) / scale))
       }}
     >
+      {/* Отрезок, который уйдёт в сборку */}
+      {marked && (
+        <div
+          className="pointer-events-none absolute top-0 h-full bg-accent/20 ring-1 ring-inset ring-accent/50"
+          style={{ left: from * scale, width: Math.max((to - from) * scale, 2) }}
+        />
+      )}
       {marks.map((at) => (
         <div key={at} className="absolute top-0 h-full" style={{ left: at * scale }}>
           <div className="h-2 w-px bg-line" />
@@ -374,7 +525,9 @@ function ClipBox({
       <div className="relative flex h-full flex-col justify-between p-1.5">
         <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink">
           {sound && <Music2 size={10} className="shrink-0 text-ok" />}
-          {clip.muted && <VolumeX size={10} className="shrink-0 text-ink-faint" />}
+          {(clip.muted || clip.volume === 0) && sound && (
+            <VolumeX size={10} className="shrink-0 text-ink-faint" />
+          )}
           <span className="truncate">{clip.name}</span>
         </span>
         <span className="font-mono text-[9.5px] tabular-nums text-ink-faint">
