@@ -80,6 +80,34 @@ def _even(value: int) -> int:
     return max(2, value - value % 2)
 
 
+def video_fades(clip: ComposeClip, at: float, take: float) -> str:
+    """Появление и уход картинки по краям клипа.
+
+    Затухание делаем по прозрачности (``alpha=1``), а не в чёрный: под нижним
+    слоем всё равно лежит чёрный фон, и результат тот же, зато на верхних
+    дорожках сквозь уходящий клип будет виден нижний — так получается
+    перетекание между клипами, без отдельного ``xfade``.
+    """
+    skip = max(0.0, at - clip.start)
+    parts: list[str] = []
+
+    if clip.fade_in > skip:
+        parts.append(f"fade=t=in:st=0:d={clip.fade_in - skip:g}:alpha=1")
+
+    if clip.fade_out > 0:
+        starts = (clip.duration - skip) - clip.fade_out
+        if starts < take:
+            parts.append(
+                f"fade=t=out:st={max(starts, 0.0):.3f}"
+                f":d={min(clip.fade_out, clip.duration):g}:alpha=1"
+            )
+
+    if not parts:
+        return ""
+    # Прозрачности неоткуда взяться в обычном yuv420p — добавляем канал.
+    return ",format=yuva420p," + ",".join(parts)
+
+
 def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> str:
     """Цепочка фильтров для звука одного клипа.
 
@@ -172,7 +200,8 @@ def build_segment(
 
         if clip.kind != "audio":
             chain.append(
-                f"[{index}:v]{fit_filter(width, height, fps)},"
+                f"[{index}:v]{fit_filter(width, height, fps)}"
+                f"{video_fades(clip, at, take)},"
                 f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
             )
             video_labels.append(f"[v{index}]")

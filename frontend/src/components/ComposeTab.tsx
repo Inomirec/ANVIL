@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Film, FolderOpen, Play, Trash2 } from 'lucide-react'
+import { Film, FolderOpen, Play, RotateCw, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import {
@@ -56,6 +56,8 @@ export function ComposeTab() {
     () => localStorage.getItem('sgh.composeOut') || null,
   )
   const [pickingFolder, setPickingFolder] = useState(false)
+  // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
+  const [adding, setAdding] = useState(false)
 
   const duration = tracks.reduce(
     (longest, track) =>
@@ -109,6 +111,7 @@ export function ComposeTab() {
 
   /** Файл притащили из медиатеки — добавляем клип на дорожку. */
   async function dropFile(path: string, at: number, trackId: string) {
+    setAdding(true)
     try {
       const info = await api.fileInfo(path)
       if (info.kind === 'other') {
@@ -144,6 +147,8 @@ export function ComposeTab() {
       useCompose.getState().setPlayhead(clip.start + Math.min(0.2, clip.duration / 2))
     } catch (error) {
       toast((error as Error).message, 'error')
+    } finally {
+      setAdding(false)
     }
   }
 
@@ -207,18 +212,25 @@ export function ComposeTab() {
 
         {/* Таймлайн */}
         <div className="h-[220px] shrink-0 border-t border-line-soft bg-surface">
-          <ComposeTimeline onDropFile={(path, at, trackId) => void dropFile(path, at, trackId)} />
+          <ComposeTimeline
+            adding={adding}
+            onDropFile={(path, at, trackId) => void dropFile(path, at, trackId)}
+          />
         </div>
       </div>
 
       {/* Правая панель */}
       <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
-          <Section title="Кадр проекта">
+          {/* Кадр проекта. Без заголовка и без лишних чисел: что выбрано,
+              видно по самим кнопкам, а форму кадра показывает рамка в окне
+              просмотра. Раздел «Клип» тоже убран — имя файла, громкость и
+              затухания живут на самом таймлайне. */}
+          <div className="space-y-3">
             <div>
               <span className="label">Качество</span>
               <Segmented
-                columns={3}
+                columns={4}
                 value={custom ? 'custom' : String(quality)}
                 onChange={(value) => {
                   if (value === 'custom') useCustom(true)
@@ -262,61 +274,37 @@ export function ComposeTab() {
                 </label>
               </div>
             ) : (
-              <>
-                <div>
+              <div>
+                <div className="flex items-center justify-between">
                   <span className="label">Форма</span>
-                  <Segmented
-                    columns={4}
-                    value={shape}
-                    onChange={setShape}
-                    options={FRAME_SHAPES.map((item) => ({
-                      value: item.value,
-                      label: item.label,
-                      title: item.hint,
-                    }))}
-                  />
+                  {/* Поворот не объясняем словами: подписи форм сами
+                      переворачиваются, и сразу видно, что получится. */}
+                  <button
+                    type="button"
+                    disabled={shape === '1:1'}
+                    onClick={() => setTurned(!turned)}
+                    title="Повернуть кадр: из 16:9 получится 9:16"
+                    className={`mb-1.5 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-35 ${
+                      turned ? 'bg-accent/20 text-accent-soft' : 'text-ink-faint hover:bg-surface-3'
+                    }`}
+                  >
+                    <RotateCw size={11} />
+                    вертикально
+                  </button>
                 </div>
-                <Toggle
-                  checked={turned}
-                  onChange={setTurned}
-                  disabled={shape === '1:1'}
-                  label="Повернуть кадр"
-                  hint="Меняет форму местами: из 16:9 получается 9:16 — вертикальное видео для телефона."
+                <Segmented
+                  columns={4}
+                  value={shape}
+                  onChange={setShape}
+                  options={FRAME_SHAPES.map((item) => ({
+                    value: item.value,
+                    label: turned ? item.label.split(':').reverse().join(':') : item.label,
+                    title: item.hint,
+                  }))}
                 />
-              </>
-            )}
-
-            <div className="space-y-1 rounded-lg bg-surface-2 px-3 py-2 text-[11.5px]">
-              <div className="flex items-center justify-between">
-                <span className="text-ink-faint">Размер кадра</span>
-                <span className="font-mono tabular-nums text-ink-dim">
-                  {width}×{height}
-                </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-ink-faint">Длительность</span>
-                <span className="font-mono tabular-nums text-ink-dim">
-                  {timecode(duration, true)}
-                </span>
-              </div>
-            </div>
-            <p className="text-[11px] leading-snug text-ink-faint">
-              Файлы другой формы впишутся внутрь кадра с чёрными полями — обрезать их
-              программа не станет.
-            </p>
-          </Section>
-
-          <Section title="Клип">
-            {current ? (
-              <ClipInfo clip={current} />
-            ) : (
-              <p className="text-[11.5px] leading-snug text-ink-faint">
-                {selected.length > 1
-                  ? `Выбрано клипов: ${selected.length}. Их можно двигать вместе и удалить клавишей Delete.`
-                  : 'Клип не выбран. Нажмите на него — здесь появятся громкость и затухания.'}
-              </p>
             )}
-          </Section>
+          </div>
 
           <Section title="Сборка">
             <Select
@@ -400,95 +388,3 @@ export function ComposeTab() {
     </div>
   )
 }
-
-/**
- * Настройки выбранного клипа.
- *
- * Только то, что нельзя сделать прямо на дорожке: начало, длительность и тип
- * человек и так видит перед собой, и повторять их числами здесь незачем.
- */
-function ClipInfo({ clip }: { clip: ComposeClip }) {
-  const removeClips = useCompose((state) => state.removeClips)
-  const updateClip = useCompose((state) => state.updateClip)
-  const update = (patch: Partial<ComposeClip>) => updateClip(clip.id, patch)
-  return (
-    <div className="space-y-2">
-      <p className="truncate text-[12.5px] font-medium text-ink" title={clip.name}>
-        {clip.name}
-      </p>
-
-      {/* Звук есть у музыки и у роликов с дорожкой. У картинки его нет. */}
-      {(clip.kind === 'audio' || (clip.kind === 'video' && clip.hasAudio)) && (
-        <div className="space-y-2 rounded-lg bg-surface-2 px-3 py-2.5">
-          <div>
-            <div className="flex items-center justify-between">
-              <span className="label">Громкость</span>
-              <span className="font-mono text-[11px] tabular-nums text-ink-dim">
-                {clip.muted ? 'выкл' : `${Math.round(clip.volume * 100)}%`}
-              </span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={200}
-              step={5}
-              disabled={clip.muted}
-              value={Math.round(clip.volume * 100)}
-              onChange={(event) => update({ volume: Number(event.target.value) / 100 })}
-              className="w-full"
-            />
-          </div>
-
-          <div className="flex gap-2">
-            <label className="flex-1">
-              <span className="label">Появление</span>
-              <input
-                type="number"
-                className="field"
-                min={0}
-                max={30}
-                step={0.5}
-                value={clip.fadeIn}
-                onChange={(event) => update({ fadeIn: Math.max(0, Number(event.target.value)) })}
-              />
-            </label>
-            <label className="flex-1">
-              <span className="label">Уход</span>
-              <input
-                type="number"
-                className="field"
-                min={0}
-                max={30}
-                step={0.5}
-                value={clip.fadeOut}
-                onChange={(event) => update({ fadeOut: Math.max(0, Number(event.target.value)) })}
-              />
-            </label>
-          </div>
-          <p className="text-[11px] leading-snug text-ink-faint">
-            Секунды плавного нарастания и затухания по краям клипа.
-          </p>
-
-          {clip.kind === 'video' && (
-            <Toggle
-              checked={clip.muted}
-              onChange={(value) => update({ muted: value })}
-              label="Без звука"
-              hint="Выбросить родную дорожку ролика — например, когда под видео кладут свою музыку."
-            />
-          )}
-        </div>
-      )}
-      <p className="text-[11px] leading-snug text-ink-faint">
-        {clip.kind === 'image'
-          ? 'Тяните клип за края на дорожке — столько картинка и будет висеть.'
-          : 'Тяните за края, чтобы отрезать лишнее с начала или с конца.'}
-      </p>
-      <Button className="w-full" onClick={() => removeClips([clip.id])}>
-        <Trash2 size={14} />
-        Убрать с дорожки
-      </Button>
-    </div>
-  )
-}
-

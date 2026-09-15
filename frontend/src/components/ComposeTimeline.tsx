@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   FlagTriangleLeft,
   FlagTriangleRight,
+  Loader2,
   Music2,
   Scissors,
   Trash2,
@@ -10,7 +11,9 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
+import { api } from '../lib/api'
 import { timecode } from '../lib/format'
+import type { FilmstripInfo } from '../lib/types'
 import {
   magnets,
   MIN_CLIP_SECONDS,
@@ -24,15 +27,18 @@ import { IconButton } from './ui'
 /** Радиус прилипания и ширина уголка для растягивания, в пикселях. */
 const SNAP_PIXELS = 8
 const GRIP_PIXELS = 10
-/** Высота дорожек: у звука она меньше — там нечего показывать, кроме имени. */
+/** Высота дорожек: у звука она меньше — там только волна и имя. */
 const TRACK_HEIGHT = 74
 const AUDIO_HEIGHT = 52
 /** Пустой запас справа, чтобы было куда тащить клипы. */
 const TAIL_SECONDS = 8
+/** Дальше половины клипа затухание не тянется — оно съело бы весь кусок. */
+const MAX_FADE_RATIO = 0.5
 
 type Drag =
   | { kind: 'move'; ids: string[]; grab: number; lastAt: number }
   | { kind: 'edge'; id: string; side: 'left' | 'right'; clip: ComposeClip }
+  | { kind: 'fade'; id: string; side: 'in' | 'out'; clip: ComposeClip }
   | { kind: 'playhead' }
   | { kind: 'marquee'; fromAt: number; fromY: number }
   | null
@@ -40,16 +46,19 @@ type Drag =
 /**
  * Таймлайн монтажа: дорожки с клипами, игла, метки отрезка, зум.
  *
- * Привычки из монтажных программ: прилипание к соседям и к игле, зум колесом
- * с Ctrl, выделение рамкой, клавиши S (разрезать), I и O (метки отрезка).
- * Клипы не лежат друг на друге: когда один переносят на занятое место,
- * соседи расступаются, а не упираются в него.
+ * Привычки из монтажных программ: прилипание к соседям и к игле, зум колесом,
+ * выделение рамкой, затухания за уголок клипа, клавиши S (разрезать), I и O
+ * (метки отрезка). Клипы не лежат друг на друге: когда один переносят на
+ * занятое место, соседи расступаются.
  */
 export function ComposeTimeline({
   onDropFile,
+  adding,
 }: {
   /** Файл притащили из медиатеки: путь, секунда и дорожка, куда его положили. */
   onDropFile: (path: string, at: number, trackId: string) => void
+  /** Файл сейчас читается — показываем, что программа занята, а не висит. */
+  adding: boolean
 }) {
   const tracks = useCompose((state) => state.tracks)
   const playhead = useCompose((state) => state.playhead)
@@ -62,6 +71,7 @@ export function ComposeTimeline({
   const select = useCompose((state) => state.select)
   const splitAtPlayhead = useCompose((state) => state.splitAtPlayhead)
   const removeClips = useCompose((state) => state.removeClips)
+  const updateClip = useCompose((state) => state.updateClip)
   const markIn = useCompose((state) => state.markIn)
   const markOut = useCompose((state) => state.markOut)
   const clearMarks = useCompose((state) => state.clearMarks)
@@ -69,6 +79,7 @@ export function ComposeTimeline({
   const [dropAt, setDropAt] = useState<number | null>(null)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag>(null)
 
   const duration = tracks.reduce(
@@ -116,6 +127,17 @@ export function ComposeTimeline({
           y1: current.fromY,
           x2: at * state.scale,
           y2: event.clientY - box.top,
+        })
+        return
+      }
+
+      if (current.kind === 'fade') {
+        const clip = current.clip
+        const limit = clip.duration * MAX_FADE_RATIO
+        const value =
+          current.side === 'in' ? at - clip.start : clip.start + clip.duration - at
+        state.updateClip(clip.id, {
+          [current.side === 'in' ? 'fadeIn' : 'fadeOut']: Math.min(Math.max(value, 0), limit),
         })
         return
       }
@@ -173,15 +195,14 @@ export function ComposeTimeline({
     const onUp = () => {
       const current = drag.current
       if (current?.kind === 'marquee') {
-        const box = canvas.current?.getBoundingClientRect()
         const area = marquee
-        if (area && box) {
-          const from = Math.min(area.x1, area.x2) / useCompose.getState().scale
-          const to = Math.max(area.x1, area.x2) / useCompose.getState().scale
+        if (area) {
+          const state = useCompose.getState()
+          const from = Math.min(area.x1, area.x2) / state.scale
+          const to = Math.max(area.x1, area.x2) / state.scale
           const top = Math.min(area.y1, area.y2)
           const bottom = Math.max(area.y1, area.y2)
-          const caught = clipsInside(useCompose.getState().tracks, from, to, top, bottom)
-          useCompose.getState().select(caught)
+          state.select(clipsInside(state.tracks, from, to, top, bottom))
         }
       }
       setMarquee(null)
@@ -220,10 +241,23 @@ export function ComposeTimeline({
     return () => window.removeEventListener('keydown', onKey)
   }, [splitAtPlayhead, removeClips, markIn, markOut])
 
+  /**
+   * Колесо приближает и отдаляет — как в монтажных программах.
+   *
+   * Точка под курсором остаётся на месте: иначе на приближении нужный кусок
+   * уезжает за край, и его приходится искать прокруткой.
+   */
   const onWheel = (event: React.WheelEvent) => {
-    if (!event.ctrlKey && !event.shiftKey) return
     event.preventDefault()
-    setScale(scale * (event.deltaY < 0 ? 1.2 : 1 / 1.2))
+    const box = canvas.current?.getBoundingClientRect()
+    const state = useCompose.getState()
+    const under = box ? (event.clientX - box.left) / state.scale : 0
+    const next = Math.min(400, Math.max(4, state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15)))
+    setScale(next)
+    if (scroller.current && box) {
+      const inside = event.clientX - scroller.current.getBoundingClientRect().left
+      scroller.current.scrollLeft = Math.max(0, under * next - inside)
+    }
   }
 
   const from = renderIn ?? 0
@@ -271,19 +305,31 @@ export function ComposeTimeline({
         {selected.length > 1 && (
           <span className="text-[11px] text-accent-soft">выбрано: {selected.length}</span>
         )}
+        {/* Чтение файла занимает мгновение, но без этого окно выглядит
+            зависшим: человек бросил файл, а на дорожке пока пусто. */}
+        {adding && (
+          <span className="flex items-center gap-1.5 text-[11px] text-accent-soft">
+            <Loader2 size={12} className="animate-spin" />
+            добавляю файл…
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-1">
-          <IconButton title="Отдалить" onClick={() => setScale(scale / 1.4)}>
+          <IconButton title="Отдалить (колесо мыши)" onClick={() => setScale(scale / 1.4)}>
             <ZoomOut size={14} />
           </IconButton>
-          <IconButton title="Приблизить" onClick={() => setScale(scale * 1.4)}>
+          <IconButton title="Приблизить (колесо мыши)" onClick={() => setScale(scale * 1.4)}>
             <ZoomIn size={14} />
           </IconButton>
         </div>
       </div>
 
       {/* Полотно */}
-      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden" onWheel={onWheel}>
+      <div
+        ref={scroller}
+        className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden"
+        onWheel={onWheel}
+      >
         <div ref={canvas} style={{ width }} className="relative select-none">
           <Ruler
             span={span}
@@ -355,11 +401,20 @@ export function ComposeTimeline({
                         : [clip.id]
                     select(ids)
                     const at = secondsAt(event.clientX)
-                    drag.current =
-                      where === 'move'
-                        ? { kind: 'move', ids, grab: at - clip.start, lastAt: at }
-                        : { kind: 'edge', id: clip.id, side: where, clip }
+                    if (where === 'move') {
+                      drag.current = { kind: 'move', ids, grab: at - clip.start, lastAt: at }
+                    } else if (where === 'fadeIn' || where === 'fadeOut') {
+                      drag.current = {
+                        kind: 'fade',
+                        id: clip.id,
+                        side: where === 'fadeIn' ? 'in' : 'out',
+                        clip,
+                      }
+                    } else {
+                      drag.current = { kind: 'edge', id: clip.id, side: where, clip }
+                    }
                   }}
+                  onMute={() => updateClip(clip.id, { muted: !clip.muted })}
                 />
               ))}
 
@@ -455,7 +510,6 @@ function Ruler({
         onSeek(Math.max(0, (event.clientX - box.left) / scale))
       }}
     >
-      {/* Отрезок, который уйдёт в сборку */}
       {marked && (
         <div
           className="pointer-events-none absolute top-0 h-full bg-accent/20 ring-1 ring-inset ring-accent/50"
@@ -474,37 +528,147 @@ function Ruler({
   )
 }
 
-/** Прямоугольник клипа: миниатюра, название, уголки для растягивания. */
+// --- содержимое клипов ----------------------------------------------------
+//
+// Ленты кадров и звуковые волны берём у тех же адресов, что и медиатека, и
+// держим в памяти: один файл на таймлайне встречается несколько раз (разрезали
+// ролик — стало три клипа), и запрашивать одно и то же по разу на клип незачем.
+
+const stripCache = new Map<string, FilmstripInfo | null>()
+const waveCache = new Map<string, number[] | null>()
+
+function useStrip(path: string, enabled: boolean): FilmstripInfo | null {
+  const [strip, setStrip] = useState<FilmstripInfo | null>(() => stripCache.get(path) ?? null)
+  useEffect(() => {
+    if (!enabled || stripCache.has(path)) {
+      setStrip(stripCache.get(path) ?? null)
+      return
+    }
+    let alive = true
+    api
+      .filmstrip(path)
+      .then((data) => {
+        stripCache.set(path, data)
+        if (alive) setStrip(data)
+      })
+      .catch(() => stripCache.set(path, null))
+    return () => {
+      alive = false
+    }
+  }, [path, enabled])
+  return strip
+}
+
+function useWave(path: string, enabled: boolean): number[] | null {
+  const [peaks, setPeaks] = useState<number[] | null>(() => waveCache.get(path) ?? null)
+  useEffect(() => {
+    if (!enabled || waveCache.has(path)) {
+      setPeaks(waveCache.get(path) ?? null)
+      return
+    }
+    let alive = true
+    api
+      .waveform(path)
+      .then((data) => {
+        waveCache.set(path, data.peaks ?? null)
+        if (alive) setPeaks(data.peaks ?? null)
+      })
+      .catch(() => waveCache.set(path, null))
+    return () => {
+      alive = false
+    }
+  }, [path, enabled])
+  return peaks
+}
+
+/** Кадры ролика внутри клипа, с учётом обрезанных краёв. */
+function StripFill({ clip, strip }: { clip: ComposeClip; strip: FilmstripInfo }) {
+  const whole = clip.sourceDuration || clip.duration
+  // Лента нарисована на весь файл, а клип показывает его кусок: растягиваем
+  // ленту во столько раз, во сколько кусок короче файла, и сдвигаем к началу
+  // куска.
+  const stretch = (whole / clip.duration) * 100
+  const shift = (clip.sourceIn / whole) * 100
+  return (
+    <div className="absolute inset-0 overflow-hidden opacity-55">
+      <div
+        className="h-full origin-left"
+        style={{
+          width: `${stretch}%`,
+          transform: `translateX(-${shift}%)`,
+          backgroundImage: `url(${strip.url})`,
+          backgroundSize: 'auto 100%',
+          backgroundRepeat: 'repeat-x',
+        }}
+      />
+    </div>
+  )
+}
+
+/** Звуковая волна внутри клипа. */
+function WaveFill({ clip, peaks }: { clip: ComposeClip; peaks: number[] }) {
+  const whole = clip.sourceDuration || clip.duration
+  const from = Math.floor((clip.sourceIn / whole) * peaks.length)
+  const to = Math.ceil(((clip.sourceIn + clip.duration) / whole) * peaks.length)
+  const slice = peaks.slice(Math.max(0, from), Math.max(from + 1, to))
+  if (!slice.length) return null
+
+  const step = 100 / slice.length
+  const top = slice.map((value, index) => `${index * step},${50 - value * 46}`).join(' ')
+  const bottom = slice
+    .map((value, index) => `${(slice.length - 1 - index) * step},${50 + slice[slice.length - 1 - index] * 46}`)
+    .join(' ')
+
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 h-full w-full"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+    >
+      <polygon points={`${top} ${bottom}`} className="fill-ok/70" />
+    </svg>
+  )
+}
+
+/** Прямоугольник клипа: кадры или волна, название, уголки. */
 function ClipBox({
   clip,
   scale,
   height,
   active,
   onGrab,
+  onMute,
 }: {
   clip: ComposeClip
   scale: number
   height: number
   active: boolean
-  onGrab: (event: React.MouseEvent, where: 'move' | 'left' | 'right') => void
+  onGrab: (event: React.MouseEvent, where: 'move' | 'left' | 'right' | 'fadeIn' | 'fadeOut') => void
+  onMute: () => void
 }) {
   const sound = clip.kind === 'audio'
+  const box = Math.max(clip.duration * scale, 6)
+  // Мелкому клипу лента кадров и волна не нужны — там нечего разглядывать,
+  // а запрос стоит времени.
+  const detailed = box > 40
+  const strip = useStrip(clip.source, detailed && clip.kind === 'video')
+  const peaks = useWave(clip.source, detailed && sound)
   const thumb = `/api/library/thumbnail?path=${encodeURIComponent(clip.source)}`
+
+  const fadeInWidth = (clip.fadeIn / clip.duration) * box
+  const fadeOutWidth = (clip.fadeOut / clip.duration) * box
+
   return (
     <div
       className={`group absolute top-1.5 overflow-hidden rounded-lg border ${
         active ? 'border-accent ring-1 ring-accent/50' : 'border-line-soft'
       }`}
-      style={{
-        left: clip.start * scale,
-        width: Math.max(clip.duration * scale, 6),
-        height: height - 12,
-      }}
+      style={{ left: clip.start * scale, width: box, height: height - 12 }}
       onMouseDown={(event) => {
         if (event.button !== 0) return
-        const box = event.currentTarget.getBoundingClientRect()
-        const fromLeft = event.clientX - box.left
-        const fromRight = box.right - event.clientX
+        const area = event.currentTarget.getBoundingClientRect()
+        const fromLeft = event.clientX - area.left
+        const fromRight = area.right - event.clientX
         onGrab(
           event,
           fromLeft <= GRIP_PIXELS ? 'left' : fromRight <= GRIP_PIXELS ? 'right' : 'move',
@@ -512,21 +676,49 @@ function ClipBox({
       }}
     >
       {sound ? (
-        <div className="absolute inset-0 bg-ok/15" />
-      ) : (
         <>
-          <div
-            className="absolute inset-0 bg-cover bg-center opacity-45"
-            style={{ backgroundImage: `url(${thumb})` }}
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-surface-3/70 to-surface-3/90" />
+          <div className="absolute inset-0 bg-ok/12" />
+          {peaks && <WaveFill clip={clip} peaks={peaks} />}
         </>
+      ) : strip ? (
+        <StripFill clip={clip} strip={strip} />
+      ) : (
+        <div
+          className="absolute inset-0 bg-cover bg-center opacity-45"
+          style={{ backgroundImage: `url(${thumb})` }}
+        />
       )}
+      <div className="absolute inset-0 bg-gradient-to-b from-surface-3/55 to-surface-3/80" />
+
+      {/* Затухания: затемнённые треугольники по краям, как в монтажках. */}
+      {clip.fadeIn > 0 && (
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 bg-black/55"
+          style={{ width: fadeInWidth, clipPath: 'polygon(0 0, 100% 0, 0 100%)' }}
+        />
+      )}
+      {clip.fadeOut > 0 && (
+        <div
+          className="pointer-events-none absolute inset-y-0 right-0 bg-black/55"
+          style={{ width: fadeOutWidth, clipPath: 'polygon(100% 0, 100% 100%, 0 0)' }}
+        />
+      )}
+
       <div className="relative flex h-full flex-col justify-between p-1.5">
         <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink">
-          {sound && <Music2 size={10} className="shrink-0 text-ok" />}
-          {(clip.muted || clip.volume === 0) && sound && (
-            <VolumeX size={10} className="shrink-0 text-ink-faint" />
+          {sound && (
+            <button
+              type="button"
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                onMute()
+              }}
+              title={clip.muted ? 'Включить звук клипа' : 'Заглушить клип'}
+              className="shrink-0 text-ok hover:text-ink"
+            >
+              {clip.muted ? <VolumeX size={11} /> : <Music2 size={11} />}
+            </button>
           )}
           <span className="truncate">{clip.name}</span>
         </span>
@@ -534,9 +726,30 @@ function ClipBox({
           {timecode(clip.duration, true)}
         </span>
       </div>
-      {/* Уголки: курсор меняется, чтобы было понятно, что край можно тянуть. */}
-      <div className="absolute inset-y-0 left-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/30" />
-      <div className="absolute inset-y-0 right-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/30" />
+
+      {/* Уголки затухания — вверху, уголки длины — по бокам. */}
+      <div
+        className="absolute left-0 top-0 h-3 w-3 cursor-nwse-resize"
+        title="Потяните вправо — плавное появление"
+        onMouseDown={(event) => {
+          event.stopPropagation()
+          onGrab(event, 'fadeIn')
+        }}
+      >
+        <div className="m-0.5 h-2 w-2 rounded-sm bg-accent/70 opacity-0 transition-opacity group-hover:opacity-100" />
+      </div>
+      <div
+        className="absolute right-0 top-0 h-3 w-3 cursor-nesw-resize"
+        title="Потяните влево — плавный уход"
+        onMouseDown={(event) => {
+          event.stopPropagation()
+          onGrab(event, 'fadeOut')
+        }}
+      >
+        <div className="m-0.5 h-2 w-2 rounded-sm bg-accent/70 opacity-0 transition-opacity group-hover:opacity-100" />
+      </div>
+      <div className="absolute inset-y-0 left-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25" />
+      <div className="absolute inset-y-0 right-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25" />
     </div>
   )
 }
