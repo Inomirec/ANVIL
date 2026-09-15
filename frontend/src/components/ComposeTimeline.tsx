@@ -297,6 +297,12 @@ export function ComposeTimeline({
 
   const from = renderIn ?? 0
   const to = renderOut ?? duration
+  // Звук в сборку не попадёт, если звучать нечему: клипы со звуком есть, но
+  // все они либо заглушены, либо выкручены в ноль.
+  const sounding = tracks.flatMap((track) => track.clips).filter(
+    (clip) => clip.kind === 'audio' || (clip.kind === 'video' && clip.hasAudio && !clip.groupId),
+  )
+  const silent = sounding.length > 0 && sounding.every((clip) => clip.muted || clip.volume <= 0)
 
   return (
     <div className="flex h-full flex-col">
@@ -339,6 +345,15 @@ export function ComposeTimeline({
         )}
         {selected.length > 1 && (
           <span className="text-[11px] text-accent-soft">выбрано: {selected.length}</span>
+        )}
+        {/* Ноль громкости у всех клипов означает «звука не будет вовсе» —
+            то же правило, что и в медиатеке. Сказать об этом надо заранее, а
+            не когда человек откроет готовый файл. */}
+        {silent && (
+          <span className="flex items-center gap-1.5 text-[11px] text-warn">
+            <VolumeX size={12} />
+            в файле не будет звука
+          </span>
         )}
         {/* Чтение файла занимает мгновение, но без этого окно выглядит
             зависшим: человек бросил файл, а на дорожке пока пусто. */}
@@ -890,7 +905,7 @@ function ClipBox({
               title={clip.muted ? 'Включить звук клипа' : 'Заглушить клип'}
               className="shrink-0 text-ok hover:text-ink"
             >
-              {clip.muted ? <VolumeX size={11} /> : <Music2 size={11} />}
+              {clip.muted || clip.volume <= 0 ? <VolumeX size={11} /> : <Music2 size={11} />}
             </button>
           )}
           <span className="truncate">{clip.name}</span>
