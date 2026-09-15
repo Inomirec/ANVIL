@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Film, FolderOpen, Play, RotateCw, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
-import { timecode } from '../lib/format'
+import { parentDir, timecode } from '../lib/format'
 import {
   DEFAULT_IMAGE_SECONDS,
   FRAME_QUALITY,
@@ -12,7 +12,7 @@ import {
 import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
 import { FolderPicker } from './FolderPicker'
-import { Button, Empty, Section, Segmented, Select, Toggle } from './ui'
+import { Button, Empty, Segmented, Select } from './ui'
 
 /**
  * Вкладка «Монтаж».
@@ -44,6 +44,7 @@ export function ComposeTab() {
   const toast = useStore((state) => state.toast)
   const setQueueOpen = useStore((state) => state.setQueueOpen)
   const presets = useStore((state) => state.presets)
+  const settings = useStore((state) => state.settings)
 
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
   const [frameError, setFrameError] = useState<string | null>(null)
@@ -173,6 +174,13 @@ export function ComposeTab() {
   }
 
   const videoPresets = presets.video ?? []
+  // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
+  // папка первого клипа плюс подпапка из настроек. Показываем её целиком:
+  // «рядом с первым файлом» ничего не говорит, когда папок были десятки.
+  const firstClip = tracks.flatMap((track) => track.clips)[0]
+  const defaultOut = firstClip
+    ? `${parentDir(firstClip.source)}\\${settings?.export?.output_folder || 'Обработанное'}`
+    : null
   // Ищем по списку дорожек, а не через getState(): иначе панель справа не
   // узнает, что клип подвинули или растянули, — снимок хранилища не
   // подписывает компонент на изменения.
@@ -306,13 +314,12 @@ export function ComposeTab() {
             )}
           </div>
 
-          <Section title="Сборка">
+          <div className="space-y-3 border-t border-line-soft pt-4">
             <Select
               label="Насколько сильно жать"
               value={presetId}
               options={videoPresets.map((preset) => ({ value: preset.id, label: preset.label }))}
               onChange={setPresetId}
-              hint="Те же пресеты, что и в медиатеке. Размер кадра берётся из настроек проекта."
             />
 
             <label className="block">
@@ -331,24 +338,27 @@ export function ComposeTab() {
                 type="button"
                 onClick={() => setPickingFolder(true)}
                 className="field flex w-full items-center gap-2 text-left hover:border-line"
-                title={outputDir ?? 'Рядом с первым файлом монтажа'}
+                title={outputDir ?? defaultOut ?? 'Папку выберет программа'}
               >
                 <FolderOpen size={14} className="shrink-0 text-accent-soft" />
                 <span className="min-w-0 flex-1 truncate text-[11.5px]">
-                  {outputDir ?? 'Рядом с первым файлом'}
+                  {outputDir ?? defaultOut ?? 'Положите файл на таймлайн'}
                 </span>
               </button>
               {outputDir && (
                 <button
                   type="button"
-                  onClick={() => setOutputDir(null)}
+                  onClick={() => {
+                    setOutputDir(null)
+                    localStorage.removeItem('sgh.composeOut')
+                  }}
                   className="mt-1 text-[11px] text-ink-faint hover:text-ink-dim"
                 >
-                  Вернуть «рядом с первым файлом»
+                  Вернуть папку рядом с исходником
                 </button>
               )}
             </div>
-          </Section>
+          </div>
         </div>
 
         <div className="space-y-2 border-t border-line-soft px-4 py-3">

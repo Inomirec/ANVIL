@@ -205,37 +205,19 @@ const nextId = () => `c${Date.now().toString(36)}${(counter++).toString(36)}`
 /** Клипы дорожки по порядку. */
 const ordered = (clips: ComposeClip[]) => [...clips].sort((a, b) => a.start - b.start)
 
-const overlap = (a: ComposeClip, b: ComposeClip) =>
-  a.start < b.start + b.duration && a.start + a.duration > b.start
-
 /**
- * Расталкивает клипы, чтобы они не лежали друг на друге.
+ * Клипы на дорожке могут перекрываться.
  *
- * Те, кого двигает человек, остаются на месте — расступаются остальные,
- * съезжая вправо. Так конец ролика можно перенести в начало, а картинку
- * положить между двумя видео: соседи подвинутся сами, вместо того чтобы
- * упираться в них, как в стенку, или улетать в конец таймлайна.
+ * Первый заход расталкивал соседей, чтобы наложений не было вовсе, — и
+ * перетаскивание стало мучением: кусок, который на полсекунды больше щели,
+ * расталкивал всё вокруг вместо того, чтобы просто лечь внахлёст. Теперь
+ * клип ложится ровно туда, куда его принесли.
+ *
+ * Кто кого перекрывает, решает время: клип, начинающийся позже, лежит выше.
+ * Это же даёт перетекание — у верхнего достаточно потянуть уголок появления,
+ * и он проступит сквозь нижний. Звук в месте наложения складывается, как в
+ * монтажных программах.
  */
-function resolveOverlaps(clips: ComposeClip[], keep: string[]): ComposeClip[] {
-  const fixed = clips.filter((clip) => keep.includes(clip.id))
-  const movable = ordered(clips.filter((clip) => !keep.includes(clip.id)))
-
-  const placed = [...fixed]
-  const result: ComposeClip[] = [...fixed]
-  for (const clip of movable) {
-    let start = clip.start
-    // Пока мешаем кому-то из уже разложенных — отступаем правее.
-    for (let guard = 0; guard < placed.length + 1; guard++) {
-      const hit = placed.find((other) => overlap({ ...clip, start }, other))
-      if (!hit) break
-      start = hit.start + hit.duration
-    }
-    const moved = { ...clip, start }
-    placed.push(moved)
-    result.push(moved)
-  }
-  return ordered(result)
-}
 
 /**
  * Подтягивает звук ролика под его картинку.
@@ -270,10 +252,7 @@ function syncLinked(tracks: ComposeTrack[]): ComposeTrack[] {
       changed = true
       return { ...clip, start: lead.start, duration: lead.duration, sourceIn: lead.sourceIn }
     })
-    if (!changed) return track
-    // Связанные стоят там, где скажет картинка, а музыка вокруг расступается.
-    const linked = clips.filter((clip) => clip.linkId).map((clip) => clip.id)
-    return { ...track, clips: resolveOverlaps(clips, linked) }
+    return changed ? { ...track, clips } : track
   })
 }
 
@@ -382,7 +361,7 @@ export const useCompose = create<State>((set, get) => ({
         tracks: settle(
           state.tracks.map((track) =>
             track.id === target?.id
-              ? { ...track, clips: resolveOverlaps([...track.clips, { ...clip, id }], [id]) }
+              ? { ...track, clips: [...track.clips, { ...clip, id }] }
               : track,
           ),
         ),
@@ -419,10 +398,10 @@ export const useCompose = create<State>((set, get) => ({
         tracks: settle(state.tracks.map((track) => {
           if (track.id === videoTrack?.id) {
             const clip: ComposeClip = { ...video, id: videoId, linkId, muted: true }
-            return { ...track, clips: resolveOverlaps([...track.clips, clip], [videoId]) }
+            return { ...track, clips: [...track.clips, clip] }
           }
           if (track.id === audioTrack?.id) {
-            return { ...track, clips: resolveOverlaps([...track.clips, sound], [audioId]) }
+            return { ...track, clips: [...track.clips, sound] }
           }
           return track
         })),
@@ -464,7 +443,7 @@ export const useCompose = create<State>((set, get) => ({
                 ? { ...clip, start: Math.max(0, clip.start + shift) }
                 : clip,
             )
-            return { ...track, clips: resolveOverlaps(shifted, moving) }
+            return { ...track, clips: shifted }
           }),
         ),
       }
@@ -494,7 +473,7 @@ export const useCompose = create<State>((set, get) => ({
                   }
                 : clip,
             )
-            return { ...track, clips: resolveOverlaps(next, family) }
+            return { ...track, clips: next }
           }),
         ),
       }
@@ -594,12 +573,34 @@ export const useCompose = create<State>((set, get) => ({
   },
 }))
 
-/** Точки, к которым липнут края клипов: границы соседей, ноль и игла. */
-export function magnets(track: ComposeTrack, skipIds: string[], playhead: number): number[] {
+/**
+ * Точки, к которым липнут края клипов: ноль, игла и границы **всех** клипов,
+ * включая соседние дорожки.
+ *
+ * Соседние дорожки важнее своих: так видео выравнивается по музыке под ним, а
+ * звук — по картинке над ним, и в готовом файле не остаётся ни просадки в
+ * звуке, ни чёрного кадра длиной в полсекунды.
+ */
+export function magnets(
+  tracks: ComposeTrack[],
+  skipIds: string[],
+  playhead: number,
+): number[] {
   const points = [0, playhead]
-  for (const clip of track.clips) {
-    if (skipIds.includes(clip.id)) continue
-    points.push(clip.start, clip.start + clip.duration)
+  for (const track of tracks) {
+    for (const clip of track.clips) {
+      if (skipIds.includes(clip.id)) continue
+      points.push(clip.start, clip.start + clip.duration)
+    }
+  }
+  return points
+}
+
+/** Края всех клипов — к ним липнет игла, когда её тянут. */
+export function clipEdges(tracks: ComposeTrack[]): number[] {
+  const points = [0]
+  for (const track of tracks) {
+    for (const clip of track.clips) points.push(clip.start, clip.start + clip.duration)
   }
   return points
 }

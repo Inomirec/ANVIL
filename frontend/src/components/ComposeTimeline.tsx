@@ -15,6 +15,7 @@ import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import type { FilmstripInfo } from '../lib/types'
 import {
+  clipEdges,
   magnets,
   MIN_CLIP_SECONDS,
   snap,
@@ -27,6 +28,14 @@ import { IconButton } from './ui'
 /** Радиус прилипания и ширина уголка для растягивания, в пикселях. */
 const SNAP_PIXELS = 8
 const GRIP_PIXELS = 10
+/**
+ * Уголок затухания. Заметно крупнее края растягивания и живёт только в
+ * верхней части клипа: попадать в него мышью с точностью до пикселя не
+ * придётся, а тянуть длину можно всей остальной высотой.
+ */
+const FADE_CORNER = 18
+/** Игла липнет к краям клипов, но слабее, чем клипы друг к другу. */
+const PLAYHEAD_SNAP = 6
 /** Высота дорожек: у звука она меньше — там только волна и имя. */
 const TRACK_HEIGHT = 74
 const AUDIO_HEIGHT = 52
@@ -115,7 +124,9 @@ export function ComposeTimeline({
       const at = secondsAt(event.clientX)
 
       if (current.kind === 'playhead') {
-        state.setPlayhead(at)
+        // Лёгкое прилипание к краям клипов: метки I и O чаще всего ставят
+        // ровно по границе куска, а попасть в неё на глаз невозможно.
+        state.setPlayhead(snap(at, clipEdges(state.tracks), PLAYHEAD_SNAP / state.scale))
         return
       }
 
@@ -148,7 +159,7 @@ export function ComposeTimeline({
         if (current.ids.length === 1) {
           const found = state.findClip(current.ids[0])
           if (!found) return
-          const points = magnets(found.track, current.ids, state.playhead)
+          const points = magnets(state.tracks, current.ids, state.playhead)
           const wanted = snap(at - current.grab, points, SNAP_PIXELS / state.scale)
           const delta = wanted - found.clip.start
           if (Math.abs(delta) > 1e-6) state.moveClips(current.ids, delta)
@@ -165,7 +176,7 @@ export function ComposeTimeline({
       const origin = current.clip
       const found = state.findClip(current.id)
       if (!found) return
-      const points = magnets(found.track, [current.id], state.playhead)
+      const points = magnets(state.tracks, [current.id], state.playhead)
       const nearby = SNAP_PIXELS / state.scale
 
       if (current.side === 'right') {
@@ -379,12 +390,14 @@ export function ComposeTimeline({
                 const at = secondsAt(event.clientX)
                 onDropFile(
                   path,
-                  snap(at, magnets(track, [], playhead), (SNAP_PIXELS * 2) / scale),
+                  snap(at, magnets(tracks, [], playhead), (SNAP_PIXELS * 2) / scale),
                   track.id,
                 )
               }}
             >
-              {track.clips.map((clip) => (
+              {[...track.clips]
+                .sort((a, b) => a.start - b.start)
+                .map((clip) => (
                 <ClipBox
                   key={clip.id}
                   clip={clip}
@@ -669,6 +682,10 @@ function ClipBox({
         const area = event.currentTarget.getBoundingClientRect()
         const fromLeft = event.clientX - area.left
         const fromRight = area.right - event.clientX
+        const fromTop = event.clientY - area.top
+        // Верхние углы отданы затуханию, бока ниже них — длине клипа.
+        if (fromTop <= FADE_CORNER && fromLeft <= FADE_CORNER) return onGrab(event, 'fadeIn')
+        if (fromTop <= FADE_CORNER && fromRight <= FADE_CORNER) return onGrab(event, 'fadeOut')
         onGrab(
           event,
           fromLeft <= GRIP_PIXELS ? 'left' : fromRight <= GRIP_PIXELS ? 'right' : 'move',
@@ -729,27 +746,36 @@ function ClipBox({
 
       {/* Уголки затухания — вверху, уголки длины — по бокам. */}
       <div
-        className="absolute left-0 top-0 h-3 w-3 cursor-nwse-resize"
+        className="absolute left-0 top-0 cursor-nwse-resize"
+        style={{ width: FADE_CORNER, height: FADE_CORNER }}
         title="Потяните вправо — плавное появление"
         onMouseDown={(event) => {
           event.stopPropagation()
           onGrab(event, 'fadeIn')
         }}
       >
-        <div className="m-0.5 h-2 w-2 rounded-sm bg-accent/70 opacity-0 transition-opacity group-hover:opacity-100" />
+        <div className="m-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
       <div
-        className="absolute right-0 top-0 h-3 w-3 cursor-nesw-resize"
+        className="absolute right-0 top-0 cursor-nesw-resize"
+        style={{ width: FADE_CORNER, height: FADE_CORNER }}
         title="Потяните влево — плавный уход"
         onMouseDown={(event) => {
           event.stopPropagation()
           onGrab(event, 'fadeOut')
         }}
       >
-        <div className="m-0.5 h-2 w-2 rounded-sm bg-accent/70 opacity-0 transition-opacity group-hover:opacity-100" />
+        <div className="ml-auto mr-1 mt-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
-      <div className="absolute inset-y-0 left-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25" />
-      <div className="absolute inset-y-0 right-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25" />
+      {/* Края длины начинаются ниже уголков, иначе они спорят за одни пиксели. */}
+      <div
+        className="absolute bottom-0 left-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
+        style={{ top: FADE_CORNER }}
+      />
+      <div
+        className="absolute bottom-0 right-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
+        style={{ top: FADE_CORNER }}
+      />
     </div>
   )
 }
