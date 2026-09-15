@@ -80,6 +80,43 @@ def _even(value: int) -> int:
     return max(2, value - value % 2)
 
 
+def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> str:
+    """Цепочка фильтров для звука одного клипа.
+
+    Порядок важен: сначала громкость, потом появление и уход, и только в конце
+    сдвиг во времени. Иначе затухание считалось бы от начала всего монтажа, а
+    не от начала клипа.
+
+    Появление и уход отсчитываются от краёв **клипа**, а не запрошенного окна.
+    Для готовой сборки окно и так начинается с нуля, и всё точно; в
+    предпросмотре середины клипа форма кривой может немного отличаться — на
+    то, каким получится файл, это не влияет.
+    """
+    parts = ["aresample=48000"]
+    if abs(clip.volume - 1.0) > 1e-6:
+        parts.append(f"volume={clip.volume:.3g}")
+
+    # Сколько клипа осталось за левым краем окна.
+    skip = max(0.0, at - clip.start)
+
+    if clip.fade_in > skip:
+        parts.append(f"afade=t=in:curve=qsin:st=0:d={clip.fade_in - skip:g}")
+
+    if clip.fade_out > 0:
+        # Начало ухода в координатах читаемого куска.
+        starts = (clip.duration - skip) - clip.fade_out
+        if starts < take:
+            parts.append(
+                f"afade=t=out:curve=qsin:st={max(starts, 0.0):.3f}"
+                f":d={min(clip.fade_out, clip.duration):g}"
+            )
+
+    shift = int(offset * 1000)
+    if shift:
+        parts.append(f"adelay={shift}|{shift}")
+    return ",".join(parts)
+
+
 def build_segment(
     project: ComposeProject,
     output: Path,
@@ -118,7 +155,11 @@ def build_segment(
         seek, take, offset = _window(clip, at, span)
         if take <= 0:
             continue
-        sound = clip.kind == "audio" or (clip.kind == "video" and clip.has_audio)
+        sound = (
+            not clip.muted
+            and clip.volume > 0
+            and (clip.kind == "audio" or (clip.kind == "video" and clip.has_audio))
+        )
         # Кадру звук не нужен — и записать его в картинку нельзя.
         if still and clip.kind == "audio":
             continue
@@ -140,9 +181,8 @@ def build_segment(
         # Только если он там действительно есть — ffmpeg на пустую дорожку
         # отвечает «Stream specifier ':a' matches no streams» и падает.
         if sound and not still:
-            shift = int(offset * 1000)
             chain.append(
-                f"[{index}:a]aresample=48000,adelay={shift}|{shift}[a{index}]"
+                f"[{index}:a]" + audio_filter(clip, at, offset, take) + f"[a{index}]"
             )
             audio_labels.append(f"[a{index}]")
         index += 1

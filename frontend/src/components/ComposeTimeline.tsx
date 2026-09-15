@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Scissors, Trash2, ZoomIn, ZoomOut } from 'lucide-react'
+import { Music2, Scissors, Trash2, VolumeX, ZoomIn, ZoomOut } from 'lucide-react'
 import { timecode } from '../lib/format'
 import {
   limitStart,
@@ -14,8 +14,9 @@ import { IconButton } from './ui'
 /** Радиус прилипания и ширина уголка для растягивания, в пикселях. */
 const SNAP_PIXELS = 8
 const GRIP_PIXELS = 10
-/** Высота дорожки. */
+/** Высота дорожек: у звука она меньше — там нечего показывать, кроме имени. */
 const TRACK_HEIGHT = 74
+const AUDIO_HEIGHT = 52
 /** Пустой запас справа, чтобы было куда тащить клипы. */
 const TAIL_SECONDS = 8
 
@@ -35,8 +36,8 @@ type Drag =
 export function ComposeTimeline({
   onDropFile,
 }: {
-  /** Файл притащили из медиатеки: путь и секунда, куда его положили. */
-  onDropFile: (path: string, at: number) => void
+  /** Файл притащили из медиатеки: путь, секунда и дорожка, куда его положили. */
+  onDropFile: (path: string, at: number, trackId: string) => void
 }) {
   const tracks = useCompose((state) => state.tracks)
   const playhead = useCompose((state) => state.playhead)
@@ -215,9 +216,11 @@ export function ComposeTimeline({
           {tracks.map((track) => (
             <div
               key={track.id}
-              ref={lane}
-              className="relative border-b border-line-soft bg-surface-2/40"
-              style={{ height: TRACK_HEIGHT }}
+              ref={track.kind === 'video' ? lane : undefined}
+              className={`relative border-b border-line-soft ${
+                track.kind === 'audio' ? 'bg-ok/5' : 'bg-surface-2/40'
+              }`}
+              style={{ height: track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT }}
               onDragOver={(event) => {
                 event.preventDefault()
                 event.dataTransfer.dropEffect = 'copy'
@@ -235,7 +238,8 @@ export function ComposeTimeline({
                 const at = secondsAt(event.clientX)
                 onDropFile(
                   path,
-                  snap(at, magnets(track, '', playhead), SNAP_PIXELS * 2 / scale),
+                  snap(at, magnets(track, '', playhead), (SNAP_PIXELS * 2) / scale),
+                  track.id,
                 )
               }}
             >
@@ -244,6 +248,7 @@ export function ComposeTimeline({
                   key={clip.id}
                   clip={clip}
                   scale={scale}
+                  height={track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT}
                   active={clip.id === selected}
                   onGrab={(event, where) => {
                     select(clip.id)
@@ -322,14 +327,17 @@ function Ruler({
 function ClipBox({
   clip,
   scale,
+  height,
   active,
   onGrab,
 }: {
   clip: ComposeClip
   scale: number
+  height: number
   active: boolean
   onGrab: (event: React.MouseEvent, where: 'move' | 'left' | 'right') => void
 }) {
+  const sound = clip.kind === 'audio'
   const thumb = `/api/library/thumbnail?path=${encodeURIComponent(clip.source)}`
   return (
     <div
@@ -339,7 +347,7 @@ function ClipBox({
       style={{
         left: clip.start * scale,
         width: Math.max(clip.duration * scale, 6),
-        height: TRACK_HEIGHT - 12,
+        height: height - 12,
       }}
       onMouseDown={(event) => {
         if (event.button !== 0) return
@@ -352,13 +360,23 @@ function ClipBox({
         )
       }}
     >
-      <div
-        className="absolute inset-0 bg-cover bg-center opacity-45"
-        style={{ backgroundImage: `url(${thumb})` }}
-      />
-      <div className="absolute inset-0 bg-gradient-to-b from-surface-3/70 to-surface-3/90" />
+      {sound ? (
+        <div className="absolute inset-0 bg-ok/15" />
+      ) : (
+        <>
+          <div
+            className="absolute inset-0 bg-cover bg-center opacity-45"
+            style={{ backgroundImage: `url(${thumb})` }}
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-surface-3/70 to-surface-3/90" />
+        </>
+      )}
       <div className="relative flex h-full flex-col justify-between p-1.5">
-        <span className="truncate text-[10.5px] font-medium text-ink">{clip.name}</span>
+        <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink">
+          {sound && <Music2 size={10} className="shrink-0 text-ok" />}
+          {clip.muted && <VolumeX size={10} className="shrink-0 text-ink-faint" />}
+          <span className="truncate">{clip.name}</span>
+        </span>
         <span className="font-mono text-[9.5px] tabular-nums text-ink-faint">
           {timecode(clip.duration, true)}
         </span>

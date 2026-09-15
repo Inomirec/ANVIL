@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.alias_generators import to_camel
 
 MediaKind = Literal["video", "audio", "image", "other"]
 VideoCodec = Literal[
@@ -243,7 +244,20 @@ class RenameRequest(BaseModel):
 ClipKind = Literal["video", "image", "audio"]
 
 
-class ComposeClip(BaseModel):
+class ComposeModel(BaseModel):
+    """Общая основа для моделей монтажа.
+
+    Интерфейс пишет имена полей по-своему (``sourceIn``), а Python — по-своему
+    (``source_in``). Раньше это расходилось молча: лишние поля Pydantic просто
+    отбрасывал, и обрезка клипа до сервера не доходила — вторая половина
+    разрезанного ролика собиралась с начала файла. Теперь понимаются оба
+    написания.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+class ComposeClip(ComposeModel):
     """Один кусок на дорожке монтажа.
 
     ``start`` и ``duration`` — про место на таймлайне, ``source_in`` — про сам
@@ -264,13 +278,21 @@ class ComposeClip(BaseModel):
     #: узнаёт это сам перед сборкой. Просить у ffmpeg дорожку, которой нет, —
     #: значит уронить всю сборку.
     has_audio: bool | None = None
+    #: Громкость: 1.0 — как есть, 0 — тишина.
+    volume: float = Field(default=1.0, ge=0.0, le=2.0)
+    #: Плавное появление и уход звука, в секундах.
+    fade_in: float = Field(default=0.0, ge=0, le=30)
+    fade_out: float = Field(default=0.0, ge=0, le=30)
+    #: Выбросить звук у этого клипа. Нужно, когда под видео кладут музыку и
+    #: родная дорожка ролика только мешает.
+    muted: bool = False
 
     @property
     def end(self) -> float:
         return self.start + self.duration
 
 
-class ComposeTrack(BaseModel):
+class ComposeTrack(ComposeModel):
     """Дорожка. Порядок в списке — порядок слоёв: последняя поверх всех."""
 
     id: str
@@ -278,7 +300,7 @@ class ComposeTrack(BaseModel):
     clips: list[ComposeClip] = Field(default_factory=list)
 
 
-class ComposeProject(BaseModel):
+class ComposeProject(ComposeModel):
     """Монтаж целиком — то, что видно на таймлайне."""
 
     #: Размер итогового кадра. Всё, что не подходит, вписывается внутрь с
@@ -297,7 +319,7 @@ class ComposeProject(BaseModel):
         )
 
 
-class ComposeFrameRequest(BaseModel):
+class ComposeFrameRequest(ComposeModel):
     """Кадр композиции под иглой — для окна просмотра."""
 
     project: ComposeProject
@@ -308,7 +330,7 @@ class ComposeFrameRequest(BaseModel):
     preview_width: int = Field(default=960, ge=160, le=3840)
 
 
-class ComposeBuildRequest(BaseModel):
+class ComposeBuildRequest(ComposeModel):
     """Сборка монтажа в готовый файл — обычной задачей в очереди."""
 
     project: ComposeProject

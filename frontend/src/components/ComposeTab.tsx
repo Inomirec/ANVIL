@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Film, Play, Trash2 } from 'lucide-react'
+import { Film, FolderOpen, Play, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import {
@@ -11,6 +11,7 @@ import {
 } from '../composeStore'
 import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
+import { FolderPicker } from './FolderPicker'
 import { Button, Empty, Section, Segmented, Select, Toggle } from './ui'
 
 /**
@@ -45,6 +46,13 @@ export function ComposeTab() {
   const [frameError, setFrameError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [presetId, setPresetId] = useState('pack_balanced')
+  // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
+  // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
+  const [outputName, setOutputName] = useState('Монтаж')
+  const [outputDir, setOutputDir] = useState<string | null>(
+    () => localStorage.getItem('sgh.composeOut') || null,
+  )
+  const [pickingFolder, setPickingFolder] = useState(false)
 
   const duration = tracks.reduce(
     (longest, track) =>
@@ -97,7 +105,7 @@ export function ComposeTab() {
   }, [frameUrl])
 
   /** Файл притащили из медиатеки — добавляем клип на дорожку. */
-  async function dropFile(path: string, at: number) {
+  async function dropFile(path: string, at: number, trackId: string) {
     try {
       const info = await api.fileInfo(path)
       if (info.kind === 'other') {
@@ -115,8 +123,12 @@ export function ComposeTab() {
         sourceIn: 0,
         sourceDuration: info.kind === 'image' ? 0 : length,
         hasAudio: Boolean(info.media?.hasAudio),
+        volume: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+        muted: false,
       }
-      addClip(clip)
+      addClip(clip, trackId)
       // Игла переезжает на положенный клип: иначе она осталась бы на пустом
       // месте, и окно просмотра показало бы чёрный кадр — как будто файл
       // не добавился вовсе.
@@ -132,7 +144,8 @@ export function ComposeTab() {
       const { width: w, height: h, fps, tracks: list } = useCompose.getState()
       await api.composeBuild({
         project: { width: w, height: h, fps, tracks: list },
-        output_name: 'Монтаж',
+        output_dir: outputDir,
+        output_name: outputName.trim() || 'Монтаж',
         preset_id: presetId,
       })
       setQueueOpen(true)
@@ -179,7 +192,7 @@ export function ComposeTab() {
 
         {/* Таймлайн */}
         <div className="h-[220px] shrink-0 border-t border-line-soft bg-surface">
-          <ComposeTimeline onDropFile={(path, at) => void dropFile(path, at)} />
+          <ComposeTimeline onDropFile={(path, at, trackId) => void dropFile(path, at, trackId)} />
         </div>
       </div>
 
@@ -296,6 +309,40 @@ export function ComposeTab() {
               onChange={setPresetId}
               hint="Те же пресеты, что и в медиатеке. Размер кадра берётся из настроек проекта."
             />
+
+            <label className="block">
+              <span className="label">Имя файла</span>
+              <input
+                className="field"
+                value={outputName}
+                onChange={(event) => setOutputName(event.target.value)}
+                placeholder="Монтаж"
+              />
+            </label>
+
+            <div>
+              <span className="label">Куда сохранить</span>
+              <button
+                type="button"
+                onClick={() => setPickingFolder(true)}
+                className="field flex w-full items-center gap-2 text-left hover:border-line"
+                title={outputDir ?? 'Рядом с первым файлом монтажа'}
+              >
+                <FolderOpen size={14} className="shrink-0 text-accent-soft" />
+                <span className="min-w-0 flex-1 truncate text-[11.5px]">
+                  {outputDir ?? 'Рядом с первым файлом'}
+                </span>
+              </button>
+              {outputDir && (
+                <button
+                  type="button"
+                  onClick={() => setOutputDir(null)}
+                  className="mt-1 text-[11px] text-ink-faint hover:text-ink-dim"
+                >
+                  Вернуть «рядом с первым файлом»
+                </button>
+              )}
+            </div>
           </Section>
         </div>
 
@@ -323,6 +370,16 @@ export function ComposeTab() {
           </Button>
         </div>
       </aside>
+
+      <FolderPicker
+        open={pickingFolder}
+        onClose={() => setPickingFolder(false)}
+        title="Куда сохранить готовое видео"
+        onPick={(path) => {
+          setOutputDir(path)
+          localStorage.setItem('sgh.composeOut', path)
+        }}
+      />
     </div>
   )
 }
@@ -330,6 +387,8 @@ export function ComposeTab() {
 /** Что показываем про выбранный клип. */
 function ClipInfo({ clip }: { clip: ComposeClip }) {
   const removeClip = useCompose((state) => state.removeClip)
+  const updateClip = useCompose((state) => state.updateClip)
+  const update = (patch: Partial<ComposeClip>) => updateClip(clip.id, patch)
   return (
     <div className="space-y-2">
       <p className="truncate text-[12.5px] font-medium text-ink" title={clip.name}>
@@ -349,6 +408,69 @@ function ClipInfo({ clip }: { clip: ComposeClip }) {
           ? 'Тяните за края на дорожке — столько картинка и будет висеть.'
           : 'Тяните за края, чтобы отрезать лишнее с начала или с конца.'}
       </p>
+
+      {/* Звук есть у музыки и у роликов с дорожкой. У картинки его нет. */}
+      {(clip.kind === 'audio' || (clip.kind === 'video' && clip.hasAudio)) && (
+        <div className="space-y-2 rounded-lg bg-surface-2 px-3 py-2.5">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="label">Громкость</span>
+              <span className="font-mono text-[11px] tabular-nums text-ink-dim">
+                {clip.muted ? 'выкл' : `${Math.round(clip.volume * 100)}%`}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={200}
+              step={5}
+              disabled={clip.muted}
+              value={Math.round(clip.volume * 100)}
+              onChange={(event) => update({ volume: Number(event.target.value) / 100 })}
+              className="w-full"
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <label className="flex-1">
+              <span className="label">Появление</span>
+              <input
+                type="number"
+                className="field"
+                min={0}
+                max={30}
+                step={0.5}
+                value={clip.fadeIn}
+                onChange={(event) => update({ fadeIn: Math.max(0, Number(event.target.value)) })}
+              />
+            </label>
+            <label className="flex-1">
+              <span className="label">Уход</span>
+              <input
+                type="number"
+                className="field"
+                min={0}
+                max={30}
+                step={0.5}
+                value={clip.fadeOut}
+                onChange={(event) => update({ fadeOut: Math.max(0, Number(event.target.value)) })}
+              />
+            </label>
+          </div>
+          <p className="text-[11px] leading-snug text-ink-faint">
+            Секунды плавного нарастания и затухания по краям клипа.
+          </p>
+
+          {clip.kind === 'video' && (
+            <Toggle
+              checked={clip.muted}
+              onChange={(value) => update({ muted: value })}
+              label="Без звука"
+              hint="Выбросить родную дорожку ролика — например, когда под видео кладут свою музыку."
+            />
+          )}
+        </div>
+      )}
       <Button className="w-full" onClick={() => removeClip(clip.id)}>
         <Trash2 size={14} />
         Убрать с дорожки

@@ -28,6 +28,13 @@ export interface ComposeClip {
   /** Длительность файла. У картинок 0 — их можно тянуть сколько угодно. */
   sourceDuration: number
   hasAudio: boolean
+  /** Громкость: 1 — как есть, 0 — тишина. */
+  volume: number
+  /** Плавное появление и уход звука, в секундах. */
+  fadeIn: number
+  fadeOut: number
+  /** Выбросить звук клипа — когда под видео кладут свою музыку. */
+  muted: boolean
 }
 
 export interface ComposeTrack {
@@ -107,6 +114,7 @@ interface State extends Saved {
   select: (id: string | null) => void
 
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
+  updateClip: (id: string, patch: Partial<ComposeClip>) => void
   moveClip: (id: string, start: number) => void
   resizeClip: (id: string, edge: 'left' | 'right', start: number, duration: number, sourceIn: number) => void
   splitAtPlayhead: () => void
@@ -126,14 +134,31 @@ function loadSaved(): Saved {
     shape: '16:9',
     turned: false,
     custom: false,
-    tracks: [{ id: 'v1', kind: 'video', clips: [] }],
+    tracks: [
+      { id: 'v1', kind: 'video', clips: [] },
+      { id: 'a1', kind: 'audio', clips: [] },
+    ],
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return empty
     const data = JSON.parse(raw) as Saved
     if (!Array.isArray(data.tracks) || !data.tracks.length) return empty
-    return { ...empty, ...data }
+    const tracks = data.tracks.map((track) => ({
+      ...track,
+      // Клипы из прежних версий не знали про громкость и затухания.
+      clips: (track.clips ?? []).map((clip) => ({
+        ...clip,
+        volume: clip.volume ?? 1,
+        fadeIn: clip.fadeIn ?? 0,
+        fadeOut: clip.fadeOut ?? 0,
+        muted: clip.muted ?? false,
+      })),
+    }))
+    if (!tracks.some((track) => track.kind === 'audio')) {
+      tracks.push({ id: 'a1', kind: 'audio', clips: [] })
+    }
+    return { ...empty, ...data, tracks }
   } catch {
     return empty
   }
@@ -218,16 +243,40 @@ export const useCompose = create<State>((set, get) => ({
 
   addClip(clip, trackId) {
     const id = nextId()
-    set((state) => ({
-      tracks: state.tracks.map((track) =>
-        track.id === (trackId ?? state.tracks[0]?.id)
-          ? { ...track, clips: [...track.clips, { ...clip, id }] }
-          : track,
-      ),
-      selected: id,
-    }))
+    set((state) => {
+      // Звук ложится на звуковую дорожку, картинки и видео — на видеодорожку,
+      // даже если бросили мимо: на чужой дорожке клип всё равно не прозвучит
+      // и не покажется, а искать причину человек будет долго.
+      const wanted = clip.kind === 'audio' ? 'audio' : 'video'
+      const asked = state.tracks.find((track) => track.id === trackId)
+      const target =
+        asked && asked.kind === wanted
+          ? asked
+          : state.tracks.find((track) => track.kind === wanted) ?? state.tracks[0]
+      // Место под клип ищем свободное: два клипа в одной точке дорожки не
+      // помещаются, и брошенный поверх соседа просто перекрыл бы его.
+      const start = target ? freeStart(target, clip.start, clip.duration) : clip.start
+      return {
+        tracks: state.tracks.map((track) =>
+          track.id === target?.id
+            ? { ...track, clips: [...track.clips, { ...clip, id, start }] }
+            : track,
+        ),
+        selected: id,
+      }
+    })
     save(get())
     return id
+  },
+
+  updateClip(id, patch) {
+    set((state) => ({
+      tracks: state.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) => (clip.id === id ? { ...clip, ...patch } : clip)),
+      })),
+    }))
+    save(get())
   },
 
   moveClip(id, start) {
@@ -336,6 +385,25 @@ export const useCompose = create<State>((set, get) => ({
     return null
   },
 }))
+
+/**
+ * Ближайшее свободное место для нового клипа.
+ *
+ * Если в желаемой точке уже кто-то лежит, клип сдвигается вправо за его край
+ * и проверяет снова. Так брошенный на занятое место файл встаёт следом за
+ * соседом, а не поверх него.
+ */
+export function freeStart(track: ComposeTrack, wanted: number, duration: number): number {
+  let start = Math.max(0, wanted)
+  // Дорожка не бесконечная, но и цикл не должен быть: клипов конечное число,
+  // а каждый шаг сдвигает нас правее — хватит одного прохода по списку.
+  for (const clip of ordered(track)) {
+    if (start < clip.start + clip.duration && start + duration > clip.start) {
+      start = clip.start + clip.duration
+    }
+  }
+  return start
+}
 
 /**
  * Куда встанет клип, чтобы не залезть на соседей.
