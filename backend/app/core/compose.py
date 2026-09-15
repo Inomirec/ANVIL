@@ -113,7 +113,39 @@ def zoom_filter(clip: ComposeClip, width: int, height: int) -> str:
     return f",scale={big_w}:{big_h}:flags=lanczos,crop={width}:{height}"
 
 
-def video_fades(clip: ComposeClip, at: float, take: float) -> str:
+def frame_alpha(clip: ComposeClip, moment: float) -> float:
+    """Насколько клип виден в конкретное мгновение.
+
+    Для одного кадра фильтр ``fade`` не годится: он разворачивается во
+    времени, а окно кадра длится одну сороковую секунды — за неё затухание
+    успевает подняться на проценты. Из-за этого верхний клип в зоне
+    наложения был на кадре почти невидим, хотя в готовом файле проявлялся
+    правильно. Поэтому для кадра считаем прозрачность прямо: где игла — такая
+    и видимость.
+    """
+    alpha = clip.opacity
+    if clip.fade_in > 0:
+        passed = moment - clip.start
+        if passed < clip.fade_in:
+            alpha *= max(0.0, min(1.0, passed / clip.fade_in))
+    if clip.fade_out > 0:
+        left = clip.end - moment
+        if left < clip.fade_out:
+            alpha *= max(0.0, min(1.0, left / clip.fade_out))
+    return max(0.0, min(1.0, alpha))
+
+
+def video_fades(clip: ComposeClip, at: float, take: float, *, moment: float | None = None) -> str:
+    """Появление и уход картинки; ``moment`` — для одиночного кадра."""
+    if moment is not None:
+        alpha = frame_alpha(clip, moment)
+        if alpha >= 1.0:
+            return ""
+        return f",format=yuva420p,colorchannelmixer=aa={alpha:.4g}"
+    return _video_fade_filters(clip, at, take)
+
+
+def _video_fade_filters(clip: ComposeClip, at: float, take: float) -> str:
     """Появление и уход картинки по краям клипа.
 
     Затухание делаем по прозрачности (``alpha=1``), а не в чёрный: под нижним
@@ -243,7 +275,7 @@ def build_segment(
             chain.append(
                 f"[{index}:v]{fit_filter(width, height, fps)}"
                 f"{zoom_filter(clip, width, height)}"
-                f"{video_fades(clip, at, take)},"
+                f"{video_fades(clip, at, take, moment=at if still else None)},"
                 f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
             )
             video_labels.append(f"[v{index}]")

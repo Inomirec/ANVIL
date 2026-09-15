@@ -480,6 +480,26 @@ export function ComposeTimeline({
                 />
               ))}
 
+              {/* Перекрестье в зоне наложения — знак перехода, как в
+                  монтажных программах: видно, что клипы не просто налезли
+                  друг на друга, а перетекают один в другой. */}
+              {crossfades(track).map((zone) => (
+                <div
+                  key={`${zone.from}-${zone.to}`}
+                  className="pointer-events-none absolute top-1.5 overflow-hidden rounded bg-accent/10 ring-1 ring-inset ring-accent/40"
+                  style={{
+                    left: zone.from * scale,
+                    width: Math.max((zone.to - zone.from) * scale, 2),
+                    height: (track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT) - 12,
+                  }}
+                >
+                  <svg className="h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                    <line x1="0" y1="100" x2="100" y2="0" className="stroke-accent-soft" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                    <line x1="0" y1="0" x2="100" y2="100" className="stroke-accent-soft" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                  </svg>
+                </div>
+              ))}
+
               {dropAt !== null && (
                 <div
                   className="pointer-events-none absolute top-0 h-full w-0.5 bg-accent"
@@ -605,6 +625,25 @@ function ClipMenu({
       )}
     </div>
   )
+}
+
+/**
+ * Зоны, где соседние клипы наложились друг на друга.
+ *
+ * Каждая такая зона — переход: верхний клип в ней проявляется, нижний уходит.
+ * Считается ровно так же, как на сервере при сборке, поэтому нарисованное
+ * совпадает с тем, что окажется в файле.
+ */
+function crossfades(track: ComposeTrack): { from: number; to: number }[] {
+  const clips = [...track.clips].sort((a, b) => a.start - b.start)
+  const zones: { from: number; to: number }[] = []
+  for (let index = 0; index < clips.length - 1; index++) {
+    const lower = clips[index]
+    const upper = clips[index + 1]
+    const end = lower.start + lower.duration
+    if (end > upper.start) zones.push({ from: upper.start, to: Math.min(end, upper.start + upper.duration) })
+  }
+  return zones
 }
 
 /** Какие клипы попали в рамку выделения. */
