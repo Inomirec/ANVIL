@@ -36,6 +36,30 @@ DRAFT_CODEC = [
 ]
 
 
+def apply_crossfades(project: ComposeProject) -> None:
+    """Делает перетекание там, где клипы наложились друг на друга.
+
+    Наложение — это и есть просьба о переходе: человек подвинул кусок на
+    соседа, потому что хочет, чтобы один сменился другим, а не чтобы верхний
+    просто закрыл нижний резкой границей. Поэтому в зоне пересечения верхний
+    (тот, что начинается позже) проявляется, а нижний уходит — и картинка, и
+    звук.
+
+    Руками заданное затухание сильнее: если человек сам вытянул уголок
+    длиннее, чем зона наложения, остаётся его значение.
+    """
+    for track in project.tracks:
+        clips = sorted(track.clips, key=lambda clip: clip.start)
+        for lower, upper in zip(clips, clips[1:]):
+            overlap = (lower.start + lower.duration) - upper.start
+            if overlap <= 0:
+                continue
+            # Перехлёст не может быть длиннее самих клипов.
+            span = min(overlap, lower.duration, upper.duration)
+            upper.fade_in = max(upper.fade_in, span)
+            lower.fade_out = max(lower.fade_out, span)
+
+
 def clips_at(project: ComposeProject, at: float, span: float) -> list[tuple[int, ComposeClip]]:
     """Клипы, попадающие в отрезок ``[at, at+span]``, снизу вверх по слоям.
 
@@ -80,6 +104,15 @@ def _even(value: int) -> int:
     return max(2, value - value % 2)
 
 
+def zoom_filter(clip: ComposeClip, width: int, height: int) -> str:
+    """Приближение внутри кадра: увеличиваем и обрезаем по краям."""
+    if clip.zoom <= 1.0:
+        return ""
+    big_w = max(2, int(width * clip.zoom) // 2 * 2)
+    big_h = max(2, int(height * clip.zoom) // 2 * 2)
+    return f",scale={big_w}:{big_h}:flags=lanczos,crop={width}:{height}"
+
+
 def video_fades(clip: ComposeClip, at: float, take: float) -> str:
     """Появление и уход картинки по краям клипа.
 
@@ -101,6 +134,10 @@ def video_fades(clip: ComposeClip, at: float, take: float) -> str:
                 f"fade=t=out:st={max(starts, 0.0):.3f}"
                 f":d={min(clip.fade_out, clip.duration):g}:alpha=1"
             )
+
+    # Полупрозрачный клип — тот же канал прозрачности, только постоянный.
+    if clip.opacity < 1.0:
+        parts.append(f"colorchannelmixer=aa={clip.opacity:.3g}")
 
     if not parts:
         return ""
@@ -165,6 +202,10 @@ def build_segment(
     if span <= 0:
         raise ValueError("На таймлайне пусто — нечего собирать")
 
+    # Наложения превращаем в переходы: это касается и кадра под иглой, чтобы
+    # человек видел ровно то, что получится в файле.
+    apply_crossfades(project)
+
     width = _even(width or project.width)
     height = _even(height or project.height)
     fps = project.fps
@@ -201,6 +242,7 @@ def build_segment(
         if clip.kind != "audio":
             chain.append(
                 f"[{index}:v]{fit_filter(width, height, fps)}"
+                f"{zoom_filter(clip, width, height)}"
                 f"{video_fades(clip, at, take)},"
                 f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
             )

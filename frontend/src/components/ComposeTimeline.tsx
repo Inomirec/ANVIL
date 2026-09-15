@@ -36,9 +36,9 @@ const GRIP_PIXELS = 10
 const FADE_CORNER = 18
 /** Игла липнет к краям клипов, но слабее, чем клипы друг к другу. */
 const PLAYHEAD_SNAP = 6
-/** Высота дорожек: у звука она меньше — там только волна и имя. */
+/** Высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
 const TRACK_HEIGHT = 74
-const AUDIO_HEIGHT = 52
+const AUDIO_HEIGHT = 74
 /** Пустой запас справа, чтобы было куда тащить клипы. */
 const TAIL_SECONDS = 8
 /** Дальше половины клипа затухание не тянется — оно съело бы весь кусок. */
@@ -46,6 +46,7 @@ const MAX_FADE_RATIO = 0.5
 
 type Drag =
   | { kind: 'move'; ids: string[]; grab: number; lastAt: number }
+  | { kind: 'level'; id: string; top: number; height: number }
   | { kind: 'edge'; id: string; side: 'left' | 'right'; clip: ComposeClip }
   | { kind: 'fade'; id: string; side: 'in' | 'out'; clip: ComposeClip }
   | { kind: 'playhead' }
@@ -84,8 +85,11 @@ export function ComposeTimeline({
   const markIn = useCompose((state) => state.markIn)
   const markOut = useCompose((state) => state.markOut)
   const clearMarks = useCompose((state) => state.clearMarks)
+  const groupClips = useCompose((state) => state.groupClips)
+  const ungroupClips = useCompose((state) => state.ungroupClips)
 
   const [dropAt, setDropAt] = useState<number | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -139,6 +143,20 @@ export function ComposeTimeline({
           x2: at * state.scale,
           y2: event.clientY - box.top,
         })
+        return
+      }
+
+      if (current.kind === 'level') {
+        // Линия уровня: у звука это громкость, у картинки — прозрачность.
+        const share = 1 - (event.clientY - current.top) / current.height
+        const value = Math.min(1, Math.max(0, share))
+        const clip = state.findClip(current.id)?.clip
+        if (clip) {
+          state.updateClip(
+            current.id,
+            clip.kind === 'audio' ? { volume: value } : { opacity: value },
+          )
+        }
         return
       }
 
@@ -243,6 +261,12 @@ export function ComposeTimeline({
       } else if (key === 'o' || key === 'щ') {
         event.preventDefault()
         markOut()
+      } else if (key === 'g' || key === 'п') {
+        event.preventDefault()
+        groupClips(useCompose.getState().selected)
+      } else if (key === 'u' || key === 'г') {
+        event.preventDefault()
+        ungroupClips(useCompose.getState().selected)
       } else if (event.key === 'Delete') {
         const ids = useCompose.getState().selected
         if (ids.length) removeClips(ids)
@@ -250,7 +274,7 @@ export function ComposeTimeline({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [splitAtPlayhead, removeClips, markIn, markOut])
+  }, [splitAtPlayhead, removeClips, markIn, markOut, groupClips, ungroupClips])
 
   /**
    * Колесо приближает и отдаляет — как в монтажных программах.
@@ -428,6 +452,16 @@ export function ComposeTimeline({
                     }
                   }}
                   onMute={() => updateClip(clip.id, { muted: !clip.muted })}
+                  onLevel={(top, height) => {
+                    select([clip.id])
+                    drag.current = { kind: 'level', id: clip.id, top, height }
+                  }}
+                  onMenu={(event) => {
+                    event.preventDefault()
+                    const state = useCompose.getState()
+                    if (!state.selected.includes(clip.id)) select([clip.id])
+                    setMenu({ x: event.clientX, y: event.clientY, id: clip.id })
+                  }}
                 />
               ))}
 
@@ -462,6 +496,98 @@ export function ComposeTimeline({
           </div>
         </div>
       </div>
+
+      {menu && (
+        <ClipMenu
+          at={menu}
+          clipId={menu.id}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Меню по правой кнопке: всё, что можно сделать с клипом, в одном месте.
+ *
+ * Клавиши помнить необязательно — они подписаны рядом с пунктами.
+ */
+function ClipMenu({
+  at,
+  clipId,
+  onClose,
+}: {
+  at: { x: number; y: number }
+  clipId: string
+  onClose: () => void
+}) {
+  const state = useCompose()
+  const clip = state.tracks.flatMap((track) => track.clips).find((item) => item.id === clipId)
+  const many = state.selected.length > 1
+
+  useEffect(() => {
+    const close = () => onClose()
+    window.addEventListener('mousedown', close)
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', close)
+    }
+  }, [onClose])
+
+  if (!clip) return null
+
+  const item = (label: string, hint: string, action: () => void, disabled = false) => (
+    <button
+      type="button"
+      disabled={disabled}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={() => {
+        action()
+        onClose()
+      }}
+      className="flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-left text-[12px] text-ink-dim transition-colors enabled:hover:bg-surface-3 enabled:hover:text-ink disabled:opacity-35"
+    >
+      {label}
+      <span className="font-mono text-[10px] text-ink-faint">{hint}</span>
+    </button>
+  )
+
+  return (
+    <div
+      className="fixed z-50 min-w-[210px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
+      style={{ left: at.x, top: at.y }}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {item('Разрезать под иглой', 'S', () => state.splitAtPlayhead())}
+      {item(
+        many ? `Удалить выбранное (${state.selected.length})` : 'Удалить клип',
+        'Del',
+        () => state.removeClips(state.selected.length ? state.selected : [clipId]),
+      )}
+      <div className="my-1 h-px bg-line-soft" />
+      {item('Сгруппировать', 'G', () => state.groupClips(state.selected), !many)}
+      {item('Убрать из группы', 'U', () => state.ungroupClips(state.selected), !clip.groupId)}
+      <div className="my-1 h-px bg-line-soft" />
+      {clip.kind === 'audio'
+        ? item(clip.muted ? 'Вернуть звук' : 'Заглушить', '', () =>
+            state.updateClip(clipId, { muted: !clip.muted }),
+          )
+        : item('Вернуть приближение', '', () => state.updateClip(clipId, { zoom: 1 }), clip.zoom === 1)}
+      {item(
+        'Убрать затухания',
+        '',
+        () => state.updateClip(clipId, { fadeIn: 0, fadeOut: 0 }),
+        !clip.fadeIn && !clip.fadeOut,
+      )}
+      {item(
+        clip.kind === 'audio' ? 'Вернуть громкость' : 'Вернуть непрозрачность',
+        '',
+        () =>
+          state.updateClip(clipId, clip.kind === 'audio' ? { volume: 1 } : { opacity: 1 }),
+        clip.kind === 'audio' ? clip.volume === 1 : clip.opacity === 1,
+      )}
     </div>
   )
 }
@@ -651,6 +777,8 @@ function ClipBox({
   active,
   onGrab,
   onMute,
+  onLevel,
+  onMenu,
 }: {
   clip: ComposeClip
   scale: number
@@ -658,8 +786,12 @@ function ClipBox({
   active: boolean
   onGrab: (event: React.MouseEvent, where: 'move' | 'left' | 'right' | 'fadeIn' | 'fadeOut') => void
   onMute: () => void
+  onLevel: (top: number, height: number) => void
+  onMenu: (event: React.MouseEvent) => void
 }) {
   const sound = clip.kind === 'audio'
+  // У звука линия показывает громкость, у картинки — насколько она видна.
+  const level = sound ? Math.min(1, clip.volume) : clip.opacity
   const box = Math.max(clip.duration * scale, 6)
   // Мелкому клипу лента кадров и волна не нужны — там нечего разглядывать,
   // а запрос стоит времени.
@@ -677,6 +809,7 @@ function ClipBox({
         active ? 'border-accent ring-1 ring-accent/50' : 'border-line-soft'
       }`}
       style={{ left: clip.start * scale, width: box, height: height - 12 }}
+      onContextMenu={onMenu}
       onMouseDown={(event) => {
         if (event.button !== 0) return
         const area = event.currentTarget.getBoundingClientRect()
@@ -720,6 +853,29 @@ function ClipBox({
           style={{ width: fadeOutWidth, clipPath: 'polygon(100% 0, 100% 100%, 0 0)' }}
         />
       )}
+
+      {/* Линия уровня, как на дорожке в медиатеке: у звука это громкость,
+          у картинки — прозрачность. Тянется вверх-вниз. */}
+      <div
+        className="absolute inset-x-0 z-10 cursor-ns-resize"
+        style={{ top: `${(1 - level) * 100}%`, height: 9, marginTop: -4 }}
+        title={
+          sound
+            ? `Громкость ${Math.round(level * 100)}% — тяните вверх или вниз`
+            : `Непрозрачность ${Math.round(level * 100)}% — тяните вверх или вниз`
+        }
+        onMouseDown={(event) => {
+          event.stopPropagation()
+          const area = event.currentTarget.parentElement!.getBoundingClientRect()
+          onLevel(area.top, area.height)
+        }}
+      >
+        <div
+          className={`mt-[3px] h-[3px] w-full ${
+            sound ? 'bg-ok/90' : 'bg-accent-soft/90'
+          } ${level >= 1 ? 'opacity-45' : 'opacity-100'}`}
+        />
+      </div>
 
       <div className="relative flex h-full flex-col justify-between p-1.5">
         <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink">

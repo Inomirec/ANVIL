@@ -134,6 +134,8 @@ export function ComposeTab() {
         fadeIn: 0,
         fadeOut: 0,
         muted: false,
+        opacity: 1,
+        zoom: 1,
       }
       if (clip.kind === 'video' && clip.hasAudio) {
         // У ролика со звуком на таймлайне два клипа: видно, что звук есть,
@@ -197,7 +199,25 @@ export function ComposeTab() {
             Фон не чёрный, и у кадра есть рамка: иначе чёрные поля вокруг
             вертикального видео сливались с фоном, и понять, какой формы
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
-        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface-2/60 p-5">
+        <div
+          className="flex min-h-0 flex-1 items-center justify-center bg-surface-2/60 p-5"
+          onWheel={(event) => {
+            // Колесо над кадром приближает выбранные картинки и видео — как в
+            // монтажных программах. Берём все выбранные, а не строго один:
+            // после группировки или рамки их обычно несколько, и требовать
+            // ровно одного значило бы «колесо иногда не работает».
+            const state = useCompose.getState()
+            const picked = state.tracks
+              .flatMap((track) => track.clips)
+              .filter((clip) => state.selected.includes(clip.id) && clip.kind !== 'audio')
+            if (!picked.length) return
+            event.preventDefault()
+            for (const clip of picked) {
+              const next = Math.min(8, Math.max(1, clip.zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)))
+              state.updateClip(clip.id, { zoom: Number(next.toFixed(3)) })
+            }
+          }}
+        >
           {!clips ? (
             <Empty
               icon={<Film size={44} />}

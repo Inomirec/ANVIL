@@ -36,12 +36,17 @@ export interface ComposeClip {
   /** Выбросить звук клипа. */
   muted: boolean
   /**
-   * Связка видео и его звука. У ролика со звуком на таймлайне два клипа:
-   * картинка на верхней дорожке и дорожка звука под ней. Общая метка держит
-   * их вместе — двигаются, режутся и удаляются они как одно целое, как в
-   * монтажных программах.
+   * Группа. Клипы одной группы двигаются, режутся и удаляются вместе.
+   *
+   * Ролик со звуком попадает в группу сам: картинка на верхней дорожке и его
+   * звук под ней — иначе они разъедутся при первой же правке. Свою группу
+   * человек собирает клавишей G, разбирает — U.
    */
-  linkId?: string
+  groupId?: string
+  /** Непрозрачность картинки: 1 — как есть, 0 — совсем не видно. */
+  opacity: number
+  /** Приближение внутри кадра: 1 — вписано целиком. */
+  zoom: number
 }
 
 export interface ComposeTrack {
@@ -137,6 +142,8 @@ interface State extends Saved {
   resizeClip: (id: string, start: number, duration: number, sourceIn: number) => void
   splitAtPlayhead: () => void
   removeClips: (ids: string[]) => void
+  groupClips: (ids: string[]) => void
+  ungroupClips: (ids: string[]) => void
   clearAll: () => void
 
   duration: () => number
@@ -173,6 +180,8 @@ function loadSaved(): Saved {
         fadeIn: clip.fadeIn ?? 0,
         fadeOut: clip.fadeOut ?? 0,
         muted: clip.muted ?? false,
+        opacity: clip.opacity ?? 1,
+        zoom: clip.zoom ?? 1,
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
@@ -231,7 +240,7 @@ function syncLinked(tracks: ComposeTrack[]): ComposeTrack[] {
   for (const track of tracks) {
     if (track.kind !== 'video') continue
     for (const clip of track.clips) {
-      if (clip.linkId) leaders.set(clip.linkId, clip)
+      if (clip.groupId) leaders.set(clip.groupId, clip)
     }
   }
   if (!leaders.size) return tracks
@@ -240,8 +249,11 @@ function syncLinked(tracks: ComposeTrack[]): ComposeTrack[] {
     if (track.kind === 'video') return track
     let changed = false
     const clips = track.clips.map((clip) => {
-      const lead = clip.linkId ? leaders.get(clip.linkId) : undefined
-      if (!lead) return clip
+      const lead = clip.groupId ? leaders.get(clip.groupId) : undefined
+      // Подтягиваем только родную дорожку ролика — тот же самый файл. В
+      // группе, собранной руками, у каждого клипа своё место: музыка не
+      // должна прыгать под картинку только потому, что они в одной группе.
+      if (!lead || lead.source !== clip.source) return clip
       if (
         lead.start === clip.start &&
         lead.duration === clip.duration &&
@@ -378,7 +390,7 @@ export const useCompose = create<State>((set, get) => ({
    * убавить его или убрать совсем.
    */
   addPair(video, trackId) {
-    const linkId = nextId()
+    const groupId = nextId()
     const videoId = nextId()
     const audioId = nextId()
     set((state) => {
@@ -390,14 +402,14 @@ export const useCompose = create<State>((set, get) => ({
         ...video,
         id: audioId,
         kind: 'audio',
-        linkId,
+        groupId,
         // Звук ролика живёт в звуковом клипе, поэтому у картинки он выключен —
         // иначе одна и та же дорожка попала бы в сборку дважды.
       }
       return {
         tracks: settle(state.tracks.map((track) => {
           if (track.id === videoTrack?.id) {
-            const clip: ComposeClip = { ...video, id: videoId, linkId, muted: true }
+            const clip: ComposeClip = { ...video, id: videoId, groupId, muted: true }
             return { ...track, clips: [...track.clips, clip] }
           }
           if (track.id === audioTrack?.id) {
@@ -427,10 +439,10 @@ export const useCompose = create<State>((set, get) => ({
     set((state) => {
       const all = state.tracks.flatMap((track) => track.clips)
       const links = new Set(
-        all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.linkId).filter(Boolean),
+        all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.groupId).filter(Boolean),
       )
       const moving = all
-        .filter((clip) => ids.includes(clip.id) || (clip.linkId && links.has(clip.linkId)))
+        .filter((clip) => ids.includes(clip.id) || (clip.groupId && links.has(clip.groupId)))
         .map((clip) => clip.id)
 
       return {
@@ -454,9 +466,9 @@ export const useCompose = create<State>((set, get) => ({
   resizeClip(id, start, duration, sourceIn) {
     set((state) => {
       const all = state.tracks.flatMap((track) => track.clips)
-      const link = all.find((clip) => clip.id === id)?.linkId
+      const link = all.find((clip) => clip.id === id)?.groupId
       const family = all
-        .filter((clip) => clip.id === id || (link && clip.linkId === link))
+        .filter((clip) => clip.id === id || (link && clip.groupId === link))
         .map((clip) => clip.id)
 
       return {
@@ -513,7 +525,7 @@ export const useCompose = create<State>((set, get) => ({
             sourceIn: clip.kind === 'image' ? clip.sourceIn : clip.sourceIn + passed,
             // Половинки связаны между собой заново: старая связка осталась у
             // левых кусков, правым нужна своя.
-            linkId: clip.linkId ? `${clip.linkId}-r` : undefined,
+            groupId: clip.groupId ? `${clip.groupId}-r` : undefined,
           }
           made.push(rightId)
           next.push({ ...clip, duration: passed }, right)
@@ -529,18 +541,63 @@ export const useCompose = create<State>((set, get) => ({
     set((state) => {
       const all = state.tracks.flatMap((track) => track.clips)
       const links = new Set(
-        all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.linkId).filter(Boolean),
+        all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.groupId).filter(Boolean),
       )
       return {
         tracks: state.tracks.map((track) => ({
           ...track,
           clips: track.clips.filter(
-            (clip) => !ids.includes(clip.id) && !(clip.linkId && links.has(clip.linkId)),
+            (clip) => !ids.includes(clip.id) && !(clip.groupId && links.has(clip.groupId)),
           ),
         })),
         selected: [],
       }
     })
+    save(get())
+  },
+
+  /**
+   * Собирает выбранные клипы в одну группу.
+   *
+   * Вместе с ними забирает и тех, кто уже был с ними в группе: у ролика это
+   * его звук. Иначе группировка картинки с музыкой отрывала бы от ролика
+   * собственную дорожку — и при первом же перетаскивании они разъехались бы.
+   */
+  groupClips(ids) {
+    if (ids.length < 2) return
+    const groupId = nextId()
+    set((state) => {
+      const all = state.tracks.flatMap((track) => track.clips)
+      const known = new Set(
+        all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.groupId).filter(Boolean),
+      )
+      const family = all
+        .filter((clip) => ids.includes(clip.id) || (clip.groupId && known.has(clip.groupId)))
+        .map((clip) => clip.id)
+
+      return {
+        tracks: state.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) =>
+            family.includes(clip.id) ? { ...clip, groupId } : clip,
+          ),
+        })),
+        selected: family,
+      }
+    })
+    save(get())
+  },
+
+  /** Выпускает клипы из группы — дальше они ходят сами по себе. */
+  ungroupClips(ids) {
+    set((state) => ({
+      tracks: state.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) =>
+          ids.includes(clip.id) ? { ...clip, groupId: undefined } : clip,
+        ),
+      })),
+    }))
     save(get())
   },
 
