@@ -416,6 +416,22 @@ const ICONS = {
   other: ImageIcon,
 }
 
+/**
+ * Свойства строки, чтобы файл можно было утащить на таймлайн монтажа.
+ *
+ * Свой тип данных, а не обычный текст: так бросок не спутается с файлом из
+ * проводника, который окно ловит отдельно и по-другому.
+ */
+function dragToTimeline(path: string) {
+  return {
+    draggable: true,
+    onDragStart: (event: React.DragEvent) => {
+      event.dataTransfer.setData('application/x-sgh-path', path)
+      event.dataTransfer.effectAllowed = 'copy'
+    },
+  }
+}
+
 function FileRow({
   file,
   active,
@@ -446,14 +462,7 @@ function FileRow({
           active ? 'bg-accent/12 ring-1 ring-accent/35' : 'hover:bg-surface-2'
         }`}
         onClick={onOpen}
-        // Файл можно утащить на таймлайн монтажа. Свой тип данных, а не
-        // обычный текст: так бросок не спутается с файлом из проводника,
-        // который окно ловит отдельно и по-другому.
-        draggable
-        onDragStart={(event) => {
-          event.dataTransfer.setData('application/x-sgh-path', file.path)
-          event.dataTransfer.effectAllowed = 'copy'
-        }}
+        {...dragToTimeline(file.path)}
       >
         <button
           type="button"
@@ -474,6 +483,7 @@ function FileRow({
             <img
               src={thumbUrl(file.path)}
               alt=""
+              draggable={false}
               loading="lazy"
               className="h-full w-full object-cover"
               onError={() => setThumbFailed(true)}
@@ -567,12 +577,14 @@ function FileTile({
           active ? 'ring-accent' : 'ring-line-soft hover:ring-line'
         }`}
         onClick={onOpen}
+        {...dragToTimeline(file.path)}
       >
         <div className="relative aspect-video bg-surface-3">
           {showThumb ? (
             <img
               src={thumbUrl(file.path)}
               alt=""
+              draggable={false}
               loading="lazy"
               className="h-full w-full object-cover"
               onError={() => setThumbFailed(true)}

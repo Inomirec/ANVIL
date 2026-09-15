@@ -62,13 +62,18 @@ export function ComposeTimeline({
   const span = Math.max(duration + TAIL_SECONDS, 20)
   const width = span * scale
 
-  /** Секунда под курсором. Считается от левого края дорожки с учётом прокрутки. */
+  /** Секунда под курсором.
+   *
+   * Прокрутку отдельно прибавлять не нужно: у прокрученной дорожки левый
+   * край и так уезжает влево вместе с полотном, и разница до курсора уже
+   * посчитана правильно. Прибавить её ещё раз значило бы промахнуться ровно
+   * на величину прокрутки.
+   */
   const secondsAt = useCallback(
     (clientX: number) => {
       const box = lane.current?.getBoundingClientRect()
       if (!box) return 0
-      const scroll = lane.current?.parentElement?.scrollLeft ?? 0
-      return Math.max(0, (clientX - box.left + scroll) / scale)
+      return Math.max(0, (clientX - box.left) / scale)
     },
     [scale],
   )
@@ -298,8 +303,7 @@ function Ruler({
       className="relative h-6 cursor-pointer border-b border-line-soft bg-surface"
       onMouseDown={(event) => {
         const box = event.currentTarget.getBoundingClientRect()
-        const scroll = event.currentTarget.parentElement?.parentElement?.scrollLeft ?? 0
-        onSeek(Math.max(0, (event.clientX - box.left + scroll) / scale))
+        onSeek(Math.max(0, (event.clientX - box.left) / scale))
       }}
     >
       {marks.map((at) => (

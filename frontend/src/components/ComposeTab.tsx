@@ -4,13 +4,14 @@ import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import {
   DEFAULT_IMAGE_SECONDS,
-  FRAME_SIZES,
+  FRAME_QUALITY,
+  FRAME_SHAPES,
   useCompose,
   type ComposeClip,
 } from '../composeStore'
 import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
-import { Button, Empty, Section, Select } from './ui'
+import { Button, Empty, Section, Segmented, Select, Toggle } from './ui'
 
 /**
  * Вкладка «Монтаж».
@@ -24,7 +25,15 @@ export function ComposeTab() {
   const tracks = useCompose((state) => state.tracks)
   const playhead = useCompose((state) => state.playhead)
   const selected = useCompose((state) => state.selected)
-  const setFrame = useCompose((state) => state.setFrame)
+  const quality = useCompose((state) => state.quality)
+  const shape = useCompose((state) => state.shape)
+  const turned = useCompose((state) => state.turned)
+  const custom = useCompose((state) => state.custom)
+  const setQuality = useCompose((state) => state.setQuality)
+  const setShape = useCompose((state) => state.setShape)
+  const setTurned = useCompose((state) => state.setTurned)
+  const setCustomSize = useCompose((state) => state.setCustomSize)
+  const useCustom = useCompose((state) => state.useCustom)
   const addClip = useCompose((state) => state.addClip)
   const clearAll = useCompose((state) => state.clearAll)
 
@@ -177,24 +186,96 @@ export function ComposeTab() {
       {/* Правая панель */}
       <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
-          <Section title="Проект">
-            <Select
-              label="Размер кадра"
-              value={`${width}x${height}`}
-              options={FRAME_SIZES.map((size) => ({
-                value: `${size.width}x${size.height}`,
-                label: size.label,
-              }))}
-              onChange={(value) => {
-                const [w, h] = value.split('x').map(Number)
-                setFrame(w, h)
-              }}
-              hint="Файлы другой формы впишутся внутрь кадра с чёрными полями — обрезать их программа не станет."
-            />
-            <div className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2 text-[11.5px]">
-              <span className="text-ink-faint">Длительность</span>
-              <span className="font-mono tabular-nums text-ink-dim">{timecode(duration, true)}</span>
+          <Section title="Кадр проекта">
+            <div>
+              <span className="label">Качество</span>
+              <Segmented
+                columns={3}
+                value={custom ? 'custom' : String(quality)}
+                onChange={(value) => {
+                  if (value === 'custom') useCustom(true)
+                  else setQuality(Number(value))
+                }}
+                options={[
+                  ...FRAME_QUALITY.map((value) => ({
+                    value: String(value),
+                    label: `${value}p`,
+                    title: 'Короткая сторона кадра',
+                  })),
+                  { value: 'custom', label: 'Свой', title: 'Задать ширину и высоту вручную' },
+                ]}
+              />
             </div>
+
+            {custom ? (
+              <div className="flex items-end gap-2">
+                <label className="flex-1">
+                  <span className="label">Ширина</span>
+                  <input
+                    type="number"
+                    className="field"
+                    value={width}
+                    min={16}
+                    max={7680}
+                    onChange={(event) => setCustomSize(Number(event.target.value) || 16, height)}
+                  />
+                </label>
+                <span className="pb-2.5 text-ink-faint">×</span>
+                <label className="flex-1">
+                  <span className="label">Высота</span>
+                  <input
+                    type="number"
+                    className="field"
+                    value={height}
+                    min={16}
+                    max={4320}
+                    onChange={(event) => setCustomSize(width, Number(event.target.value) || 16)}
+                  />
+                </label>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <span className="label">Форма</span>
+                  <Segmented
+                    columns={4}
+                    value={shape}
+                    onChange={setShape}
+                    options={FRAME_SHAPES.map((item) => ({
+                      value: item.value,
+                      label: item.label,
+                      title: item.hint,
+                    }))}
+                  />
+                </div>
+                <Toggle
+                  checked={turned}
+                  onChange={setTurned}
+                  disabled={shape === '1:1'}
+                  label="Повернуть кадр"
+                  hint="Меняет форму местами: из 16:9 получается 9:16 — вертикальное видео для телефона."
+                />
+              </>
+            )}
+
+            <div className="space-y-1 rounded-lg bg-surface-2 px-3 py-2 text-[11.5px]">
+              <div className="flex items-center justify-between">
+                <span className="text-ink-faint">Размер кадра</span>
+                <span className="font-mono tabular-nums text-ink-dim">
+                  {width}×{height}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-ink-faint">Длительность</span>
+                <span className="font-mono tabular-nums text-ink-dim">
+                  {timecode(duration, true)}
+                </span>
+              </div>
+            </div>
+            <p className="text-[11px] leading-snug text-ink-faint">
+              Файлы другой формы впишутся внутрь кадра с чёрными полями — обрезать их
+              программа не станет.
+            </p>
           </Section>
 
           <Section title="Выбранный клип">

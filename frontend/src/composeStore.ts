@@ -41,13 +41,37 @@ export const DEFAULT_IMAGE_SECONDS = 3
 /** Короче этого клип не тянется — иначе он исчезает под курсором. */
 export const MIN_CLIP_SECONDS = 0.2
 
-export const FRAME_SIZES = [
-  { label: '1080p (1920×1080)', width: 1920, height: 1080 },
-  { label: '720p (1280×720)', width: 1280, height: 720 },
-  { label: '480p (854×480)', width: 854, height: 480 },
-  { label: 'Вертикальное (1080×1920)', width: 1080, height: 1920 },
-  { label: 'Квадрат (1080×1080)', width: 1080, height: 1080 },
+/**
+ * Качество и форма кадра — две разные настройки.
+ *
+ * Качество (480/720/1080) задаёт **короткую** сторону: «1080p» у вертикального
+ * видео означает 1080 в ширину, а не в высоту. Форма задаёт пропорции, а
+ * галочка «повернуть» меняет их местами — из 16:9 получается 9:16.
+ */
+export const FRAME_QUALITY = [480, 720, 1080, 1440, 2160]
+
+export const FRAME_SHAPES = [
+  { value: '16:9', label: '16:9', hint: 'Обычное широкое видео' },
+  { value: '4:3', label: '4:3', hint: 'Старое телевидение' },
+  { value: '1:1', label: '1:1', hint: 'Квадрат' },
+  { value: '2:3', label: '2:3', hint: 'Как фотография' },
 ]
+
+/** Считает размер кадра из качества, формы и поворота. */
+export function frameSize(
+  quality: number,
+  shape: string,
+  turned: boolean,
+): { width: number; height: number } {
+  const parts = shape.split(':').map(Number)
+  let [across, along] = parts.length === 2 && parts.every(Boolean) ? parts : [16, 9]
+  if (turned) [across, along] = [along, across]
+  // Короткая сторона — это и есть выбранное качество.
+  const even = (value: number) => Math.max(2, Math.round(value / 2) * 2)
+  return across >= along
+    ? { width: even((quality * across) / along), height: even(quality) }
+    : { width: even(quality), height: even((quality * along) / across) }
+}
 
 const STORAGE_KEY = 'sgh.compose'
 
@@ -55,6 +79,14 @@ interface Saved {
   width: number
   height: number
   fps: number
+  /** Короткая сторона кадра: 480, 720, 1080… */
+  quality: number
+  /** Пропорции вида «16:9». */
+  shape: string
+  /** Повернуть кадр: из 16:9 получится 9:16. */
+  turned: boolean
+  /** Размер задан вручную — качество и форма тогда не применяются. */
+  custom: boolean
   tracks: ComposeTrack[]
 }
 
@@ -64,7 +96,11 @@ interface State extends Saved {
   /** Пикселей в секунде: масштаб таймлайна. */
   scale: number
 
-  setFrame: (width: number, height: number) => void
+  setQuality: (quality: number) => void
+  setShape: (shape: string) => void
+  setTurned: (turned: boolean) => void
+  setCustomSize: (width: number, height: number) => void
+  useCustom: (custom: boolean) => void
   setFps: (fps: number) => void
   setPlayhead: (at: number) => void
   setScale: (scale: number) => void
@@ -86,6 +122,10 @@ function loadSaved(): Saved {
     width: 1280,
     height: 720,
     fps: 30,
+    quality: 720,
+    shape: '16:9',
+    turned: false,
+    custom: false,
     tracks: [{ id: 'v1', kind: 'video', clips: [] }],
   }
   try {
@@ -102,8 +142,11 @@ function loadSaved(): Saved {
 /** Монтаж запоминается сам: закрытое окно не должно стоить часа работы. */
 function save(state: State): void {
   try {
-    const { width, height, fps, tracks } = state
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ width, height, fps, tracks }))
+    const { width, height, fps, quality, shape, turned, custom, tracks } = state
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ width, height, fps, quality, shape, turned, custom, tracks }),
+    )
   } catch {
     // Приватный режим браузера — тогда просто не запомним.
   }
@@ -121,8 +164,38 @@ export const useCompose = create<State>((set, get) => ({
   selected: null,
   scale: 60,
 
-  setFrame(width, height) {
-    set({ width, height })
+  setQuality(quality) {
+    const { shape, turned } = get()
+    set({ quality, custom: false, ...frameSize(quality, shape, turned) })
+    save(get())
+  },
+
+  setShape(shape) {
+    const { quality, turned } = get()
+    set({ shape, custom: false, ...frameSize(quality, shape, turned) })
+    save(get())
+  },
+
+  setTurned(turned) {
+    const { quality, shape } = get()
+    set({ turned, custom: false, ...frameSize(quality, shape, turned) })
+    save(get())
+  },
+
+  setCustomSize(width, height) {
+    // Нечётные размеры кодировщики не принимают.
+    const even = (value: number) => Math.max(16, Math.round(value / 2) * 2)
+    set({ width: even(width), height: even(height), custom: true })
+    save(get())
+  },
+
+  useCustom(custom) {
+    if (custom) {
+      set({ custom: true })
+    } else {
+      const { quality, shape, turned } = get()
+      set({ custom: false, ...frameSize(quality, shape, turned) })
+    }
     save(get())
   },
 
