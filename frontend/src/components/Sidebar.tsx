@@ -446,6 +446,14 @@ function FileRow({
           active ? 'bg-accent/12 ring-1 ring-accent/35' : 'hover:bg-surface-2'
         }`}
         onClick={onOpen}
+        // Файл можно утащить на таймлайн монтажа. Свой тип данных, а не
+        // обычный текст: так бросок не спутается с файлом из проводника,
+        // который окно ловит отдельно и по-другому.
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.setData('application/x-sgh-path', file.path)
+          event.dataTransfer.effectAllowed = 'copy'
+        }}
       >
         <button
           type="button"

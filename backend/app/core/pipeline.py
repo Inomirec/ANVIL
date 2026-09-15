@@ -8,13 +8,20 @@ from pathlib import Path
 
 from .. import config
 from ..models import (
+    AudioOptions,
+    ComposeBuildRequest,
+    ComposeProject,
     DownloadItem,
     DownloadRequest,
     ExportRequest,
     FrameGrabRequest,
     RawCommandRequest,
+    VideoOptions,
 )
-from . import benchmark, binaries, download, encode, fsutil, images, presets, toolchain, trash
+from . import (
+    benchmark, binaries, compose, download, encode, fsutil, images, presets,
+    toolchain, trash,
+)
 from .events import bus
 from .jobs import Job, JobContext, failure_text, manager, run_ffmpeg
 from .probe import probe
@@ -304,6 +311,65 @@ def submit_frame_grab(request: FrameGrabRequest) -> Job:
         pool="image",
         source=str(source),
         meta={"preset": "стоп-кадр · PNG", "kind": "image"},
+    )
+
+
+# --- монтаж -------------------------------------------------------------
+
+def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job:
+    """Собирает монтаж в готовый файл — обычной задачей в очереди.
+
+    ``project`` приходит уже проверенным (``compose.prepare``): пути внутри
+    рабочих папок, про каждый ролик известно, есть ли у него звук.
+    """
+    total = project.duration
+    first = next(
+        (clip.source for track in project.tracks for clip in track.clips), None
+    )
+    directory = (
+        Path(request.output_dir).expanduser()
+        if request.output_dir
+        else fsutil.default_output_dir(Path(first), "video")
+        if first
+        else Path(config.load().resolved_workspace())
+    )
+
+    preset = presets.get(request.preset_id or "pack_balanced") or {}
+    options = preset.get("options", {})
+    # Пресеты живут в тех же понятиях, что и обычное сжатие, поэтому команду
+    # кодека собираем их же кодом — монтаж не заводит свой список кодеков.
+    video = VideoOptions.model_validate(options.get("video", {}))
+    audio = AudioOptions.model_validate(options.get("audio", {}))
+    # Размер кадра задаёт проект, а не пресет: человек выбрал его сам.
+    video.max_height = 0
+
+    async def runner(ctx: JobContext) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        stem = fsutil.sanitize_name(request.output_name, fallback="Монтаж")
+        output = fsutil.unique_path(directory / f"{stem}.mp4", reserve=True)
+        ctx.job.output = str(output)
+        try:
+            codec = encode.video_codec_args(video, encode.effective_crf(video, None))
+            codec += encode.audio_codec_args(audio)
+            args = compose.build_segment(project, output, codec=codec)
+            ctx.log("$ " + encode.to_display_string(args))
+            ctx.meta(command=encode.to_display_string(args))
+
+            await run_ffmpeg(ctx, args, total_duration=total or None, label="Сборка")
+
+            ctx.meta(sizeAfter=output.stat().st_size if output.exists() else 0)
+            ctx.progress(1.0, "Готово")
+            bus.publish("library.changed", {"path": str(directory)})
+        finally:
+            fsutil.release_path(output)
+
+    clips = sum(len(track.clips) for track in project.tracks)
+    return manager.submit(
+        kind="encode",
+        title=f"Монтаж · {clips} {'клип' if clips == 1 else 'клипов'}",
+        runner=runner,
+        pool="encode",
+        meta={"preset": preset.get("label", "Баланс"), "kind": "video", "compose": True},
     )
 
 

@@ -19,7 +19,7 @@ from .core import binaries
 from .core.events import bus
 from .core.jobs import manager
 from .paths import ensure_dirs, static_dir
-from .routers import downloads, jobs, library, media, settings, stream, system
+from .routers import compose, downloads, jobs, library, media, settings, stream, system
 
 logger = logging.getLogger("sigame-helper")
 
@@ -114,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(library.router)
     app.include_router(media.router)
     app.include_router(jobs.router)
+    app.include_router(compose.router)
     app.include_router(downloads.router)
     app.include_router(stream.router)
 

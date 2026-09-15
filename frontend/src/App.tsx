@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Clapperboard, Download, FolderTree, Info, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clapperboard, Download, Film, FolderTree, Info, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
 import { api } from './lib/api'
 import { useEvents } from './hooks/useEvents'
 import { useStore } from './store'
+import { ComposeTab } from './components/ComposeTab'
 import { DownloadPanel } from './components/DownloadPanel'
 import { ExportPanel } from './components/ExportPanel'
 import { FolderPicker } from './components/FolderPicker'
@@ -16,7 +17,7 @@ import { Sidebar } from './components/Sidebar'
 import { TextContextMenu } from './components/TextContextMenu'
 import { Empty, Spinner } from './components/ui'
 
-type Tab = 'library' | 'download'
+type Tab = 'library' | 'download' | 'compose'
 
 export default function App() {
   useEvents()
@@ -93,7 +94,7 @@ export default function App() {
 
   // Выбор файла в медиатеке всегда возвращает на вкладку редактора.
   useEffect(() => {
-    if (activePath) setTab('library')
+    if (activePath) setTab((current) => (current === 'download' ? 'library' : current))
   }, [activePath])
 
   if (!ready) {
@@ -130,6 +131,12 @@ export default function App() {
             onClick={() => setTab('download')}
             icon={<Download size={14} />}
             label="Загрузка"
+          />
+          <TabButton
+            active={tab === 'compose'}
+            onClick={() => setTab('compose')}
+            icon={<Film size={14} />}
+            label="Монтаж"
           />
         </nav>
 
@@ -171,6 +178,8 @@ export default function App() {
         <main className="min-w-0 flex-1 overflow-hidden">
           {tab === 'download' ? (
             <DownloadPanel />
+          ) : tab === 'compose' ? (
+            <ComposeTab />
           ) : infoLoading ? (
             <div className="flex h-full items-center justify-center">
               <Spinner size={20} />

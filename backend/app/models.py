@@ -236,3 +236,85 @@ class PathRequest(BaseModel):
 class RenameRequest(BaseModel):
     path: str
     new_name: str
+
+
+# --- монтаж -------------------------------------------------------------
+
+ClipKind = Literal["video", "image", "audio"]
+
+
+class ComposeClip(BaseModel):
+    """Один кусок на дорожке монтажа.
+
+    ``start`` и ``duration`` — про место на таймлайне, ``source_in`` — про сам
+    файл: с какой его секунды начинать. Разрезать клип надвое значит сделать
+    из него два с общим файлом и разными ``source_in``.
+    """
+
+    id: str
+    source: str
+    kind: ClipKind
+    #: Где стоит на таймлайне, в секундах от начала.
+    start: float = Field(default=0.0, ge=0)
+    #: Сколько занимает на таймлайне. У картинки — сколько висит на экране.
+    duration: float = Field(gt=0)
+    #: С какой секунды самого файла берём. У картинок не имеет смысла.
+    source_in: float = Field(default=0.0, ge=0)
+    #: Есть ли в файле звуковая дорожка. ``None`` = ещё не выясняли; сервер
+    #: узнаёт это сам перед сборкой. Просить у ffmpeg дорожку, которой нет, —
+    #: значит уронить всю сборку.
+    has_audio: bool | None = None
+
+    @property
+    def end(self) -> float:
+        return self.start + self.duration
+
+
+class ComposeTrack(BaseModel):
+    """Дорожка. Порядок в списке — порядок слоёв: последняя поверх всех."""
+
+    id: str
+    kind: Literal["video", "audio"] = "video"
+    clips: list[ComposeClip] = Field(default_factory=list)
+
+
+class ComposeProject(BaseModel):
+    """Монтаж целиком — то, что видно на таймлайне."""
+
+    #: Размер итогового кадра. Всё, что не подходит, вписывается внутрь с
+    #: чёрными полями: обрезать чужой кадр за человека нельзя.
+    width: int = Field(default=1280, ge=16, le=7680)
+    height: int = Field(default=720, ge=16, le=4320)
+    fps: int = Field(default=30, ge=1, le=120)
+    tracks: list[ComposeTrack] = Field(default_factory=list)
+
+    @property
+    def duration(self) -> float:
+        """До какой секунды тянется самый дальний клип."""
+        return max(
+            (clip.end for track in self.tracks for clip in track.clips),
+            default=0.0,
+        )
+
+
+class ComposeFrameRequest(BaseModel):
+    """Кадр композиции под иглой — для окна просмотра."""
+
+    project: ComposeProject
+    #: Момент на таймлайне, в секундах.
+    at: float = Field(default=0.0, ge=0)
+    #: Ширина картинки предпросмотра. Кадр проекта может быть 4K, а окну
+    #: столько не нужно — лишние пиксели только замедляют просчёт.
+    preview_width: int = Field(default=960, ge=160, le=3840)
+
+
+class ComposeBuildRequest(BaseModel):
+    """Сборка монтажа в готовый файл — обычной задачей в очереди."""
+
+    project: ComposeProject
+    #: Куда сохранить. ``None`` = подпапка рядом с первым файлом монтажа.
+    output_dir: str | None = None
+    #: Имя файла без расширения.
+    output_name: str = "Монтаж"
+    #: Пресет сжатия из общего каталога. ``None`` = «Баланс».
+    preset_id: str | None = None

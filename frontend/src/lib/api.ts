@@ -128,6 +128,27 @@ export const api = {
       payload,
     ),
 
+  /** Кадр монтажа под иглой. Приходит картинкой, а не ссылкой. */
+  composeFrame: async (payload: unknown, signal?: AbortSignal): Promise<Blob> => {
+    const response = await fetch('/api/compose/frame', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    })
+    if (!response.ok) {
+      let detail = `Ошибка ${response.status}`
+      try {
+        detail = (await response.json())?.detail ?? detail
+      } catch {
+        /* тело может быть пустым */
+      }
+      throw new ApiError(String(detail), response.status)
+    }
+    return response.blob()
+  },
+  composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
+
   exportPreview: (payload: unknown) =>
     post<{ summary: string; command: string | null; output?: string }>('/api/export/preview', payload),
   exportPreset: (presetId: string, sources: string[], overrides?: Record<string, unknown>) =>
