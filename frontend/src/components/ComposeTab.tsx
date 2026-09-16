@@ -42,7 +42,7 @@ import {
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
-import { Button, Empty, IconButton, Segmented, Select, Toggle } from './ui'
+import { Button, Dropdown, Empty, IconButton, Segmented, Toggle } from './ui'
 
 /**
  * Поле размера кадра.
@@ -505,43 +505,41 @@ export function ComposeTab() {
                   {/* Галочка рядом со значком: сам список нужен редко, а
                       место занимал бы постоянно, поэтому от него оставлена
                       только стрелка. */}
-                  <div className="relative flex h-8 w-4 items-center justify-center">
-                    <ChevronDown size={12} className="pointer-events-none text-ink-faint" />
-                    <select
-                      value={gridKind}
-                      onChange={(event) => {
-                        const value = event.target.value as GridKind
-                        setGridKind(value)
-                        setGridOn(true)
-                        localStorage.setItem('sgh.composeGrid', value)
-                        localStorage.setItem('sgh.composeGridOn', '1')
-                      }}
-                      title="Какая сетка"
-                      className="absolute inset-0 cursor-pointer appearance-none bg-transparent text-transparent opacity-0 outline-none"
-                    >
-                      {GRIDS.filter((item) => item.value !== 'none').map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label.replace('Сетка: ', '')}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <Dropdown
+                    value={gridKind}
+                    title="Какая сетка"
+                    className="flex h-8 w-4 items-center justify-center text-ink-faint hover:text-ink"
+                    options={GRIDS.filter((item) => item.value !== 'none')}
+                    onChange={(value) => {
+                      setGridKind(value)
+                      setGridOn(true)
+                      localStorage.setItem('sgh.composeGrid', value)
+                      localStorage.setItem('sgh.composeGridOn', '1')
+                    }}
+                  >
+                    <ChevronDown size={12} />
+                  </Dropdown>
                 </div>
 
-                <select
+                <Dropdown
                   value={String(player.quality)}
-                  onChange={(event) => {
-                    const value = event.target.value
-                    player.setQuality(value === 'auto' ? 'auto' : (Number(value) as 360 | 480 | 720))
-                  }}
                   title="Качество просмотра. На готовый файл не влияет — только на то, что видно здесь."
-                  className="h-8 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim outline-none hover:text-ink focus:border-accent"
+                  className="flex h-8 items-center gap-1.5 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim hover:text-ink"
+                  options={[
+                    { value: 'auto', label: 'Качество просмотра: авто' },
+                    { value: '360', label: 'Качество просмотра: 360p' },
+                    { value: '480', label: 'Качество просмотра: 480p' },
+                    { value: '720', label: 'Качество просмотра: 720p' },
+                  ]}
+                  onChange={(value) =>
+                    player.setQuality(
+                      value === 'auto' ? 'auto' : (Number(value) as 360 | 480 | 720),
+                    )
+                  }
                 >
-                  <option value="auto">Просмотр: авто</option>
-                  <option value="360">Просмотр: 360p</option>
-                  <option value="480">Просмотр: 480p</option>
-                  <option value="720">Просмотр: 720p</option>
-                </select>
+                  Просмотр: {player.quality === 'auto' ? 'авто' : `${player.quality}p`}
+                  <ChevronDown size={12} className="text-ink-faint" />
+                </Dropdown>
 
                 <IconButton
                   title="Сохранить кадр картинкой"

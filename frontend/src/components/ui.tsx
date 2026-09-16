@@ -1,5 +1,5 @@
-import { useEffect, type ReactNode } from 'react'
-import { X } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Check, X } from 'lucide-react'
 
 /* Мелкие переиспользуемые элементы интерфейса. */
 
@@ -371,6 +371,118 @@ export function Modal({
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Небольшой список выбора в стиле программы.
+ *
+ * Обычный ``select`` рисует список силами Windows: белый, с чужими шрифтами и
+ * отступами — посреди тёмного окна он выглядит заплаткой. Здесь список свой,
+ * как меню по правой кнопке на таймлайне.
+ *
+ * Кнопку рисует тот, кто вызывает: где-то это значок со стрелкой, где-то
+ * подпись с нынешним значением.
+ */
+export function Dropdown<T extends string>({
+  value,
+  options,
+  onChange,
+  children,
+  align = 'left',
+  title,
+  className = '',
+}: {
+  value: T
+  options: { value: T; label: string; hint?: string }[]
+  onChange: (value: T) => void
+  /** Кнопка, по которой список открывается. */
+  children: ReactNode
+  align?: 'left' | 'right'
+  title?: string
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const [place, setPlace] = useState({ left: 0, top: 0 })
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const from = trigger.current?.getBoundingClientRect()
+    const size = list.current?.getBoundingClientRect()
+    if (!from || !size) return
+    const gap = 6
+    const left = align === 'right' ? from.right - size.width : from.left
+    setPlace({
+      left: Math.max(gap, Math.min(left, window.innerWidth - size.width - gap)),
+      top: Math.max(
+        gap,
+        Math.min(from.bottom + 4, window.innerHeight - size.height - gap),
+      ),
+    })
+  }, [open, align])
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: Event) => {
+      if (event.type === 'mousedown' && trigger.current?.contains(event.target as Node)) return
+      setOpen(false)
+    }
+    window.addEventListener('mousedown', close)
+    window.addEventListener('keydown', close)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', close)
+      window.removeEventListener('resize', close)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        title={title}
+        onClick={() => setOpen((was) => !was)}
+        className={className}
+      >
+        {children}
+      </button>
+      {open && (
+        <div
+          ref={list}
+          className="fixed z-50 min-w-[150px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
+          style={place}
+        >
+          {options.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={() => {
+                onChange(item.value)
+                setOpen(false)
+              }}
+              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors ${
+                item.value === value
+                  ? 'bg-accent/20 text-accent-soft'
+                  : 'text-ink-dim hover:bg-surface-3 hover:text-ink'
+              }`}
+            >
+              <span className="w-3 shrink-0">
+                {item.value === value && <Check size={12} />}
+              </span>
+              <span className="flex-1 truncate">{item.label}</span>
+              {item.hint && (
+                <span className="shrink-0 font-mono text-[10px] text-ink-faint">{item.hint}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 
