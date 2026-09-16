@@ -133,6 +133,21 @@ const QUALITY_SCALE: Record<string, { max: number; marks: { at: number; label: s
   },
 }
 
+/**
+ * Подписи к шкале битрейта.
+ *
+ * Голое число кбит/с ничего не говорит: понятно оно только тем, кто и так
+ * знает, сколько нужно. Поэтому рядом написано, для какой картинки это
+ * обычно берут.
+ */
+const BITRATE_MARKS = [
+  { at: 1500, label: 'мало' },
+  { at: 4000, label: '720p' },
+  { at: 9000, label: '1080p' },
+  { at: 18000, label: '1440p' },
+  { at: 30000, label: '4K' },
+]
+
 /** Какая подпись подходит нынешнему числу качества. */
 function qualityWord(codec: string, crf: number): string {
   const scale = QUALITY_SCALE[codec] ?? QUALITY_SCALE.h264
@@ -176,6 +191,51 @@ export function renderSummary(value: RenderSettings): string {
       ? 'без звука'
       : `${value.audioCodec.toUpperCase()} ${value.audioBitrateKbps} кбит/с`
   return `${name} · ${weight} · ${sound} · ${value.container.toUpperCase()}`
+}
+
+/**
+ * Подписи под ползунком.
+ *
+ * Ближайшая к нынешнему значению подсвечена: по ней и понятно, что сейчас
+ * выбрано, без оглядки на само число.
+ */
+function ScaleMarks({
+  marks,
+  min,
+  max,
+  at,
+  active,
+}: {
+  marks: { at: number; label: string }[]
+  min: number
+  max: number
+  at: number
+  /** Подсветить именно эту подпись, а не ближайшую по расстоянию. */
+  active?: string
+}) {
+  let near = marks[0]
+  for (const mark of marks) {
+    if (Math.abs(mark.at - at) < Math.abs(near.at - at)) near = mark
+  }
+  if (active) near = marks.find((mark) => mark.label === active) ?? near
+  return (
+    <div className="relative mt-1 h-7">
+      {marks.map((mark) => (
+        <span
+          key={mark.at}
+          className={`absolute top-0 -translate-x-1/2 whitespace-nowrap text-[9px] leading-tight ${
+            mark === near ? 'text-accent-soft' : 'text-ink-faint/70'
+          }`}
+          style={{
+            left: `${Math.min(94, Math.max(6, ((mark.at - min) / (max - min)) * 100))}%`,
+          }}
+        >
+          <span className="block text-center">|</span>
+          {mark.label}
+        </span>
+      ))}
+    </div>
+  )
 }
 
 export function ComposeRenderSettings({
@@ -374,43 +434,52 @@ export function ComposeRenderSettings({
           </div>
 
           {byBitrate ? (
-            <Slider
-              label="Битрейт видео"
-              value={value.bitrateKbps}
-              min={500}
-              max={40000}
-              step={250}
-              onChange={(bitrateKbps) => set({ bitrateKbps })}
-              suffix=" кбит/с"
-              hint="Вес файла выйдет примерно таким: битрейт, умноженный на длину монтажа. Для 1080p обычно берут 6000-12000."
-            />
-          ) : (
             <div>
               <Slider
-                label="Качество"
-                value={value.crf}
+                label="Битрейт видео"
+                value={value.bitrateKbps}
+                min={500}
+                max={40000}
+                step={250}
+                onChange={(bitrateKbps) => set({ bitrateKbps })}
+                suffix=" кбит/с"
+              />
+              <ScaleMarks
+                marks={BITRATE_MARKS}
+                min={500}
+                max={40000}
+                at={value.bitrateKbps}
+              />
+            </div>
+          ) : (
+            <div>
+              {/* Ползунок перевёрнут: вправо — лучше. Внутри у кодеков всё
+                  наоборот, меньше число значит лучше картинку, но человеку
+                  привычно, что «больше вправо» это «больше качества». */}
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="label mb-0">Качество</span>
+                <span className="text-[12px] text-ink">
+                  {qualityWord(value.videoCodec, value.crf)}
+                </span>
+              </div>
+              <input
+                type="range"
+                className="w-full"
                 min={0}
                 max={scale.max}
-                onChange={(crf) => set({ crf })}
-                hint="Меньше число — лучше картинка и тяжелее файл. У каждого кодека своя шкала: одно и то же число означает у них разное."
+                value={scale.max - value.crf}
+                onChange={(event) => set({ crf: scale.max - Number(event.target.value) })}
               />
-              {/* Подписи шкалы: без них непонятно, где картинка ещё хорошая. */}
-              <div className="relative mt-1 h-8">
-                {scale.marks.map((mark) => (
-                  <span
-                    key={mark.at}
-                    className={`absolute top-0 -translate-x-1/2 whitespace-nowrap text-[9px] leading-tight ${
-                      qualityWord(value.videoCodec, value.crf) === mark.label
-                        ? 'text-accent-soft'
-                        : 'text-ink-faint/70'
-                    }`}
-                    style={{ left: `${Math.min(96, Math.max(4, (mark.at / scale.max) * 100))}%` }}
-                  >
-                    <span className="block text-center">|</span>
-                    {mark.label}
-                  </span>
-                ))}
-              </div>
+              <ScaleMarks
+                marks={[...scale.marks].map((mark) => ({
+                  at: scale.max - mark.at,
+                  label: mark.label,
+                }))}
+                min={0}
+                max={scale.max}
+                at={scale.max - value.crf}
+                active={qualityWord(value.videoCodec, value.crf)}
+              />
             </div>
           )}
 

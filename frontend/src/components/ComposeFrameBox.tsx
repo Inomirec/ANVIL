@@ -1,5 +1,11 @@
 import { useEffect, useRef } from 'react'
-import { clampPlace, clipTall, useCompose, type ComposeClip } from '../composeStore'
+import {
+  clampPlace,
+  clipTall,
+  MIN_SIZE,
+  useCompose,
+  type ComposeClip,
+} from '../composeStore'
 
 /**
  * Рамка клипа поверх окна просмотра и сетка под ней.
@@ -112,8 +118,27 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         w: number
         h: number
       }
-    | { kind: 'corner'; frameW: number; frameH: number }
-    | { kind: 'edge'; frameW: number; frameH: number; side: 'x' | 'y' }
+    /**
+     * Тянем за уголок или край. ``anchor`` — противоположная сторона: она
+     * остаётся на месте, а двигается только та, за которую взялись. Тянуть
+     * обе стороны разом нельзя: тогда нужный размер приходится подбирать
+     * вслепую, потому что рамка разъезжается в обе стороны сразу.
+     */
+    | {
+        kind: 'corner'
+        frameW: number
+        frameH: number
+        anchorX: number
+        anchorY: number
+        ratio: number
+      }
+    | {
+        kind: 'edge'
+        frameW: number
+        frameH: number
+        side: 'x' | 'y'
+        anchor: number
+      }
     | null
   >(null)
 
@@ -152,30 +177,49 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         return
       }
 
-      // Размер считаем по тому, насколько уголок отъехал от середины:
-      // расстояние до середины и есть половина стороны рамки.
-      const awayX = Math.abs((event.clientX - area.left) / current.frameW - clip.x) * 2
-      const awayY = Math.abs((event.clientY - area.top) / current.frameH - clip.y) * 2
+      // Курсор в долях кадра.
+      const atX = (event.clientX - area.left) / current.frameW
+      const atY = (event.clientY - area.top) / current.frameH
 
       if (current.kind === 'corner') {
-        // Уголок тянет обе стороны разом и сохраняет нынешнюю форму рамки.
-        const ratio = tall / clip.size
-        const size = Math.max(awayX, awayY / (ratio || 1))
+        // Уголок тянет обе стороны и сохраняет форму рамки. Противоположный
+        // уголок при этом стоит на месте.
+        const ratio = current.ratio || 1
+        const size = Math.max(
+          MIN_SIZE,
+          Math.max(Math.abs(atX - current.anchorX), Math.abs(atY - current.anchorY) / ratio),
+        )
+        const wide = atX >= current.anchorX ? 1 : -1
+        const down = atY >= current.anchorY ? 1 : -1
         state.updateClip(
           clip.id,
-          clampPlace({ size, sizeY: clip.sizeY && clip.sizeY > 0 ? size * ratio : 0 }),
+          clampPlace({
+            size,
+            sizeY: clip.sizeY && clip.sizeY > 0 ? size * ratio : 0,
+            x: current.anchorX + (wide * size) / 2,
+            y: current.anchorY + (down * size * ratio) / 2,
+          }),
         )
         return
       }
 
       // Край тянет одну сторону: с этого мгновения у клипа своя форма, и
-      // высоту надо хранить отдельно.
-      state.updateClip(
-        clip.id,
-        current.side === 'x'
-          ? clampPlace({ size: awayX, sizeY: tall })
-          : clampPlace({ sizeY: awayY }),
-      )
+      // высоту надо хранить отдельно. Противоположный край не двигается.
+      if (current.side === 'x') {
+        const size = Math.max(MIN_SIZE, Math.abs(atX - current.anchor))
+        const wide = atX >= current.anchor ? 1 : -1
+        state.updateClip(
+          clip.id,
+          clampPlace({ size, sizeY: tall, x: current.anchor + (wide * size) / 2 }),
+        )
+      } else {
+        const sizeY = Math.max(MIN_SIZE, Math.abs(atY - current.anchor))
+        const down = atY >= current.anchor ? 1 : -1
+        state.updateClip(
+          clip.id,
+          clampPlace({ sizeY, y: current.anchor + (down * sizeY) / 2 }),
+        )
+      }
     }
     const drop = () => {
       drag.current = null
@@ -262,9 +306,17 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
           corner.id,
           corner,
           (frameW, frameH) => {
-            drag.current = { kind: 'corner', frameW, frameH }
+            drag.current = {
+              kind: 'corner',
+              frameW,
+              frameH,
+              // Противоположный уголок: он и остаётся на месте.
+              anchorX: clip.x + (corner.x === 0 ? clip.size / 2 : -clip.size / 2),
+              anchorY: clip.y + (corner.y === 0 ? tall / 2 : -tall / 2),
+              ratio: tall / clip.size,
+            }
           },
-          'Тяните — клип станет крупнее или мельче',
+          'Тяните — клип станет крупнее или мельче, противоположный угол останется на месте',
         ),
       )}
       {EDGES.map((edge) =>
@@ -272,9 +324,18 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
           edge.id,
           edge,
           (frameW, frameH) => {
-            drag.current = { kind: 'edge', frameW, frameH, side: edge.side }
+            drag.current = {
+              kind: 'edge',
+              frameW,
+              frameH,
+              side: edge.side,
+              anchor:
+                edge.side === 'x'
+                  ? clip.x + (edge.x === 0 ? clip.size / 2 : -clip.size / 2)
+                  : clip.y + (edge.y === 0 ? tall / 2 : -tall / 2),
+            }
           },
-          'Тяните — растянется только эта сторона',
+          'Тяните — двигается только эта сторона, противоположная стоит на месте',
         ),
       )}
 

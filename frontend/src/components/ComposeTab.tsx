@@ -44,6 +44,53 @@ import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Empty, IconButton, Segmented, Select, Toggle } from './ui'
 
 /**
+ * Поле размера кадра.
+ *
+ * Набранное держим строкой и применяем, только когда поле оставили или нажали
+ * Enter. Иначе программа правит число на каждую нажатую цифру: набрал «1» —
+ * превратилось в 16, и дальше вместо 1920 набирается что попало.
+ */
+function SizeField({
+  label,
+  value,
+  limit,
+  onDone,
+}: {
+  label: string
+  value: number
+  limit: number
+  onDone: (value: number) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+
+  const apply = () => {
+    if (draft === null) return
+    const next = Number(draft)
+    setDraft(null)
+    if (Number.isFinite(next) && next >= 16) onDone(Math.min(limit, next))
+  }
+
+  return (
+    <label className="flex-1">
+      <span className="label">{label}</span>
+      <input
+        type="number"
+        className="field"
+        value={draft ?? value}
+        min={16}
+        max={limit}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={apply}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') apply()
+          if (event.key === 'Escape') setDraft(null)
+        }}
+      />
+    </label>
+  )
+}
+
+/**
  * Какие клипы приближает колесо и кнопки.
  *
  * Берём все выбранные, а не строго один: после группировки или рамки их
@@ -131,10 +178,17 @@ export function ComposeTab() {
   const [adding, setAdding] = useState(false)
   // Сетка поверх кадра, как в медиатеке: по ней видно, попадает ли важное в
   // середину. Выбор запоминается — включают её обычно надолго.
-  const [grid, setGrid] = useState<GridKind>(() => {
+  // Сетку часто включают и выключают, поэтому у неё отдельная кнопка, а вид
+  // выбирается списком рядом. Выключенная сетка помнит свой вид: включил —
+  // вернулась та же.
+  const [gridOn, setGridOn] = useState(() => localStorage.getItem('sgh.composeGridOn') === '1')
+  const [gridKind, setGridKind] = useState<GridKind>(() => {
     const saved = localStorage.getItem('sgh.composeGrid')
-    return GRIDS.some((item) => item.value === saved) ? (saved as GridKind) : 'none'
+    return GRIDS.some((item) => item.value === saved && item.value !== 'none')
+      ? (saved as GridKind)
+      : 'thirds'
   })
+  const grid: GridKind = gridOn ? gridKind : 'none'
   const [snapping, setSnapping] = useState(false)
   // Ширина шины громкости: её тянут за границу, и от ширины зависит, что на
   // ней помещается. Запоминаем — настраивают это один раз и надолго.
@@ -432,23 +486,40 @@ export function ComposeTab() {
                 </div>
 
                 {/* Сетка — не только разметка для глаза: клип к её линиям
-                    прилипает, поэтому точное положение можно набрать мышью. */}
-                <select
-                  value={grid}
-                  onChange={(event) => {
-                    const value = event.target.value as GridKind
-                    setGrid(value)
-                    localStorage.setItem('sgh.composeGrid', value)
-                  }}
-                  title="Разметка поверх кадра. К её линиям и к краям кадра клип прилипает, когда его двигают."
-                  className="h-8 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim outline-none hover:text-ink focus:border-accent"
-                >
-                  {GRIDS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
+                    прилипает, поэтому точное положение можно набрать мышью.
+                    Кнопка включает и выключает, список рядом меняет вид. */}
+                <div className="flex items-center">
+                  <IconButton
+                    title="Сетка поверх кадра. К её линиям, к краям кадра и к его середине клип прилипает, когда его двигают."
+                    active={gridOn}
+                    onClick={() => {
+                      setGridOn((on) => {
+                        localStorage.setItem('sgh.composeGridOn', on ? '0' : '1')
+                        return !on
+                      })
+                    }}
+                  >
+                    <Grid3x3 size={14} />
+                  </IconButton>
+                  <select
+                    value={gridKind}
+                    onChange={(event) => {
+                      const value = event.target.value as GridKind
+                      setGridKind(value)
+                      setGridOn(true)
+                      localStorage.setItem('sgh.composeGrid', value)
+                      localStorage.setItem('sgh.composeGridOn', '1')
+                    }}
+                    title="Какая сетка"
+                    className="h-8 w-[22px] cursor-pointer appearance-none rounded-lg bg-transparent text-[11px] text-ink-faint outline-none hover:text-ink"
+                  >
+                    {GRIDS.filter((item) => item.value !== 'none').map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label.replace('Сетка: ', '')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
                 <select
                   value={String(player.quality)}
@@ -589,29 +660,19 @@ export function ComposeTab() {
 
             {custom ? (
               <div className="flex items-end gap-2">
-                <label className="flex-1">
-                  <span className="label">Ширина</span>
-                  <input
-                    type="number"
-                    className="field"
-                    value={width}
-                    min={16}
-                    max={7680}
-                    onChange={(event) => setCustomSize(Number(event.target.value) || 16, height)}
-                  />
-                </label>
+                <SizeField
+                  label="Ширина"
+                  value={width}
+                  limit={7680}
+                  onDone={(next) => setCustomSize(next, height)}
+                />
                 <span className="pb-2.5 text-ink-faint">×</span>
-                <label className="flex-1">
-                  <span className="label">Высота</span>
-                  <input
-                    type="number"
-                    className="field"
-                    value={height}
-                    min={16}
-                    max={4320}
-                    onChange={(event) => setCustomSize(width, Number(event.target.value) || 16)}
-                  />
-                </label>
+                <SizeField
+                  label="Высота"
+                  value={height}
+                  limit={4320}
+                  onDone={(next) => setCustomSize(width, next)}
+                />
               </div>
             ) : (
               <div>
