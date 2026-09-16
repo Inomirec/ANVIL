@@ -335,6 +335,15 @@ export function ComposeTimeline({
 
     const onUp = () => {
       const current = drag.current
+      // Перетащили клип — смотрим, не сошлись ли где-то трое. Проверяем
+      // только здесь: во время перетаскивания клип должен свободно проходить
+      // и через чужие переходы.
+      if (current?.kind === 'move') {
+        useCompose.getState().settleOverlaps(current.ids)
+      }
+      if (current?.kind === 'edge') {
+        useCompose.getState().trimOverlaps(current.id)
+      }
       if (current?.kind === 'pending') {
         // Мышь не сдвинулась — это было обычное нажатие: ставим иглу.
         const state = useCompose.getState()

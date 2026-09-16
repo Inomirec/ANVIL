@@ -110,10 +110,15 @@ def fit_filter(width: int, height: int, fps: int) -> str:
     ожидает, что программа отрежет ему полкадра. Вертикальное видео в
     горизонтальном проекте получит чёрные поля по бокам — так же, как это
     делают монтажные программы.
+
+    Поля прозрачные, а не чёрные. Под нижним слоем и так лежит чёрный фон, так
+    что на глаз разницы нет, зато на верхних слоях сквозь поля виден нижний:
+    иначе логотип с прозрачностью, положенный поверх видео, закрывал бы его
+    чёрными полосами по бокам.
     """
     return (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
-        f"pad={width}:{height}:-1:-1:color=black,setsar=1,fps={fps}"
+        f"format=yuva420p,pad={width}:{height}:-1:-1:color=black@0,setsar=1,fps={fps}"
     )
 
 
@@ -142,9 +147,19 @@ def is_placed(clip: ComposeClip) -> bool:
 
 
 def clip_box(clip: ComposeClip, width: int, height: int) -> tuple[int, int]:
-    """Прямоугольник, в который кладём клип, в пикселях кадра."""
-    tall = clip.size_y if clip.size_y > 0 else clip.size
-    return _even(max(2, int(width * clip.size))), _even(max(2, int(height * tall)))
+    """Прямоугольник, в который кладём клип, в пикселях кадра.
+
+    Высоту берём заданную, а если её не задавали — считаем по форме самого
+    файла. Тогда рамка совпадает с картинкой, и выравнивать её по краям кадра
+    можно точно; иначе у квадратной картинки в широком кадре рамка была бы
+    шире самой картинки.
+    """
+    box_w = _even(max(2, int(width * clip.size)))
+    if clip.size_y > 0:
+        return box_w, _even(max(2, int(height * clip.size_y)))
+    if clip.ratio > 0:
+        return box_w, _even(max(2, int(box_w / clip.ratio)))
+    return box_w, _even(max(2, int(height * clip.size)))
 
 
 def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:

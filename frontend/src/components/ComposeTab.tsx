@@ -225,6 +225,14 @@ export function ComposeTab() {
         opacity: 1,
         zoom: 1,
         size: 1,
+        sizeY: 0,
+        // Форма файла нужна, чтобы рамка в окне просмотра совпадала с самой
+        // картинкой: у квадратной картинки в широком кадре рамка иначе была
+        // бы шире её, и выравнивать по краям было бы не по чему.
+        ratio:
+          info.media?.width && info.media?.height
+            ? info.media.width / info.media.height
+            : 0,
         x: 0.5,
         y: 0.5,
       }
@@ -326,13 +334,20 @@ export function ComposeTab() {
   )
 
   // Клип, который сейчас двигают по кадру: рамка появляется, когда выбран
-  // ровно один клип с картинкой. На нескольких сразу рамка врала бы —
-  // размер и место у каждого свои.
+  // ровно один клип с картинкой и он в этот момент виден. На нескольких сразу
+  // рамка врала бы — размер и место у каждого свои, — а двигать то, чего в
+  // кадре нет, значит вслепую.
   const placing =
     selected.length === 1
       ? tracks
           .flatMap((track) => track.clips)
-          .find((clip) => clip.id === selected[0] && clip.kind !== 'audio')
+          .find(
+            (clip) =>
+              clip.id === selected[0] &&
+              clip.kind !== 'audio' &&
+              clip.start <= playhead &&
+              clip.start + clip.duration > playhead,
+          )
       : undefined
 
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
@@ -523,7 +538,6 @@ export function ComposeTab() {
             onMaster={setMasterVolume}
             active={player.playing}
             loudnorm={loudnorm}
-            onLoudnorm={setLoudnorm}
             width={meterWidth}
             onWidth={(value) => {
               setMeterWidth(value)
@@ -637,7 +651,7 @@ export function ComposeTab() {
               checked={loudnorm}
               onChange={setLoudnorm}
               label="Выровнять звук"
-              hint="Подтянет громкость готового файла к единому уровню: тихие места станут громче, громкие — тише. То же самое делают на радио, чтобы не крутить ручку от ролика к ролику. Отметка, к которой всё тянется, видна на шкале громкости."
+              hint="Приведёт громкость готового файла к общему уровню — отметка видна на шкале справа. Пока включено, громкость монтажа не крутится: выравнивание её всё равно перебьёт."
             />
           </div>
         </div>

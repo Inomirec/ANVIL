@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { clampPlace, useCompose, type ComposeClip } from '../composeStore'
+import { clampPlace, clipTall, useCompose, type ComposeClip } from '../composeStore'
 
 /**
  * Рамка клипа поверх окна просмотра и сетка под ней.
@@ -12,9 +12,9 @@ import { clampPlace, useCompose, type ComposeClip } from '../composeStore'
  * только одна сторона, и клип перестаёт держать свою форму. Двойное нажатие
  * возвращает клип в кадр целиком.
  *
- * Рамка рисуется по размеру и месту, а не по настоящей картинке: если форма
- * кадра у клипа другая, внутри рамки он ляжет с полями. Зато понятно, что
- * именно двигаешь.
+ * Рамка повторяет форму самой картинки, а не кадра: у квадратной картинки в
+ * широком кадре она квадратная. Иначе выравнивать было бы не по чему — рамка
+ * шире картинки, а по её краю ничего не стоит.
  */
 
 /** Виды сетки. Линии заданы долями кадра. */
@@ -117,7 +117,11 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
     | null
   >(null)
 
-  const tall = clip.sizeY && clip.sizeY > 0 ? clip.sizeY : clip.size
+  // Рамка повторяет форму самой картинки, а не кадра: по её краям человек и
+  // выравнивает. У заливки формы нет — там рамка какая задана.
+  const frameW = useCompose((state) => state.width)
+  const frameH = useCompose((state) => state.height)
+  const tall = clipTall(clip, frameW, frameH)
 
   useEffect(() => {
     const move = (event: MouseEvent) => {

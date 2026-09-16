@@ -65,6 +65,12 @@ export interface ComposeClip {
    */
   sizeY?: number
   /**
+   * Форма исходника: ширина, делённая на высоту. Ноль — неизвестна. По ней
+   * считается высота рамки, когда её не задавали отдельно, — тогда рамка
+   * совпадает с самой картинкой.
+   */
+  ratio?: number
+  /**
    * Где стоит середина клипа, в долях кадра: 0.5 — посередине. Значения за
    * пределами 0..1 допустимы: клип можно увести за край частично.
    */
@@ -117,6 +123,18 @@ export const MIN_SIZE = 0.05
 export const MAX_SIZE = 4
 export const MIN_PLACE = -1
 export const MAX_PLACE = 2
+
+/**
+ * Высота рамки клипа в долях кадра.
+ *
+ * Заданную берём как есть, иначе считаем по форме файла: рамка должна
+ * совпадать с самой картинкой, а не быть квадратом вокруг неё.
+ */
+export function clipTall(clip: ComposeClip, frameW: number, frameH: number): number {
+  if (clip.sizeY && clip.sizeY > 0) return clip.sizeY
+  if (clip.ratio && clip.ratio > 0) return (clip.size * frameW) / clip.ratio / frameH
+  return clip.size
+}
 
 /** Не даёт увести клип совсем за пределы разумного. */
 export function clampPlace(patch: Partial<ComposeClip>): Partial<ComposeClip> {
@@ -281,6 +299,10 @@ interface State extends Saved {
   setTrackLevel: (id: string, level: number) => void
   /** Переносит клипы на соседние дорожки: ``delta`` — на сколько вниз. */
   shiftTracks: (ids: string[], delta: number) => void
+  /** Разводит клипы, если после переноса где-то сошлись больше двух. */
+  settleOverlaps: (ids: string[]) => void
+  /** Укорачивает растянутый клип, если он накрыл чужой переход. */
+  trimOverlaps: (id: string) => void
   groupClips: (ids: string[]) => void
   ungroupClips: (ids: string[]) => void
   clearAll: () => void
@@ -347,6 +369,7 @@ function normalize(input: unknown): Saved {
         y: clip.y ?? 0.5,
         color: clip.color ?? '#000000',
         sizeY: clip.sizeY ?? 0,
+        ratio: clip.ratio ?? 0,
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
@@ -451,6 +474,61 @@ function syncLinked(tracks: ComposeTrack[]): ComposeTrack[] {
 /** Раскладка после любой правки: расталкивание плюс связки. */
 function settle(tracks: ComposeTrack[]): ComposeTrack[] {
   return syncLinked(tracks)
+}
+
+/**
+ * Куда сдвинуть клип, чтобы он не лёг поверх чужого перехода.
+ *
+ * Занятыми считаются только те куски времени, где **уже** лежат два клипа:
+ * один сосед — это переход, и наезжать на него можно. Ищем ближайшее место
+ * слева или справа, чтобы клип уехал как можно меньше.
+ */
+function escapeCrowd(clip: ComposeClip, others: ComposeClip[]): number {
+  const busy: { from: number; to: number }[] = []
+  for (let i = 0; i < others.length; i++) {
+    for (let j = i + 1; j < others.length; j++) {
+      const from = Math.max(others[i].start, others[j].start)
+      const to = Math.min(
+        others[i].start + others[i].duration,
+        others[j].start + others[j].duration,
+      )
+      if (to - from > 1e-6) busy.push({ from, to })
+    }
+  }
+  const fits = (start: number) =>
+    !busy.some((zone) => start < zone.to - 1e-6 && start + clip.duration > zone.from + 1e-6)
+
+  if (fits(clip.start)) return 0
+
+  let best: number | null = null
+  for (const zone of busy) {
+    for (const start of [zone.to, zone.from - clip.duration]) {
+      if (start < 0 || !fits(start)) continue
+      const delta = start - clip.start
+      if (best === null || Math.abs(delta) < Math.abs(best)) best = delta
+    }
+  }
+  return best ?? 0
+}
+
+/** Первый кусок времени под клипом, где уже лежат двое. */
+function crowdedUnder(
+  clip: ComposeClip,
+  others: ComposeClip[],
+): { from: number; to: number } | null {
+  const end = clip.start + clip.duration
+  for (let i = 0; i < others.length; i++) {
+    for (let j = i + 1; j < others.length; j++) {
+      const from = Math.max(others[i].start, others[j].start, clip.start)
+      const to = Math.min(
+        others[i].start + others[i].duration,
+        others[j].start + others[j].duration,
+        end,
+      )
+      if (to - from > 1e-6) return { from, to }
+    }
+  }
+  return null
 }
 
 /** Дополняет выбор соседями по группе. */
@@ -660,6 +738,7 @@ export const useCompose = create<State>((set, get) => ({
         zoom: 1,
         size: 1,
         sizeY: 0,
+        ratio: 0,
         x: 0.5,
         y: 0.5,
       },
@@ -897,6 +976,62 @@ export const useCompose = create<State>((set, get) => ({
       ),
     }))
     save(get())
+  },
+
+  /**
+   * Не даёт трём клипам сойтись в одной точке дорожки.
+   *
+   * Наложение двух — это переход: один сменяет другой. Третий поверх перехода
+   * не значит ничего: непонятно, что должно быть видно, и выглядит это
+   * случайной кашей.
+   *
+   * Проверяем только в конце перетаскивания, а не на каждом движении мыши:
+   * иначе клип упирался бы в чужой переход и не мог бы через него
+   * перебраться. Не поместился — отодвигаем к ближайшему месту, где всё в
+   * порядке, а не возвращаем откуда взяли.
+   */
+  settleOverlaps(ids) {
+    if (!ids.length) return
+    const state = get()
+    let shift = 0
+    for (const track of state.tracks) {
+      for (const clip of track.clips) {
+        if (!ids.includes(clip.id)) continue
+        const others = track.clips.filter((item) => item.id !== clip.id)
+        const delta = escapeCrowd(clip, others)
+        if (Math.abs(delta) > Math.abs(shift)) shift = delta
+      }
+    }
+    if (Math.abs(shift) > 1e-6) get().moveClips(ids, shift)
+  },
+
+  /**
+   * Укорачивает клип, если, растягивая, его дотянули до чужого перехода.
+   *
+   * Правило то же: трое в одной точке — это каша. Растягивать можно до чужого
+   * перехода, но не поверх него.
+   */
+  trimOverlaps(id) {
+    const state = get()
+    for (const track of state.tracks) {
+      const clip = track.clips.find((item) => item.id === id)
+      if (!clip) continue
+      const zone = crowdedUnder(clip, track.clips.filter((item) => item.id !== id))
+      if (!zone) return
+      const end = clip.start + clip.duration
+      if (clip.start <= zone.from) {
+        state.resizeClip(id, clip.start, zone.from - clip.start, clip.sourceIn)
+      } else {
+        const shift = zone.to - clip.start
+        state.resizeClip(
+          id,
+          zone.to,
+          end - zone.to,
+          clip.kind === 'image' ? 0 : Math.max(0, clip.sourceIn + shift),
+        )
+      }
+      return
+    }
   },
 
   /**

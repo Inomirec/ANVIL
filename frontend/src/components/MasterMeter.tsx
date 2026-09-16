@@ -60,7 +60,6 @@ export function MasterMeter({
   width,
   onWidth,
   loudnorm,
-  onLoudnorm,
 }: {
   /** Текущий уровень по каналам, дБ. */
   levels: MeterLevels
@@ -74,7 +73,6 @@ export function MasterMeter({
   onWidth: (value: number) => void
   /** Включено ли выравнивание громкости — его видно прямо на шкале. */
   loudnorm: boolean
-  onLoudnorm: (value: boolean) => void
 }) {
   const [peaks, setPeaks] = useState<MeterLevels>({ left: FLOOR, right: FLOOR })
   const peakAt = useRef<{ left: number; right: number }>({ left: 0, right: 0 })
@@ -121,21 +119,50 @@ export function MasterMeter({
     }
   }, [onWidth])
 
+  /**
+   * Фейдер громкости монтажа.
+   *
+   * При включённом выравнивании он заперт: выравнивание всё равно приведёт
+   * готовый файл к своему уровню, и накрученная до него громкость просто
+   * пропадёт. Две настройки, спорящие друг с другом, хуже одной.
+   */
   const fader = (
-    <input
-      type="range"
-      min={MIN_DB}
-      max={MAX_DB}
-      step={0.5}
-      value={gainToDb(master)}
-      onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
-      // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
-      // а понять потом, каким он был, — нет.
-      onDoubleClick={() => onMaster(1)}
-      title={`Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
-Двойное нажатие вернёт 0 дБ`}
-      className="master-fader"
-    />
+    <div className="relative flex">
+      <input
+        type="range"
+        min={MIN_DB}
+        max={MAX_DB}
+        step={0.5}
+        value={loudnorm ? 0 : gainToDb(master)}
+        disabled={loudnorm}
+        onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
+        // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
+        // а понять потом, каким он был, — нет.
+        onDoubleClick={() => onMaster(1)}
+        title={
+          loudnorm
+            ? 'Громкость монтажа заперта: её задаёт выравнивание звука'
+            : `Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
+Двойное нажатие вернёт 0 дБ`
+        }
+        className="master-fader"
+      />
+      {/* Подпись громкости — внутри шины, как и деления шкалы: вынесенная
+          вниз, она была шире колонки и раздвигала всё окно. */}
+      {!loudnorm && (
+        <span
+          className={`pointer-events-none absolute left-0 w-full bg-black/55 text-center font-mono text-[7.5px] leading-[9px] tabular-nums ${
+            master > 1 ? 'text-warn' : 'text-white/75'
+          }`}
+          style={{
+            top: `${(1 - (gainToDb(master) - MIN_DB) / (MAX_DB - MIN_DB)) * 100}%`,
+            transform: 'translateY(-50%)',
+          }}
+        >
+          {shortLabel(master)}
+        </span>
+      )}
+    </div>
   )
 
   const shown = width >= HIDDEN_BELOW
@@ -195,38 +222,6 @@ export function MasterMeter({
             )}
           </div>
 
-          {/* Подпись держим внутри ширины шины: длинная строка вроде
-              «+10,5 дБ» раздвигала колонку, и всё окно ехало. */}
-          <span
-            className={`mt-1 w-full overflow-hidden text-center font-mono text-[9px] leading-tight tabular-nums ${
-              master > 1 ? 'text-warn' : 'text-ink-faint'
-            }`}
-            title={`Громкость монтажа ${volumeLabel(master)}`}
-          >
-            {shortLabel(master)}
-          </span>
-
-          {/* Выравнивание: по нему сразу видно, включено ли оно и к чему оно
-              тянет звук. Без этого человек ставил галочку и не понимал,
-              случилось ли что-нибудь. */}
-          <button
-            type="button"
-            onClick={() => onLoudnorm(!loudnorm)}
-            title={
-              loudnorm
-                ? `Выравнивание включено: программа подтянет громкость готового файла к отметке ${TARGET_DB} дБ — тихие места станут громче, громкие тише.
-Нажмите, чтобы выключить`
-                : `Выровнять звук: громкость готового файла будет подтянута к отметке ${TARGET_DB} дБ, как на радио.
-Нажмите, чтобы включить`
-            }
-            className={`mt-1 w-full rounded px-0.5 py-[1px] text-center text-[8.5px] font-semibold uppercase tracking-wide transition-colors ${
-              loudnorm
-                ? 'bg-accent/25 text-accent-soft'
-                : 'text-ink-faint/70 hover:bg-surface-3 hover:text-ink-dim'
-            }`}
-          >
-            выровнять
-          </button>
         </>
       )}
     </div>
