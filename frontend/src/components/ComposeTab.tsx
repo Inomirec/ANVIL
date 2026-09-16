@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Film, FolderOpen, Play, RotateCw, Trash2 } from 'lucide-react'
+import { Film, FolderOpen, Loader2, Pause, Play, RotateCw, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, timecode } from '../lib/format'
 import {
@@ -12,6 +12,8 @@ import {
 import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
 import { FolderPicker } from './FolderPicker'
+import { MasterMeter } from './MasterMeter'
+import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Empty, Segmented, Select } from './ui'
 
 /**
@@ -57,6 +59,8 @@ export function ComposeTab() {
     () => localStorage.getItem('sgh.composeOut') || null,
   )
   const [pickingFolder, setPickingFolder] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const player = useComposePlayer(videoRef)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
   const [adding, setAdding] = useState(false)
 
@@ -72,8 +76,8 @@ export function ComposeTab() {
   // запросу на каждый пиксель её пути.
   const pending = useRef<AbortController | null>(null)
   useEffect(() => {
-    if (!clips) {
-      setFrameUrl(null)
+    if (!clips || player.playing) {
+      if (!clips) setFrameUrl(null)
       return
     }
     const timer = setTimeout(() => {
@@ -103,7 +107,7 @@ export function ComposeTab() {
         })
     }, 80)
     return () => clearTimeout(timer)
-  }, [playhead, clips, tracks])
+  }, [playhead, clips, tracks, player.playing])
 
   // Картинку держим ровно до следующей: иначе браузер копит их в памяти.
   useEffect(() => () => {
@@ -199,43 +203,100 @@ export function ComposeTab() {
             Фон не чёрный, и у кадра есть рамка: иначе чёрные поля вокруг
             вертикального видео сливались с фоном, и понять, какой формы
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
-        <div
-          className="flex min-h-0 flex-1 items-center justify-center bg-surface-2/60 p-5"
-          onWheel={(event) => {
-            // Колесо над кадром приближает выбранные картинки и видео — как в
-            // монтажных программах. Берём все выбранные, а не строго один:
-            // после группировки или рамки их обычно несколько, и требовать
-            // ровно одного значило бы «колесо иногда не работает».
-            const state = useCompose.getState()
-            const picked = state.tracks
-              .flatMap((track) => track.clips)
-              .filter((clip) => state.selected.includes(clip.id) && clip.kind !== 'audio')
-            if (!picked.length) return
-            event.preventDefault()
-            for (const clip of picked) {
-              const next = Math.min(8, Math.max(1, clip.zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)))
-              state.updateClip(clip.id, { zoom: Number(next.toFixed(3)) })
-            }
-          }}
-        >
-          {!clips ? (
-            <Empty
-              icon={<Film size={44} />}
-              title="Перетащите файлы из медиатеки"
-              hint="Картинки, видео и звук ложатся на дорожку внизу. Картинку можно растянуть за край — столько она и будет висеть на экране. Клип режется клавишей S под иглой, удаляется — Delete."
-            />
-          ) : frameError ? (
-            <p className="max-w-md text-center text-[12px] leading-snug text-danger">{frameError}</p>
-          ) : (
-            // Рамка показывает границы кадра проекта: по ней видно и форму
-            // (квадрат, вертикаль), и то, сколько места занимают чёрные поля.
-            <div
-              className="relative max-h-full max-w-full overflow-hidden rounded-lg bg-black ring-1 ring-line shadow-xl"
-              style={{ aspectRatio: `${width} / ${height}`, height: '100%' }}
-            >
-              {frameUrl && <img src={frameUrl} alt="" className="h-full w-full object-contain" />}
-            </div>
-          )}
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div
+            className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-surface-2/60 p-4"
+            onWheel={(event) => {
+              // Колесо над кадром приближает выбранные картинки и видео — как
+              // в монтажных программах. Берём все выбранные, а не строго один:
+              // после группировки или рамки их обычно несколько, и требовать
+              // ровно одного значило бы «колесо иногда не работает».
+              const state = useCompose.getState()
+              const picked = state.tracks
+                .flatMap((track) => track.clips)
+                .filter((clip) => state.selected.includes(clip.id) && clip.kind !== 'audio')
+              if (!picked.length) return
+              event.preventDefault()
+              for (const clip of picked) {
+                const next = Math.min(8, Math.max(1, clip.zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)))
+                state.updateClip(clip.id, { zoom: Number(next.toFixed(3)) })
+              }
+            }}
+          >
+            {!clips ? (
+              <Empty
+                icon={<Film size={44} />}
+                title="Перетащите файлы из медиатеки"
+                hint="Картинки, видео и звук ложатся на дорожки внизу. Картинку можно растянуть за край — столько она и будет висеть на экране. Клип режется клавишей S под иглой, удаляется — Delete."
+              />
+            ) : (
+              <div
+                className="relative overflow-hidden rounded-lg bg-black shadow-xl ring-1 ring-line"
+                style={{
+                  aspectRatio: `${width} / ${height}`,
+                  // Кадр вписывается в свободное место и не растягивает окно:
+                  // с одной только высотой широкий проект выдавливал правую
+                  // панель за край экрана.
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  height: '100%',
+                  width: 'auto',
+                }}
+              >
+                {/* Пока смотрим — играет собранный кусок, иначе показываем
+                    кадр под иглой. Снаружи разницы нет: то же окно. */}
+                <video
+                  ref={videoRef}
+                  className={`h-full w-full object-contain ${player.playing ? '' : 'hidden'}`}
+                  onEnded={() => void player.onEnded()}
+                  onError={() => player.stop()}
+                />
+                {!player.playing && frameUrl && (
+                  <img src={frameUrl} alt="" className="h-full w-full object-contain" />
+                )}
+                {!player.playing && frameError && (
+                  <p className="absolute inset-0 flex items-center justify-center p-4 text-center text-[12px] leading-snug text-danger">
+                    {frameError}
+                  </p>
+                )}
+
+                {/* Кнопка просмотра поверх кадра — как в обычном плеере. */}
+                <button
+                  type="button"
+                  onClick={() => (player.playing ? player.stop() : void player.start())}
+                  className="group absolute inset-0 flex items-center justify-center"
+                  title={player.playing ? 'Остановить просмотр' : 'Посмотреть монтаж с иглы'}
+                >
+                  <span
+                    className={`flex h-14 w-14 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur transition-opacity ${
+                      player.playing ? 'opacity-0 group-hover:opacity-100' : 'opacity-85'
+                    }`}
+                  >
+                    {player.preparing ? (
+                      <Loader2 size={22} className="animate-spin" />
+                    ) : player.playing ? (
+                      <Pause size={22} />
+                    ) : (
+                      <Play size={22} className="ml-0.5" />
+                    )}
+                  </span>
+                </button>
+
+                {player.error && (
+                  <p className="absolute inset-x-0 bottom-0 bg-danger/85 px-3 py-1.5 text-center text-[11px] text-white">
+                    {player.error}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <MasterMeter
+            levels={player.levels}
+            volume={player.volume}
+            onVolume={player.setVolume}
+            active={player.playing}
+          />
         </div>
 
         {/* Таймлайн */}

@@ -86,16 +86,13 @@ def _parse_range(header: str, size: int) -> tuple[int, int] | None:
     return start, min(end, size - 1)
 
 
-@router.get("/raw")
-async def raw(path: str, request: Request) -> Response:
-    """Стримит файл целиком или запрошенным диапазоном."""
-    try:
-        target = fsutil.safe_path(path)
-    except (PermissionError, FileNotFoundError, ValueError) as exc:
-        raise HTTPException(404, str(exc)) from exc
-    if not target.is_file():
-        raise HTTPException(404, "Это не файл")
+def ranged_file(target: Path, request: Request) -> Response:
+    """Отдаёт файл целиком или запрошенным куском.
 
+    Вынесено отдельно, потому что этим пользуется не только медиатека: тем же
+    способом отдаются черновики просмотра в монтаже. Без ответов на запрос
+    диапазона плеер не умеет перематывать — он просто блокирует ползунок.
+    """
     size = target.stat().st_size
     media_type = fsutil.mime_for(target)
     common = {
@@ -129,6 +126,18 @@ async def raw(path: str, request: Request) -> Response:
         media_type=media_type,
         headers={"Content-Length": str(size), **common},
     )
+
+
+@router.get("/raw")
+async def raw(path: str, request: Request) -> Response:
+    """Стримит файл медиатеки целиком или запрошенным диапазоном."""
+    try:
+        target = fsutil.safe_path(path)
+    except (PermissionError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if not target.is_file():
+        raise HTTPException(404, "Это не файл")
+    return ranged_file(target, request)
 
 
 @router.head("/raw")

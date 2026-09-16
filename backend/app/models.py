@@ -336,6 +336,22 @@ class ComposeFrameRequest(ComposeModel):
     preview_width: int = Field(default=960, ge=160, le=3840)
 
 
+class ComposeDraftRequest(ComposeModel):
+    """Черновик куска монтажа — чтобы посмотреть, как оно играет.
+
+    Собирается быстрым кодеком и в мелком кадре: живёт этот файл секунды и
+    нужен только для просмотра, а вес и качество здесь не важны.
+    """
+
+    project: ComposeProject
+    #: С какой секунды монтажа начинать.
+    at: float = Field(default=0.0, ge=0)
+    #: Сколько секунд собрать за раз.
+    span: float = Field(default=12.0, gt=0, le=60)
+    #: Высота кадра черновика. Меньше — быстрее собирается.
+    height: int = Field(default=360, ge=144, le=1080)
+
+
 class ComposeBuildRequest(ComposeModel):
     """Сборка монтажа в готовый файл — обычной задачей в очереди."""
 

@@ -148,6 +148,9 @@ export const api = {
     return response.blob()
   },
   composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
+  /** Кусок монтажа для просмотра: собирается быстрым кодеком и кэшируется. */
+  composeDraft: (payload: unknown) =>
+    post<{ url: string; at: number; span: number; size: number }>('/api/compose/draft', payload),
 
   exportPreview: (payload: unknown) =>
     post<{ summary: string; command: string | null; output?: string }>('/api/export/preview', payload),
