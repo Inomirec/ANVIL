@@ -10,7 +10,7 @@ import { create } from 'zustand'
  * Время везде в секундах, положение клипа — от начала таймлайна.
  */
 
-export type ClipKind = 'video' | 'image' | 'audio'
+export type ClipKind = 'video' | 'image' | 'audio' | 'color'
 
 export interface ComposeClip {
   id: string
@@ -47,6 +47,12 @@ export interface ComposeClip {
   opacity: number
   /** Приближение внутри кадра: 1 — вписано целиком. */
   zoom: number
+  /**
+   * Цвет сплошной заливки — только у клипов вида ``color``. Файла у такого
+   * клипа нет: картинку рисует сам ffmpeg. Нужен, чтобы подложить фон под
+   * картинки с полями или сделать заставку.
+   */
+  color?: string
   /**
    * Размер клипа в кадре: 1 — вписан целиком, 0.5 — вчетверо меньше, 2 —
    * вдвое крупнее кадра. Так делают «картинку в картинке» и наезды.
@@ -253,6 +259,8 @@ interface State extends Saved {
   clearMarks: () => void
 
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
+  /** Кладёт сплошной фон под иглу — файла для этого не нужно. */
+  addColor: (color: string, trackId?: string) => string
   addPair: (video: Omit<ComposeClip, 'id'>, trackId?: string) => string
   updateClip: (id: string, patch: Partial<ComposeClip>) => void
   moveClips: (ids: string[], shift: number) => void
@@ -329,6 +337,7 @@ function normalize(input: unknown): Saved {
         size: clip.size ?? 1,
         x: clip.x ?? 0.5,
         y: clip.y ?? 0.5,
+        color: clip.color ?? '#000000',
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
@@ -609,6 +618,43 @@ export const useCompose = create<State>((set, get) => ({
     })
     save(get())
     return id
+  },
+
+  /**
+   * Кладёт сплошной фон — от него не нужно ни файла, ни медиатеки.
+   *
+   * Встаёт под иглой на нижнюю видеодорожку: фон затем и нужен, чтобы лежать
+   * под остальным. Длина — как у картинки по умолчанию, дальше её тянут.
+   */
+  addColor(color, trackId) {
+    const state = get()
+    const video = state.tracks.filter((track) => track.kind === 'video')
+    const target =
+      state.tracks.find((track) => track.id === trackId && track.kind === 'video') ??
+      video[video.length - 1]
+    return get().addClip(
+      {
+        source: '',
+        name: 'Фон',
+        kind: 'color',
+        color,
+        start: Math.round(state.playhead * 100) / 100,
+        duration: DEFAULT_IMAGE_SECONDS,
+        sourceIn: 0,
+        sourceDuration: 0,
+        hasAudio: false,
+        volume: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+        muted: true,
+        opacity: 1,
+        zoom: 1,
+        size: 1,
+        x: 0.5,
+        y: 0.5,
+      },
+      target?.id,
+    )
   },
 
   /**

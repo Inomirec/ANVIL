@@ -324,7 +324,13 @@ def build_segment(
         if still and clip.kind == "audio":
             continue
 
-        if clip.kind == "image":
+        if clip.kind == "color":
+            # Сплошной фон рисует сам ffmpeg — файла у такого клипа нет.
+            inputs += [
+                "-f", "lavfi", "-t", f"{take:.3f}",
+                "-i", f"color=c={clip.color}:s={width}x{height}:r={fps}",
+            ]
+        elif clip.kind == "image":
             # Картинка — один кадр; без -loop она исчезнет сразу же.
             inputs += ["-loop", "1", "-t", f"{take:.3f}", "-i", clip.source]
         else:
@@ -425,6 +431,10 @@ async def prepare(project: ComposeProject) -> ComposeProject:
     missing: list[str] = []
     for track in project.tracks:
         for clip in track.clips:
+            # У сплошного фона файла нет — и проверять нечего.
+            if clip.kind == "color":
+                clip.has_audio = False
+                continue
             try:
                 path = fsutil.safe_path(clip.source)
             except (PermissionError, FileNotFoundError, ValueError):

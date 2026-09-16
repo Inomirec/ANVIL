@@ -241,7 +241,7 @@ class RenameRequest(BaseModel):
 
 # --- монтаж -------------------------------------------------------------
 
-ClipKind = Literal["video", "image", "audio"]
+ClipKind = Literal["video", "image", "audio", "color"]
 
 
 class ComposeModel(BaseModel):
@@ -292,6 +292,9 @@ class ComposeClip(ComposeModel):
     #: Приближение внутри кадра: 1 — вписать целиком, 2 — вдвое крупнее с
     #: обрезкой по краям.
     zoom: float = Field(default=1.0, ge=1.0, le=8.0)
+    #: Цвет сплошной заливки — только у клипов вида ``color``. Файла у такого
+    #: клипа нет, картинку рисует сам ffmpeg.
+    color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
     #: Размер клипа в кадре: 1 — вписан в кадр целиком, 0.5 — вчетверо меньше,
     #: 2 — вдвое крупнее кадра (края уйдут за границы). Так делают «картинку в
     #: картинке» и наезды.

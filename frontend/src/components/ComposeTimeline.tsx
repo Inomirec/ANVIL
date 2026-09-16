@@ -9,6 +9,7 @@ import {
   Link2,
   Loader2,
   Music2 as MusicTrack,
+  PaintBucket,
   Music2,
   Pause,
   Play as PlayIcon,
@@ -126,6 +127,7 @@ export function ComposeTimeline({
   const select = useCompose((state) => state.select)
   const splitAtPlayhead = useCompose((state) => state.splitAtPlayhead)
   const removeClips = useCompose((state) => state.removeClips)
+  const addColor = useCompose((state) => state.addColor)
   const addTrack = useCompose((state) => state.addTrack)
   const removeTrack = useCompose((state) => state.removeTrack)
   const renameTrack = useCompose((state) => state.renameTrack)
@@ -471,6 +473,12 @@ export function ComposeTimeline({
           disabled={tracks.length >= MAX_TRACKS}
         >
           <MusicTrack size={14} />
+        </IconButton>
+        <IconButton
+          title="Положить сплошной фон под иглу — под картинки с полями или под заставку"
+          onClick={() => addColor('#101018')}
+        >
+          <PaintBucket size={14} />
         </IconButton>
 
         <span className="mx-1 h-4 w-px bg-line-soft" />
@@ -1078,6 +1086,27 @@ function ClipMenu({
         clip.kind === 'audio' ? clip.volume === 1 : clip.opacity === 1,
       )}
 
+      {/* У фона свой цвет — менять его больше негде. */}
+      {clip.kind === 'color' && (
+        <>
+          <div className="my-1 h-px bg-line-soft" />
+          <label className="flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim">
+            Цвет фона
+            <input
+              type="color"
+              value={clip.color ?? '#000000'}
+              onMouseDown={(event) => event.stopPropagation()}
+              onChange={(event) => {
+                for (const id of pick(state, clipId)) {
+                  state.updateClip(id, { color: event.target.value })
+                }
+              }}
+              className="h-5 w-10 cursor-pointer rounded border border-line bg-transparent"
+            />
+          </label>
+        </>
+      )}
+
       {/* Размер и место в кадре задаются рамкой прямо в окне просмотра —
           выбранный клип можно взять и перетащить. Здесь остаётся только
           быстрый возврат: наигравшись, человек хочет вернуть как было. */}
@@ -1335,6 +1364,7 @@ function ClipBox({
   onMenu: (event: React.MouseEvent) => void
 }) {
   const sound = clip.kind === 'audio'
+  const solid = clip.kind === 'color'
   // Сжатая дорожка: подписи и уголки в неё не помещаются.
   const short = height < TRACK_HEIGHT
   // У звука линия показывает громкость, у картинки — насколько она видна.
@@ -1375,7 +1405,10 @@ function ClipBox({
         )
       }}
     >
-      {sound ? (
+      {solid ? (
+        // У фона нет ни кадров, ни файла — показываем его собственный цвет.
+        <div className="absolute inset-0" style={{ background: clip.color }} />
+      ) : sound ? (
         <>
           <div className="absolute inset-0 bg-ok/12" />
           {peaks && <WaveFill clip={clip} peaks={peaks} />}
