@@ -1078,86 +1078,35 @@ function ClipMenu({
         clip.kind === 'audio' ? clip.volume === 1 : clip.opacity === 1,
       )}
 
-      {/* Размер и место в кадре — только у картинки: у звука кадра нет.
-          Уменьшенный клип ложится поверх нижней дорожки — так делают
-          «картинку в картинке». */}
+      {/* Размер и место в кадре задаются рамкой прямо в окне просмотра —
+          выбранный клип можно взять и перетащить. Здесь остаётся только
+          быстрый возврат: наигравшись, человек хочет вернуть как было. */}
       {clip.kind !== 'audio' && (
         <>
           <div className="my-1 h-px bg-line-soft" />
-          <span className="block px-2.5 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-ink-faint">
-            Размер в кадре
-          </span>
-          <div className="flex gap-1 px-1.5 pb-1">
-            {SIZES.map((value) => (
-              <button
-                key={value}
-                type="button"
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={() => {
-                  for (const id of pick(state, clipId)) state.updateClip(id, { size: value })
-                  onClose()
-                }}
-                className={`flex-1 rounded-md py-1 text-[11px] transition-colors ${
-                  Math.abs(clip.size - value) < 0.01
-                    ? 'bg-accent/20 text-accent-soft'
-                    : 'text-ink-dim hover:bg-surface-3 hover:text-ink'
-                }`}
-              >
-                {Math.round(value * 100)}%
-              </button>
-            ))}
-          </div>
-
-          <span className="block px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
-            Где стоит
-          </span>
-          <div className="grid grid-cols-3 gap-1 px-1.5 pb-1">
-            {CORNERS.map((corner) => (
-              <button
-                key={corner.label}
-                type="button"
-                disabled={clip.size >= 1}
-                title={clip.size >= 1 ? 'Сначала уменьшите клип' : corner.label}
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={() => {
-                  for (const id of pick(state, clipId)) {
-                    state.updateClip(id, { x: corner.x, y: corner.y })
-                  }
-                  onClose()
-                }}
-                className={`h-6 rounded-md text-[10px] transition-colors disabled:opacity-30 ${
-                  clip.size < 1 &&
-                  Math.abs(clip.x - corner.x) < 0.01 &&
-                  Math.abs(clip.y - corner.y) < 0.01
-                    ? 'bg-accent/20 text-accent-soft'
-                    : 'text-ink-faint enabled:hover:bg-surface-3 enabled:hover:text-ink'
-                }`}
-              >
-                {corner.mark}
-              </button>
-            ))}
-          </div>
+          {item(
+            'Вернуть в кадр целиком',
+            '',
+            () => {
+              for (const id of pick(state, clipId)) {
+                state.updateClip(id, { size: 1, x: 0.5, y: 0.5 })
+              }
+            },
+            clip.size === 1 && clip.x === 0.5 && clip.y === 0.5,
+          )}
+          {item(
+            'Поставить посередине',
+            '',
+            () => {
+              for (const id of pick(state, clipId)) state.updateClip(id, { x: 0.5, y: 0.5 })
+            },
+            clip.x === 0.5 && clip.y === 0.5,
+          )}
         </>
       )}
     </div>
   )
 }
-
-/** Доли кадра, которые есть смысл предлагать готовыми. */
-const SIZES = [1, 0.5, 0.33, 0.25]
-
-/** Девять мест в кадре: углы, середины сторон и центр. */
-const CORNERS = [
-  { label: 'Левый верхний угол', mark: '↖', x: 0, y: 0 },
-  { label: 'Сверху посередине', mark: '↑', x: 0.5, y: 0 },
-  { label: 'Правый верхний угол', mark: '↗', x: 1, y: 0 },
-  { label: 'Слева посередине', mark: '←', x: 0, y: 0.5 },
-  { label: 'В середине кадра', mark: '•', x: 0.5, y: 0.5 },
-  { label: 'Справа посередине', mark: '→', x: 1, y: 0.5 },
-  { label: 'Левый нижний угол', mark: '↙', x: 0, y: 1 },
-  { label: 'Снизу посередине', mark: '↓', x: 0.5, y: 1 },
-  { label: 'Правый нижний угол', mark: '↘', x: 1, y: 1 },
-]
 
 /**
  * К каким клипам относится правка из меню.

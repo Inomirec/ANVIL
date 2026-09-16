@@ -28,6 +28,7 @@ import {
   TOOLBAR_HEIGHT,
   TRACK_HEIGHT,
 } from './ComposeTimeline'
+import { ComposeFrameBox } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
@@ -304,6 +305,16 @@ export function ComposeTab() {
       tracks.length * (compact ? COMPACT_HEIGHT : TRACK_HEIGHT),
   )
 
+  // Клип, который сейчас двигают по кадру: рамка появляется, когда выбран
+  // ровно один клип с картинкой. На нескольких сразу рамка врала бы —
+  // размер и место у каждого свои.
+  const placing =
+    selected.length === 1
+      ? tracks
+          .flatMap((track) => track.clips)
+          .find((clip) => clip.id === selected[0] && clip.kind !== 'audio')
+      : undefined
+
   const videoPresets = presets.video ?? []
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
   // папка первого клипа плюс подпапка из настроек. Показываем её целиком:
@@ -353,7 +364,7 @@ export function ComposeTab() {
               <div className="mb-2 flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                 <div className="mr-auto flex items-center gap-1">
                   <IconButton
-                    title="Отдалить"
+                    title="Отдалить: показать картинку целиком"
                     onClick={() => changeZoom(1 / 1.1)}
                     disabled={!zoomed.length || zoom <= 1}
                   >
@@ -365,8 +376,8 @@ export function ComposeTab() {
                     disabled={zoom <= 1}
                     title={
                       zoom > 1
-                        ? 'Нажмите, чтобы вернуть обычный размер'
-                        : 'Приближение: колесо над кадром или эти кнопки'
+                        ? 'Приближение внутри картинки — нажмите, чтобы вернуть как было'
+                        : 'Приближение внутри картинки: обрезает её края. Колесо над кадром или эти кнопки. Размер клипа в кадре меняется рамкой на выбранном клипе'
                     }
                     className={`inline-flex h-8 items-center gap-1 rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
                       zoom > 1
@@ -378,7 +389,7 @@ export function ComposeTab() {
                     ×{zoom.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}
                   </button>
                   <IconButton
-                    title="Приблизить"
+                    title="Приблизить: обрезать края картинки"
                     onClick={() => changeZoom(1.1)}
                     disabled={!zoomed.length || zoom >= 8}
                   >
@@ -461,6 +472,11 @@ export function ComposeTab() {
                     {frameError}
                   </p>
                 )}
+
+                {/* Рамка выбранного клипа: за неё его двигают и меняют
+                    размер прямо в кадре. Пока клип не выбран, рамки нет —
+                    иначе она мешала бы просто смотреть. */}
+                {!player.playing && placing && <ComposeFrameBox clip={placing} />}
 
                 {/* Сетка по третям: по ней видно, что попадает в середину
                     кадра, а что уедет к краю. */}

@@ -48,14 +48,13 @@ export interface ComposeClip {
   /** Приближение внутри кадра: 1 — вписано целиком. */
   zoom: number
   /**
-   * Какую долю кадра занимает клип: 1 — весь кадр, 0.5 — вчетверо меньшая
-   * картинка поверх нижнего слоя. Так делают «картинку в картинке».
+   * Размер клипа в кадре: 1 — вписан целиком, 0.5 — вчетверо меньше, 2 —
+   * вдвое крупнее кадра. Так делают «картинку в картинке» и наезды.
    */
   size: number
   /**
-   * Где стоит уменьшенный клип: 0 — вплотную к левому (верхнему) краю, 1 — к
-   * правому (нижнему), 0.5 — посередине. У клипа во весь кадр не значит
-   * ничего: двигать нечего.
+   * Где стоит середина клипа, в долях кадра: 0.5 — посередине. Значения за
+   * пределами 0..1 допустимы: клип можно увести за край частично.
    */
   x: number
   y: number
@@ -100,6 +99,26 @@ export function trackNumber(tracks: ComposeTrack[], id: string): number {
 
 /** Больше дорожек человеку не нужно, а таймлайн перестаёт помещаться. */
 export const MAX_TRACKS = 6
+
+/** Пределы размера клипа в кадре и его места. */
+export const MIN_SIZE = 0.05
+export const MAX_SIZE = 4
+export const MIN_PLACE = -1
+export const MAX_PLACE = 2
+
+/** Не даёт увести клип совсем за пределы разумного. */
+export function clampPlace(patch: Partial<ComposeClip>): Partial<ComposeClip> {
+  const fixed = { ...patch }
+  if (fixed.size !== undefined) {
+    fixed.size = Math.min(MAX_SIZE, Math.max(MIN_SIZE, fixed.size))
+  }
+  for (const side of ['x', 'y'] as const) {
+    if (fixed[side] !== undefined) {
+      fixed[side] = Math.min(MAX_PLACE, Math.max(MIN_PLACE, fixed[side] as number))
+    }
+  }
+  return fixed
+}
 
 /**
  * Громкость считается в децибелах, а не в процентах.
