@@ -35,6 +35,14 @@ DRAFT_CODEC = [
     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p",
 ]
 
+#: Затухание короче этого не пишем в команду. Клипы, поставленные встык,
+#: пересекаются на миллионные доли секунды — обычная погрешность дробных
+#: чисел. На слух такого затухания нет, а ffmpeg от него падал: очень малое
+#: число записывается в научном виде (``1.77636e-15``), а он такую запись
+#: длительности не понимает. Поэтому все длительности ниже выводятся как
+#: обычные дроби (``.3f``), а совсем короткие отбрасываются.
+MIN_FADE = 0.01
+
 
 def apply_crossfades(project: ComposeProject) -> None:
     """Делает перетекание там, где клипы наложились друг на друга.
@@ -52,7 +60,7 @@ def apply_crossfades(project: ComposeProject) -> None:
         clips = sorted(track.clips, key=lambda clip: clip.start)
         for lower, upper in zip(clips, clips[1:]):
             overlap = (lower.start + lower.duration) - upper.start
-            if overlap <= 0:
+            if overlap <= MIN_FADE:
                 continue
             # Перехлёст не может быть длиннее самих клипов.
             span = min(overlap, lower.duration, upper.duration)
@@ -156,15 +164,15 @@ def _video_fade_filters(clip: ComposeClip, at: float, take: float) -> str:
     skip = max(0.0, at - clip.start)
     parts: list[str] = []
 
-    if clip.fade_in > skip:
-        parts.append(f"fade=t=in:st=0:d={clip.fade_in - skip:g}:alpha=1")
+    if clip.fade_in - skip > MIN_FADE:
+        parts.append(f"fade=t=in:st=0:d={clip.fade_in - skip:.3f}:alpha=1")
 
-    if clip.fade_out > 0:
+    if clip.fade_out > MIN_FADE:
         starts = (clip.duration - skip) - clip.fade_out
         if starts < take:
             parts.append(
                 f"fade=t=out:st={max(starts, 0.0):.3f}"
-                f":d={min(clip.fade_out, clip.duration):g}:alpha=1"
+                f":d={min(clip.fade_out, clip.duration):.3f}:alpha=1"
             )
 
     # Полупрозрачный клип — тот же канал прозрачности, только постоянный.
@@ -196,16 +204,16 @@ def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> st
     # Сколько клипа осталось за левым краем окна.
     skip = max(0.0, at - clip.start)
 
-    if clip.fade_in > skip:
-        parts.append(f"afade=t=in:curve=qsin:st=0:d={clip.fade_in - skip:g}")
+    if clip.fade_in - skip > MIN_FADE:
+        parts.append(f"afade=t=in:curve=qsin:st=0:d={clip.fade_in - skip:.3f}")
 
-    if clip.fade_out > 0:
+    if clip.fade_out > MIN_FADE:
         # Начало ухода в координатах читаемого куска.
         starts = (clip.duration - skip) - clip.fade_out
         if starts < take:
             parts.append(
                 f"afade=t=out:curve=qsin:st={max(starts, 0.0):.3f}"
-                f":d={min(clip.fade_out, clip.duration):g}"
+                f":d={min(clip.fade_out, clip.duration):.3f}"
             )
 
     shift = int(offset * 1000)
@@ -224,11 +232,15 @@ def build_segment(
     height: int | None = None,
     still: bool = False,
     codec: list[str] | None = None,
+    progress: bool = False,
 ) -> list[str]:
     """Команда ffmpeg для отрезка монтажа.
 
     ``still`` — нужен один кадр (окно просмотра), ``codec`` — чем кодировать;
-    без него берётся быстрый черновой H.264.
+    без него берётся быстрый черновой H.264. ``progress`` просит ffmpeg
+    рассказывать, сколько уже сделано: без этого полоса готовности у задачи
+    так и стоит на нуле до самого конца. Кадру и черновику он не нужен — их
+    никто не ждёт с полосой.
     """
     span = span if span is not None else max(project.duration - at, 0.0)
     if span <= 0:
@@ -331,6 +343,8 @@ def build_segment(
         # Длину задаём явно: фон её знает, но клипы могут оказаться короче.
         args += ["-t", f"{span:.3f}"]
 
+    if progress:
+        args += ["-progress", "pipe:1", "-nostats"]
     args.append(str(output))
     return args
 

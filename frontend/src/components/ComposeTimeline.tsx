@@ -3,6 +3,7 @@ import {
   FlagTriangleLeft,
   FlagTriangleRight,
   Headphones,
+  Link2,
   Loader2,
   Music2,
   Pause,
@@ -1002,6 +1003,11 @@ function ClipBox({
             >
               {clip.muted || clip.volume <= 0 ? <VolumeX size={11} /> : <Music2 size={11} />}
             </button>
+          )}
+          {clip.groupId && (
+            // Знак группы: клип ходит не один. Без него группы работали, но
+            // глазами их было не отличить от обычных клипов.
+            <Link2 size={11} className="shrink-0 text-accent" />
           )}
           <span className="truncate">{clip.name}</span>
         </span>

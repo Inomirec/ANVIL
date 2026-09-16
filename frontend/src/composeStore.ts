@@ -285,6 +285,20 @@ function settle(tracks: ComposeTrack[]): ComposeTrack[] {
   return syncLinked(tracks)
 }
 
+/** Дополняет выбор соседями по группе. */
+function withGroups(tracks: ComposeTrack[], ids: string[]): string[] {
+  const all = tracks.flatMap((track) => track.clips)
+  const links = new Set(
+    all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.groupId).filter(Boolean),
+  )
+  if (!links.size) return ids
+  const family = new Set(ids)
+  for (const clip of all) {
+    if (clip.groupId && links.has(clip.groupId)) family.add(clip.id)
+  }
+  return [...family]
+}
+
 export const useCompose = create<State>((set, get) => ({
   ...loadSaved(),
   playhead: 0,
@@ -340,7 +354,10 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   select(ids) {
-    set({ selected: ids })
+    // Группа — одно целое: взяв один клип, берём и его соседей. Иначе
+    // выделенным выглядит только ролик, а его звуковая дорожка — нет, хотя
+    // двигаются, режутся и удаляются они вместе.
+    set({ selected: withGroups(get().tracks, ids) })
   },
 
   // --- метки отрезка сборки ---------------------------------------------

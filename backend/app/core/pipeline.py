@@ -355,7 +355,8 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
             codec = encode.video_codec_args(video, encode.effective_crf(video, None))
             codec += encode.audio_codec_args(audio)
             args = compose.build_segment(
-                project, output, at=begin, span=total or None, codec=codec
+                project, output, at=begin, span=total or None, codec=codec,
+                progress=True,
             )
             ctx.log("$ " + encode.to_display_string(args))
             ctx.meta(command=encode.to_display_string(args))

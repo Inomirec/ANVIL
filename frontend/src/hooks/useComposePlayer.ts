@@ -43,6 +43,15 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
 
   const chunk = useRef<Chunk | null>(null)
   const ahead = useRef<Chunk | null>(null)
+  /**
+   * Номер текущего просмотра. Растёт на каждом «играть» и на каждом «стоп»,
+   * и по нему видно, что человек уже передумал: кусок монтажа готовится
+   * секунду-другую, и всё это время ответ может оказаться никому не нужным.
+   * Запоздавший ответ тогда не начинает играть и не жалуется на ошибку —
+   * раньше отменённый просмотр отвечал «Failed to load because no supported
+   * source was found».
+   */
+  const run = useRef(0)
   const height = useRef(START_HEIGHT)
   const alive = useRef(true)
 
@@ -71,7 +80,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
 
   /** Просит у программы кусок монтажа с указанной секунды. */
   const fetchChunk = useCallback(
-    async (at: number): Promise<Chunk | null> => {
+    async (at: number, mine: number): Promise<Chunk | null> => {
       const started = performance.now()
       try {
         const data = await api.composeDraft({
@@ -88,7 +97,8 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
         }
         return { url: data.url, at: data.at, span: data.span }
       } catch (problem) {
-        setError((problem as Error).message)
+        // Об ошибке говорим, только если её ещё ждут.
+        if (mine === run.current) setError((problem as Error).message)
         return null
       }
     },
@@ -103,15 +113,17 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
         ahead.current = null
         return
       }
-      const next = await fetchChunk(at)
+      const next = await fetchChunk(at, run.current)
       if (alive.current) ahead.current = next
     },
     [fetchChunk],
   )
 
   const stop = useCallback(() => {
+    run.current += 1
     setPlaying(false)
     setPreparing(false)
+    setError(null)
     const element = video.current
     if (element) element.pause()
     setLevels({ left: -60, right: -60 })
@@ -120,15 +132,22 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   const start = useCallback(async () => {
     const element = video.current
     if (!element) return
+    const mine = ++run.current
     setError(null)
     setPreparing(true)
     const state = useCompose.getState()
     // Метка начала отрезка задаёт и начало просмотра: смотреть то, что не
     // попадёт в файл, обычно незачем.
-    const at = Math.max(state.playhead, state.renderIn ?? 0)
-    const first = await fetchChunk(at)
+    const begin = state.renderIn ?? 0
+    const finish = state.renderOut ?? state.duration()
+    let at = Math.max(state.playhead, begin)
+    // Игла осталась в самом конце — начинаем сначала, как любой плеер.
+    // Иначе нажатие на «играть» не делало ничего: показывать уже нечего.
+    if (at >= finish - 0.05) at = begin
+    const first = await fetchChunk(at, mine)
     setPreparing(false)
-    if (!first || !alive.current) return
+    // Пока кусок готовился, человек мог нажать «стоп» — тогда молча уходим.
+    if (!first || !alive.current || mine !== run.current) return
 
     chunk.current = first
     ahead.current = null
@@ -136,10 +155,11 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     element.currentTime = 0
     try {
       await element.play()
+      if (mine !== run.current) return
       setPlaying(true)
       void prefetch(first.at + first.span)
     } catch (problem) {
-      setError((problem as Error).message)
+      if (mine === run.current) setError((problem as Error).message)
     }
   }, [fetchChunk, prefetch, video])
 
@@ -147,6 +167,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   const onEnded = useCallback(async () => {
     const element = video.current
     if (!element) return
+    const mine = run.current
     const state = useCompose.getState()
     const current = chunk.current
     let nextAt = current ? current.at + current.span : 0
@@ -166,9 +187,10 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     let next = ahead.current
     if (!next) {
       setPreparing(true)
-      next = await fetchChunk(nextAt)
+      next = await fetchChunk(nextAt, mine)
       setPreparing(false)
     }
+    if (mine !== run.current) return
     if (!next || !alive.current) {
       stop()
       return
