@@ -376,8 +376,8 @@ export function ComposeTab() {
                 Поверх картинки её ставить нельзя — кнопка посреди кадра
                 закрывает собой то, ради чего окно и нужно. */}
             {clips > 0 && (
-              <div className="mb-2 flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                <div className="mr-auto flex items-center gap-1">
+              <div className="mb-2 flex shrink-0 flex-wrap items-center justify-center gap-1.5">
+                <div className="flex items-center gap-1">
                   <IconButton
                     title="Отдалить: показать картинку целиком"
                     onClick={() => changeZoom(1 / 1.1)}

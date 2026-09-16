@@ -412,121 +412,140 @@ export function ComposeTimeline({
   return (
     <div className="flex h-full flex-col">
       {/* Панель инструментов */}
-      <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-3">
-        <IconButton
-          title={player.playing ? 'Пауза' : 'Смотреть с иглы (пробел)'}
-          onClick={() => (player.playing ? player.stop() : player.start())}
-          active={player.playing}
-        >
-          {player.preparing ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : player.playing ? (
-            <Pause size={14} />
-          ) : (
-            <PlayIcon size={14} />
+      {/* Панель поделена на три части: слева — что делают с клипами,
+          посередине — просмотр, справа — что делают со всем монтажом и с
+          самим таймлайном. Середина держится по центру окна и не ездит,
+          когда слева появляются надписи вроде «добавляю файл…». */}
+      <div className="grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-line-soft px-3">
+        {/* Слева: что делают с клипами и дорожками */}
+        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+          <IconButton title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
+            <Scissors size={14} />
+          </IconButton>
+          <IconButton
+            title="Удалить выбранное (Delete)"
+            onClick={() => selected.length && removeClips(selected)}
+            disabled={!selected.length}
+          >
+            <Trash2 size={14} />
+          </IconButton>
+
+          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+
+          <IconButton
+            title="Добавить видеодорожку — она ляжет верхним слоем"
+            onClick={() => addTrack('video')}
+            disabled={tracks.length >= MAX_TRACKS}
+          >
+            <Layers size={14} />
+          </IconButton>
+          <IconButton
+            title="Добавить звуковую дорожку"
+            onClick={() => addTrack('audio')}
+            disabled={tracks.length >= MAX_TRACKS}
+          >
+            <MusicTrack size={14} />
+          </IconButton>
+          <IconButton
+            title="Положить сплошной фон под иглу — под картинки с полями или под заставку"
+            onClick={() => addColor('#101018')}
+          >
+            <PaintBucket size={14} />
+          </IconButton>
+
+          {selected.length > 1 && (
+            <span className="ml-1 shrink-0 text-[11px] text-accent-soft">
+              выбрано: {selected.length}
+            </span>
           )}
-        </IconButton>
-        <IconButton
-          title="Повторять по кругу"
-          onClick={() => player.setLoop(!player.loop)}
-          active={player.loop}
-        >
-          <Repeat size={14} />
-        </IconButton>
-        {/* Громкость прослушивания: на готовый файл не влияет, поэтому стоит
-            здесь, рядом с кнопками просмотра, а не на мастер-шине. */}
-        <div className="flex w-[86px] items-center gap-1" title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}>
-          <Headphones size={13} className="shrink-0 text-ink-faint" />
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(player.volume * 100)}
-            onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
-            className="w-full"
-          />
+          {/* Ноль громкости у всех клипов означает «звука не будет вовсе» —
+              то же правило, что и в медиатеке. Сказать об этом надо заранее, а
+              не когда человек откроет готовый файл. */}
+          {silent && (
+            <span className="ml-1 flex shrink-0 items-center gap-1.5 text-[11px] text-warn">
+              <VolumeX size={12} />
+              в файле не будет звука
+            </span>
+          )}
+          {/* Чтение файла занимает мгновение, но без этого окно выглядит
+              зависшим: человек бросил файл, а на дорожке пока пусто. */}
+          {adding && (
+            <span className="ml-1 flex shrink-0 items-center gap-1.5 text-[11px] text-accent-soft">
+              <Loader2 size={12} className="animate-spin" />
+              добавляю файл…
+            </span>
+          )}
         </div>
 
-        <span className="mx-1 h-4 w-px bg-line-soft" />
-
-        <IconButton title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
-          <Scissors size={14} />
-        </IconButton>
-        <IconButton
-          title="Удалить выбранное (Delete)"
-          onClick={() => selected.length && removeClips(selected)}
-          disabled={!selected.length}
-        >
-          <Trash2 size={14} />
-        </IconButton>
-
-        <IconButton
-          title="Добавить видеодорожку — она ляжет верхним слоем"
-          onClick={() => addTrack('video')}
-          disabled={tracks.length >= MAX_TRACKS}
-        >
-          <Layers size={14} />
-        </IconButton>
-        <IconButton
-          title="Добавить звуковую дорожку"
-          onClick={() => addTrack('audio')}
-          disabled={tracks.length >= MAX_TRACKS}
-        >
-          <MusicTrack size={14} />
-        </IconButton>
-        <IconButton
-          title="Положить сплошной фон под иглу — под картинки с полями или под заставку"
-          onClick={() => addColor('#101018')}
-        >
-          <PaintBucket size={14} />
-        </IconButton>
-
-        <span className="mx-1 h-4 w-px bg-line-soft" />
-
-        <IconButton title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
-          <FlagTriangleRight size={14} />
-        </IconButton>
-        <IconButton title="Конец отрезка сборки (O)" onClick={markOut} active={renderOut !== null}>
-          <FlagTriangleLeft size={14} />
-        </IconButton>
-        {(renderIn !== null || renderOut !== null) && (
-          <IconButton title="Собрать всё целиком" onClick={clearMarks}>
-            <X size={14} />
+        {/* Посередине: просмотр */}
+        <div className="flex items-center gap-1.5">
+          <IconButton
+            title={player.playing ? 'Пауза' : 'Смотреть с иглы (пробел)'}
+            onClick={() => (player.playing ? player.stop() : player.start())}
+            active={player.playing}
+          >
+            {player.preparing ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : player.playing ? (
+              <Pause size={14} />
+            ) : (
+              <PlayIcon size={14} />
+            )}
           </IconButton>
-        )}
+          <IconButton
+            title="Повторять по кругу"
+            onClick={() => player.setLoop(!player.loop)}
+            active={player.loop}
+          >
+            <Repeat size={14} />
+          </IconButton>
+          {/* Громкость прослушивания: на готовый файл не влияет, поэтому стоит
+              здесь, рядом с кнопками просмотра, а не на шине громкости. */}
+          <div
+            className="flex w-[86px] items-center gap-1"
+            title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}
+          >
+            <Headphones size={13} className="shrink-0 text-ink-faint" />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(player.volume * 100)}
+              onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
+              className="w-full"
+            />
+          </div>
+        </div>
 
-        <span className="ml-1 font-mono text-[11px] tabular-nums text-ink-dim">
-          {timecode(playhead, true)}
-        </span>
-        {renderIn !== null || renderOut !== null ? (
-          <span className="text-[11px] text-accent-soft">
-            соберётся {timecode(from, true)} → {timecode(to, true)}
+        {/* Справа: что уйдёт в файл и как выглядит сам таймлайн */}
+        <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-dim">
+            {timecode(playhead, true)}
           </span>
-        ) : (
-          <span className="text-[11px] text-ink-faint">из {timecode(duration, true)}</span>
-        )}
-        {selected.length > 1 && (
-          <span className="text-[11px] text-accent-soft">выбрано: {selected.length}</span>
-        )}
-        {/* Ноль громкости у всех клипов означает «звука не будет вовсе» —
-            то же правило, что и в медиатеке. Сказать об этом надо заранее, а
-            не когда человек откроет готовый файл. */}
-        {silent && (
-          <span className="flex items-center gap-1.5 text-[11px] text-warn">
-            <VolumeX size={12} />
-            в файле не будет звука
-          </span>
-        )}
-        {/* Чтение файла занимает мгновение, но без этого окно выглядит
-            зависшим: человек бросил файл, а на дорожке пока пусто. */}
-        {adding && (
-          <span className="flex items-center gap-1.5 text-[11px] text-accent-soft">
-            <Loader2 size={12} className="animate-spin" />
-            добавляю файл…
-          </span>
-        )}
+          {renderIn !== null || renderOut !== null ? (
+            <span className="shrink-0 text-[11px] text-accent-soft">
+              соберётся {timecode(from, true)} → {timecode(to, true)}
+            </span>
+          ) : (
+            <span className="shrink-0 text-[11px] text-ink-faint">
+              из {timecode(duration, true)}
+            </span>
+          )}
 
-        <div className="ml-auto flex items-center gap-1">
+          <IconButton title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
+            <FlagTriangleRight size={14} />
+          </IconButton>
+          <IconButton title="Конец отрезка сборки (O)" onClick={markOut} active={renderOut !== null}>
+            <FlagTriangleLeft size={14} />
+          </IconButton>
+          {(renderIn !== null || renderOut !== null) && (
+            <IconButton title="Собрать всё целиком" onClick={clearMarks}>
+              <X size={14} />
+            </IconButton>
+          )}
+
+          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+
           <IconButton
             title="Сжать дорожки, чтобы поместились все (Ё)"
             active={compact}
