@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Camera,
+  ChevronDown,
   Film,
   FolderOpen,
   Grid3x3,
@@ -501,24 +502,30 @@ export function ComposeTab() {
                   >
                     <Grid3x3 size={14} />
                   </IconButton>
-                  <select
-                    value={gridKind}
-                    onChange={(event) => {
-                      const value = event.target.value as GridKind
-                      setGridKind(value)
-                      setGridOn(true)
-                      localStorage.setItem('sgh.composeGrid', value)
-                      localStorage.setItem('sgh.composeGridOn', '1')
-                    }}
-                    title="Какая сетка"
-                    className="h-8 w-[22px] cursor-pointer appearance-none rounded-lg bg-transparent text-[11px] text-ink-faint outline-none hover:text-ink"
-                  >
-                    {GRIDS.filter((item) => item.value !== 'none').map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label.replace('Сетка: ', '')}
-                      </option>
-                    ))}
-                  </select>
+                  {/* Галочка рядом со значком: сам список нужен редко, а
+                      место занимал бы постоянно, поэтому от него оставлена
+                      только стрелка. */}
+                  <div className="relative flex h-8 w-4 items-center justify-center">
+                    <ChevronDown size={12} className="pointer-events-none text-ink-faint" />
+                    <select
+                      value={gridKind}
+                      onChange={(event) => {
+                        const value = event.target.value as GridKind
+                        setGridKind(value)
+                        setGridOn(true)
+                        localStorage.setItem('sgh.composeGrid', value)
+                        localStorage.setItem('sgh.composeGridOn', '1')
+                      }}
+                      title="Какая сетка"
+                      className="absolute inset-0 cursor-pointer appearance-none bg-transparent text-transparent opacity-0 outline-none"
+                    >
+                      {GRIDS.filter((item) => item.value !== 'none').map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label.replace('Сетка: ', '')}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <select
