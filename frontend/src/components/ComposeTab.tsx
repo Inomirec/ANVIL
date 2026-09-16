@@ -650,24 +650,30 @@ export function ComposeTab() {
           </div>
         </div>
 
-        <div className="space-y-2 border-t border-line-soft px-4 py-3">
+        {/* Сборка — главная кнопка, остальное по краям значками: три кнопки в
+            ряд занимали треть панели, а нажимают из них обычно одну. */}
+        <div className="flex items-stretch gap-2 border-t border-line-soft px-4 py-3">
+          {/* Монтаж запоминается сам, но только последний: чтобы вести
+              несколько, их сохраняют под именами. */}
+          <Button
+            className="w-[42px] shrink-0 px-0"
+            title="Мои монтажи: сохранить нынешний или открыть прежний"
+            onClick={() => setProjectsOpen(true)}
+          >
+            <Save size={15} />
+          </Button>
           <Button
             tone="primary"
-            className="w-full py-2.5"
+            className="min-w-0 flex-1 py-2.5"
             disabled={busy || !clips}
             onClick={() => void build()}
           >
             <Play size={15} />
             Собрать видео
           </Button>
-          {/* Монтаж запоминается сам, но только последний: чтобы вести
-              несколько, их сохраняют под именами. */}
-          <Button className="w-full" onClick={() => setProjectsOpen(true)}>
-            <Save size={14} />
-            Мои монтажи
-          </Button>
           <Button
-            className="w-full"
+            className="w-[42px] shrink-0 px-0"
+            title="Очистить таймлайн"
             disabled={!clips}
             onClick={() => {
               if (confirm('Убрать с таймлайна все клипы? Сами файлы останутся на месте.')) {
@@ -675,8 +681,7 @@ export function ComposeTab() {
               }
             }}
           >
-            <Trash2 size={14} />
-            Очистить таймлайн
+            <Trash2 size={15} />
           </Button>
         </div>
       </aside>

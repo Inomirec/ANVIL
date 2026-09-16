@@ -279,7 +279,7 @@ class ComposeClip(ComposeModel):
     #: значит уронить всю сборку.
     has_audio: bool | None = None
     #: Громкость: 1.0 — как есть, 0 — тишина.
-    volume: float = Field(default=1.0, ge=0.0, le=2.0)
+    volume: float = Field(default=1.0, ge=0.0, le=4.0)
     #: Плавное появление и уход звука, в секундах.
     fade_in: float = Field(default=0.0, ge=0, le=30)
     fade_out: float = Field(default=0.0, ge=0, le=30)
@@ -320,7 +320,7 @@ class ComposeTrack(ComposeModel):
     name: str = ""
     #: Уровень всей дорожки: у звука это громкость, у видео — насколько видно
     #: то, что на ней лежит. Умножается на то же самое у каждого клипа.
-    level: float = Field(default=1.0, ge=0.0, le=2.0)
+    level: float = Field(default=1.0, ge=0.0, le=4.0)
 
 
 class ComposeProject(ComposeModel):
@@ -333,7 +333,7 @@ class ComposeProject(ComposeModel):
     fps: int = Field(default=30, ge=1, le=120)
     #: Громкость всего монтажа разом — фейдер мастер-шины. Влияет на готовый
     #: файл, в отличие от громкости прослушивания.
-    master_volume: float = Field(default=1.0, ge=0.0, le=2.0)
+    master_volume: float = Field(default=1.0, ge=0.0, le=4.0)
     #: Привести громкость готового файла к единому уровню (EBU R128) — то же
     #: выравнивание, что и при обычной обработке.
     loudnorm: bool = False

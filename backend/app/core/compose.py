@@ -85,7 +85,7 @@ def clips_at(project: ComposeProject, at: float, span: float) -> list[tuple[int,
                 # подряд, и громкость не будет умножаться сама на себя.
                 if track.level != 1.0:
                     clip = clip.model_copy(update={
-                        "volume": min(2.0, clip.volume * track.level),
+                        "volume": min(4.0, clip.volume * track.level),
                         "opacity": min(1.0, clip.opacity * track.level),
                     })
                 found.append((layer, clip))

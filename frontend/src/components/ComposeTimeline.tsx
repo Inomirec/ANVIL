@@ -26,11 +26,18 @@ import type { FilmstripInfo } from '../lib/types'
 import {
   clipEdges,
   magnets,
+  dbToGain,
+  gainToDb,
+  MAX_DB,
   MAX_TRACKS,
   MIN_CLIP_SECONDS,
+  MIN_DB,
+  shareToVolume,
   snap,
   trackColor,
   trackNumber,
+  volumeLabel,
+  volumeShare,
   useCompose,
   type ComposeClip,
   type ComposeTrack,
@@ -147,6 +154,7 @@ export function ComposeTimeline({
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
+  const vscroll = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag>(null)
 
   const duration = tracks.reduce(
@@ -213,13 +221,14 @@ export function ComposeTimeline({
 
       if (current.kind === 'level') {
         // Линия уровня: у звука это громкость, у картинки — прозрачность.
-        const share = 1 - (event.clientY - current.top) / current.height
-        const value = Math.min(1, Math.max(0, share))
+        // У звука шкала в децибелах, поэтому высота переводится не напрямую:
+        // наверху шкалы есть запас на усиление.
+        const share = Math.min(1, Math.max(0, 1 - (event.clientY - current.top) / current.height))
         const clip = state.findClip(current.id)?.clip
         if (clip) {
           state.updateClip(
             current.id,
-            clip.kind === 'audio' ? { volume: value } : { opacity: value },
+            clip.kind === 'audio' ? { volume: shareToVolume(share) } : { opacity: share },
           )
         }
         return
@@ -372,6 +381,12 @@ export function ComposeTimeline({
    */
   const onWheel = (event: React.WheelEvent) => {
     event.preventDefault()
+    // С Ctrl колесо листает дорожки: когда их много, тянуть полосу прокрутки
+    // мышью неудобно, а колесо под рукой.
+    if (event.ctrlKey || event.metaKey) {
+      if (vscroll.current) vscroll.current.scrollTop += event.deltaY
+      return
+    }
     const box = canvas.current?.getBoundingClientRect()
     const state = useCompose.getState()
     const under = box ? (event.clientX - box.left) / state.scale : 0
@@ -522,7 +537,7 @@ export function ComposeTimeline({
 
       {/* Слева названия дорожек, справа само полотно. Прокручиваются они
           вместе по высоте, а вбок — только полотно. */}
-      <div className="flex min-h-0 flex-1 overflow-y-auto">
+      <div ref={vscroll} className="flex min-h-0 flex-1 overflow-y-auto" onWheel={onWheel}>
         <TrackHeads
           tracks={tracks}
           width={headWidth}
@@ -536,11 +551,7 @@ export function ComposeTimeline({
           }}
         />
 
-      <div
-        ref={scroller}
-        className="min-h-0 min-w-0 flex-1 overflow-x-auto"
-        onWheel={onWheel}
-      >
+      <div ref={scroller} className="min-h-0 min-w-0 flex-1 overflow-x-auto">
         <div ref={canvas} style={{ width }} className="relative select-none">
           <Ruler
             span={span}
@@ -676,7 +687,7 @@ export function ComposeTimeline({
                   style={{
                     left: zone.from * scale,
                     width: Math.max((zone.to - zone.from) * scale, 2),
-                    height: (track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT) - 12,
+                    height: rowHeight - 12,
                   }}
                 >
                   <svg className="h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -805,7 +816,7 @@ function TrackHeads({
 
       {tracks.map((track) => {
         const colour = trackColor(tracks, track.id)
-        const level = Math.round(track.level * 100)
+        const sound = track.kind === 'audio'
         return (
           <div
             key={track.id}
@@ -843,30 +854,32 @@ function TrackHeads({
                 {withLevel && (
                   <div
                     className={`flex items-center gap-1.5 ${
-                      narrow ? 'w-[76px] shrink-0' : ''
+                      narrow ? 'w-[92px] shrink-0' : ''
                     }`}
                   >
                     <input
                       type="range"
-                      min={0}
-                      max={200}
-                      value={level}
-                      onChange={(event) => onLevel(track.id, Number(event.target.value) / 100)}
+                      min={sound ? MIN_DB : 0}
+                      max={sound ? MAX_DB : 100}
+                      step={sound ? 0.5 : 1}
+                      value={sound ? gainToDb(track.level) : Math.round(track.level * 100)}
+                      onChange={(event) => {
+                        const value = Number(event.target.value)
+                        onLevel(track.id, sound ? dbToGain(value) : value / 100)
+                      }}
                       // Двойное нажатие возвращает обычный уровень: задеть
                       // ползунок легко, а вспомнить, каким он был, — нет.
                       onDoubleClick={() => onLevel(track.id, 1)}
                       title={
-                        track.kind === 'audio'
-                          ? `Громкость дорожки ${level}%`
-                          : `Насколько видно эту дорожку: ${level}%`
+                        sound
+                          ? `Громкость дорожки ${volumeLabel(track.level)}`
+                          : `Насколько видно эту дорожку: ${Math.round(track.level * 100)}%`
                       }
                       className="min-w-0 flex-1"
                     />
-                    {!narrow && (
-                      <span className="w-[30px] shrink-0 text-right font-mono text-[9.5px] tabular-nums text-ink-faint">
-                        {level}%
-                      </span>
-                    )}
+                    <span className="w-[46px] shrink-0 text-right font-mono text-[9.5px] tabular-nums text-ink-faint">
+                      {sound ? volumeLabel(track.level) : `${Math.round(track.level * 100)}%`}
+                    </span>
                   </div>
                 )}
               </div>
@@ -1373,8 +1386,10 @@ function ClipBox({
   onMenu: (event: React.MouseEvent) => void
 }) {
   const sound = clip.kind === 'audio'
+  // Сжатая дорожка: подписи и уголки в неё не помещаются.
+  const short = height < TRACK_HEIGHT
   // У звука линия показывает громкость, у картинки — насколько она видна.
-  const level = sound ? Math.min(1, clip.volume) : clip.opacity
+  const level = sound ? volumeShare(clip.volume) : clip.opacity
   const box = Math.max(clip.duration * scale, 6)
   // Мелкому клипу лента кадров и волна не нужны — там нечего разглядывать,
   // а запрос стоит времени.
@@ -1385,6 +1400,9 @@ function ClipBox({
 
   const fadeInWidth = (clip.fadeIn / clip.duration) * box
   const fadeOutWidth = (clip.fadeOut / clip.duration) * box
+  // На сжатой дорожке уголок затухания в обычном размере закрыл бы клип
+  // целиком, и двигать его стало бы нечем.
+  const corner = Math.min(FADE_CORNER, Math.max(6, Math.round((height - 12) / 2.5)))
 
   return (
     <div
@@ -1400,8 +1418,8 @@ function ClipBox({
         const fromRight = area.right - event.clientX
         const fromTop = event.clientY - area.top
         // Верхние углы отданы затуханию, бока ниже них — длине клипа.
-        if (fromTop <= FADE_CORNER && fromLeft <= FADE_CORNER) return onGrab(event, 'fadeIn')
-        if (fromTop <= FADE_CORNER && fromRight <= FADE_CORNER) return onGrab(event, 'fadeOut')
+        if (fromTop <= corner && fromLeft <= corner) return onGrab(event, 'fadeIn')
+        if (fromTop <= corner && fromRight <= corner) return onGrab(event, 'fadeOut')
         onGrab(
           event,
           fromLeft <= GRIP_PIXELS ? 'left' : fromRight <= GRIP_PIXELS ? 'right' : 'move',
@@ -1444,7 +1462,7 @@ function ClipBox({
         style={{ top: `${(1 - level) * 100}%`, height: 9, marginTop: -4 }}
         title={
           sound
-            ? `Громкость ${Math.round(level * 100)}% — тяните вверх или вниз`
+            ? `Громкость ${volumeLabel(clip.volume)} — тяните вверх или вниз`
             : `Непрозрачность ${Math.round(level * 100)}% — тяните вверх или вниз`
         }
         onMouseDown={(event) => {
@@ -1458,9 +1476,22 @@ function ClipBox({
             sound ? 'bg-ok/90' : 'bg-accent-soft/90'
           } ${level >= 1 ? 'opacity-45' : 'opacity-100'}`}
         />
+        {/* Насколько убавлено — прямо на линии: иначе «на сколько тише» можно
+            только гадать по её высоте. */}
+        {!short && box > 54 && (
+          <span
+            className="pointer-events-none absolute right-1 -top-[1px] rounded bg-black/55 px-1 font-mono text-[9px] leading-[11px] tabular-nums text-white/80"
+          >
+            {sound ? volumeLabel(clip.volume) : `${Math.round(level * 100)}%`}
+          </span>
+        )}
       </div>
 
-      <div className="relative flex h-full flex-col justify-between p-1.5">
+      <div
+        className={`relative flex h-full flex-col justify-between ${
+          short ? 'px-1.5 py-0.5' : 'p-1.5'
+        }`}
+      >
         <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink">
           {sound && (
             <button
@@ -1483,15 +1514,17 @@ function ClipBox({
           )}
           <span className="truncate">{clip.name}</span>
         </span>
-        <span className="font-mono text-[9.5px] tabular-nums text-ink-faint">
-          {timecode(clip.duration, true)}
-        </span>
+        {!short && (
+          <span className="font-mono text-[9.5px] tabular-nums text-ink-faint">
+            {timecode(clip.duration, true)}
+          </span>
+        )}
       </div>
 
       {/* Уголки затухания — вверху, уголки длины — по бокам. */}
       <div
         className="absolute left-0 top-0 cursor-nwse-resize"
-        style={{ width: FADE_CORNER, height: FADE_CORNER }}
+        style={{ width: corner, height: corner }}
         title="Потяните вправо — плавное появление"
         onMouseDown={(event) => {
           event.stopPropagation()
@@ -1502,7 +1535,7 @@ function ClipBox({
       </div>
       <div
         className="absolute right-0 top-0 cursor-nesw-resize"
-        style={{ width: FADE_CORNER, height: FADE_CORNER }}
+        style={{ width: corner, height: corner }}
         title="Потяните влево — плавный уход"
         onMouseDown={(event) => {
           event.stopPropagation()
@@ -1514,11 +1547,11 @@ function ClipBox({
       {/* Края длины начинаются ниже уголков, иначе они спорят за одни пиксели. */}
       <div
         className="absolute bottom-0 left-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
-        style={{ top: FADE_CORNER }}
+        style={{ top: corner }}
       />
       <div
         className="absolute bottom-0 right-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
-        style={{ top: FADE_CORNER }}
+        style={{ top: corner }}
       />
     </div>
   )

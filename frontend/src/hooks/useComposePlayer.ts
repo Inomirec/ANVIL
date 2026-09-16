@@ -274,6 +274,39 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     return () => clearInterval(timer)
   }, [playing, volume, video])
 
+  /**
+   * Громкость монтажа и выравнивание слышны сразу.
+   *
+   * Обе настройки живут в куске, который собирает программа, поэтому уже
+   * играющий кусок про них не знает: человек ставит галочку «выровнять звук»,
+   * а шкала показывает прежнее — и решает, что галочка не работает. Поэтому на
+   * такую правку просмотр пересобирается с того же места. Небольшая задержка
+   * есть, но она честнее, чем неверные показания.
+   *
+   * Ждём немного: у фейдера на одно движение приходится десяток изменений, и
+   * пересобирать кусок на каждое незачем.
+   */
+  const playingRef = useRef(false)
+  playingRef.current = playing
+  const startRef = useRef(start)
+  startRef.current = start
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = useCompose.subscribe((state, prev) => {
+      if (state.loudnorm === prev.loudnorm && state.masterVolume === prev.masterVolume) return
+      if (!playingRef.current) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (playingRef.current) void startRef.current()
+      }, 400)
+    })
+    return () => {
+      if (timer) clearTimeout(timer)
+      off()
+    }
+  }, [])
+
   // Выбранное качество запоминается; «авто» начинает подбор заново.
   useEffect(() => {
     localStorage.setItem(QUALITY_KEY, String(quality))

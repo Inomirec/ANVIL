@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { dbToGain, gainToDb, MAX_DB, MIN_DB, volumeLabel } from '../composeStore'
 
 /**
  * Шина громкости: уровень звука в децибелах и громкость всего монтажа.
@@ -18,8 +19,13 @@ import { useEffect, useRef, useState } from 'react'
  * занимали ширину, которой у шины и так немного.
  */
 
-/** Отметки шкалы, дБ. Ноль — потолок, ниже -60 уже ничего не разобрать. */
-const MARKS = [0, -12, -24, -36, -48]
+/**
+ * Отметки шкалы, дБ. Ноль — потолок, ниже -60 уже ничего не разобрать.
+ *
+ * Сверху деления частые: -3 и -6 — то место, где и настраивают громкость,
+ * дальше от потолка точность уже не нужна.
+ */
+const MARKS = [0, -3, -6, -12, -24, -36, -48]
 const FLOOR = -60
 /** Сколько держится пиковая отметка, прежде чем поползёт вниз. */
 const PEAK_HOLD_MS = 1200
@@ -113,15 +119,16 @@ export function MasterMeter({
   const fader = (
     <input
       type="range"
-      min={0}
-      max={200}
-      value={Math.round(master * 100)}
-      onChange={(event) => onMaster(Number(event.target.value) / 100)}
+      min={MIN_DB}
+      max={MAX_DB}
+      step={0.5}
+      value={gainToDb(master)}
+      onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
       // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
       // а понять потом, каким он был, — нет.
       onDoubleClick={() => onMaster(1)}
-      title={`Громкость монтажа ${Math.round(master * 100)}% — уходит в готовый файл.
-Двойное нажатие вернёт 100%`}
+      title={`Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
+Двойное нажатие вернёт 0 дБ`}
       className="master-fader"
     />
   )
@@ -167,13 +174,14 @@ export function MasterMeter({
                 <Marks />
                 <input
                   type="range"
-                  min={0}
-                  max={200}
-                  value={Math.round(master * 100)}
-                  onChange={(event) => onMaster(Number(event.target.value) / 100)}
+                  min={MIN_DB}
+                  max={MAX_DB}
+                  step={0.5}
+                  value={gainToDb(master)}
+                  onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
                   onDoubleClick={() => onMaster(1)}
-                  title={`Громкость монтажа ${Math.round(master * 100)}%.
-Двойное нажатие вернёт 100%`}
+                  title={`Громкость монтажа ${volumeLabel(master)}.
+Двойное нажатие вернёт 0 дБ`}
                   className="master-fader over-meter"
                 />
               </div>
@@ -181,12 +189,12 @@ export function MasterMeter({
           </div>
 
           <span
-            className={`mt-1 font-mono text-[10px] tabular-nums ${
+            className={`mt-1 font-mono text-[9.5px] tabular-nums ${
               master > 1 ? 'text-warn' : 'text-ink-faint'
             }`}
             title="Громкость монтажа"
           >
-            {Math.round(master * 100)}%
+            {volumeLabel(master)}
           </span>
         </>
       )}

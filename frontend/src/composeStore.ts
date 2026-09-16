@@ -101,6 +101,46 @@ export function trackNumber(tracks: ComposeTrack[], id: string): number {
 /** Больше дорожек человеку не нужно, а таймлайн перестаёт помещаться. */
 export const MAX_TRACKS = 6
 
+/**
+ * Громкость считается в децибелах, а не в процентах.
+ *
+ * Проценты годятся для прозрачности, а звук все меряют децибелами: «-6 дБ»
+ * говорит человеку куда больше, чем «50%». Внутри громкость по-прежнему
+ * множитель (1 — как есть), потому что именно его понимает ffmpeg.
+ *
+ * Усиливать звук тоже надо — тихую запись иначе не вытянуть, — поэтому потолок
+ * поднят до +12 дБ. У самого низа шкалы громкость ровно ноль: это не «очень
+ * тихо», а «дорожки в файле не будет вовсе».
+ */
+export const MAX_DB = 12
+export const MIN_DB = -60
+export const MAX_GAIN = 4
+
+export function gainToDb(gain: number): number {
+  return gain <= 0 ? MIN_DB : Math.max(MIN_DB, 20 * Math.log10(gain))
+}
+
+export function dbToGain(db: number): number {
+  return db <= MIN_DB ? 0 : Math.pow(10, db / 20)
+}
+
+/** Положение на шкале, 0..1: снизу тишина, 0 дБ заметно выше середины. */
+export function volumeShare(gain: number): number {
+  return Math.min(1, Math.max(0, (gainToDb(gain) - MIN_DB) / (MAX_DB - MIN_DB)))
+}
+
+export function shareToVolume(share: number): number {
+  const db = MIN_DB + Math.min(1, Math.max(0, share)) * (MAX_DB - MIN_DB)
+  return dbToGain(db)
+}
+
+/** Подпись громкости так, как её пишут в монтажных программах. */
+export function volumeLabel(gain: number): string {
+  if (gain <= 0) return '−∞'
+  const db = gainToDb(gain)
+  return `${db > 0 ? '+' : ''}${db.toFixed(1).replace('.', ',')} дБ`
+}
+
 /** Сколько висит картинка, если не трогать её длину. */
 export const DEFAULT_IMAGE_SECONDS = 3
 /** Короче этого клип не тянется — иначе он исчезает под курсором. */
@@ -491,7 +531,7 @@ export const useCompose = create<State>((set, get) => ({
 
   // --- метки отрезка сборки ---------------------------------------------
   setMasterVolume(value) {
-    set({ masterVolume: Math.min(2, Math.max(0, value)) })
+    set({ masterVolume: Math.min(MAX_GAIN, Math.max(0, value)) })
     save(get())
   },
 
@@ -776,7 +816,9 @@ export const useCompose = create<State>((set, get) => ({
   setTrackLevel(id, level) {
     set((state) => ({
       tracks: state.tracks.map((track) =>
-        track.id === id ? { ...track, level: Math.min(2, Math.max(0, level)) } : track,
+        track.id === id
+          ? { ...track, level: Math.min(track.kind === 'audio' ? MAX_GAIN : 1, Math.max(0, level)) }
+          : track,
       ),
     }))
     save(get())
