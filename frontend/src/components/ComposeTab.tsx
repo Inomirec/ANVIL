@@ -20,7 +20,13 @@ import {
   type ComposeTrack,
 } from '../composeStore'
 import { useStore } from '../store'
-import { ComposeTimeline } from './ComposeTimeline'
+import {
+  AUDIO_HEIGHT,
+  ComposeTimeline,
+  RULER_HEIGHT,
+  TOOLBAR_HEIGHT,
+  TRACK_HEIGHT,
+} from './ComposeTimeline'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_VIEWS, type MeterView } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
@@ -191,6 +197,9 @@ export function ComposeTab() {
         muted: false,
         opacity: 1,
         zoom: 1,
+        size: 1,
+        x: 0.5,
+        y: 0.5,
       }
       if (clip.kind === 'video' && clip.hasAudio) {
         // У ролика со звуком на таймлайне два клипа: видно, что звук есть,
@@ -277,6 +286,19 @@ export function ComposeTab() {
       setSnapping(false)
     }
   }
+
+  // Высота таймлайна растёт вместе с числом дорожек, но до предела: кадр в
+  // окне просмотра важнее, и отдавать ему меньше половины окна нельзя.
+  const timelineHeight = Math.min(
+    380,
+    TOOLBAR_HEIGHT +
+      RULER_HEIGHT +
+      12 +
+      tracks.reduce(
+        (sum, track) => sum + (track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT),
+        0,
+      ),
+  )
 
   const videoPresets = presets.video ?? []
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
@@ -484,7 +506,10 @@ export function ComposeTab() {
         </div>
 
         {/* Таймлайн */}
-        <div className="h-[220px] shrink-0 border-t border-line-soft bg-surface">
+        <div
+          className="shrink-0 border-t border-line-soft bg-surface"
+          style={{ height: timelineHeight }}
+        >
           <ComposeTimeline
             adding={adding}
             player={player}

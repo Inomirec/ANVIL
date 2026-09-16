@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   FlagTriangleLeft,
   FlagTriangleRight,
   Headphones,
+  Layers,
   Link2,
   Loader2,
+  Music2 as MusicTrack,
   Music2,
   Pause,
   Play as PlayIcon,
@@ -22,6 +24,7 @@ import type { FilmstripInfo } from '../lib/types'
 import {
   clipEdges,
   magnets,
+  MAX_TRACKS,
   MIN_CLIP_SECONDS,
   snap,
   useCompose,
@@ -42,8 +45,12 @@ const FADE_CORNER = 18
 /** Игла липнет к краям клипов, но слабее, чем клипы друг к другу. */
 const PLAYHEAD_SNAP = 6
 /** Высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
-const TRACK_HEIGHT = 74
-const AUDIO_HEIGHT = 74
+export const TRACK_HEIGHT = 74
+export const AUDIO_HEIGHT = 74
+/** Линейка времени над дорожками. */
+export const RULER_HEIGHT = 24
+/** Панель кнопок над таймлайном. */
+export const TOOLBAR_HEIGHT = 36
 /** Пустой запас справа, чтобы было куда тащить клипы. */
 const TAIL_SECONDS = 8
 /** Дальше половины клипа затухание не тянется — оно съело бы весь кусок. */
@@ -98,6 +105,8 @@ export function ComposeTimeline({
   const select = useCompose((state) => state.select)
   const splitAtPlayhead = useCompose((state) => state.splitAtPlayhead)
   const removeClips = useCompose((state) => state.removeClips)
+  const addTrack = useCompose((state) => state.addTrack)
+  const removeTrack = useCompose((state) => state.removeTrack)
   const updateClip = useCompose((state) => state.updateClip)
   const markIn = useCompose((state) => state.markIn)
   const markOut = useCompose((state) => state.markOut)
@@ -107,6 +116,9 @@ export function ComposeTimeline({
 
   const [dropAt, setDropAt] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
+  // Меню дорожки: правая кнопка по пустому месту. Отдельной кнопки у дорожки
+  // нет — она заняла бы место у самого начала таймлайна, где лежат клипы.
+  const [trackMenu, setTrackMenu] = useState<{ x: number; y: number; id: string } | null>(null)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -376,6 +388,21 @@ export function ComposeTimeline({
           <Trash2 size={14} />
         </IconButton>
 
+        <IconButton
+          title="Добавить видеодорожку — она ляжет верхним слоем"
+          onClick={() => addTrack('video')}
+          disabled={tracks.length >= MAX_TRACKS}
+        >
+          <Layers size={14} />
+        </IconButton>
+        <IconButton
+          title="Добавить звуковую дорожку"
+          onClick={() => addTrack('audio')}
+          disabled={tracks.length >= MAX_TRACKS}
+        >
+          <MusicTrack size={14} />
+        </IconButton>
+
         <span className="mx-1 h-4 w-px bg-line-soft" />
 
         <IconButton title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
@@ -434,7 +461,7 @@ export function ComposeTimeline({
       {/* Полотно */}
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden"
+        className="min-h-0 flex-1 overflow-x-auto overflow-y-auto"
         onWheel={onWheel}
       >
         <div ref={canvas} style={{ width }} className="relative select-none">
@@ -468,6 +495,11 @@ export function ComposeTimeline({
                   fromAt: secondsAt(event.clientX),
                   fromY: event.clientY - box.top,
                 }
+              }}
+              onContextMenu={(event) => {
+                if (event.target !== event.currentTarget) return
+                event.preventDefault()
+                setTrackMenu({ x: event.clientX, y: event.clientY, id: track.id })
               }}
               onDragOver={(event) => {
                 event.preventDefault()
@@ -596,6 +628,110 @@ export function ComposeTimeline({
           onClose={() => setMenu(null)}
         />
       )}
+
+      {trackMenu && (
+        <TrackMenu
+          at={trackMenu}
+          trackId={trackMenu.id}
+          onClose={() => setTrackMenu(null)}
+          onRemove={() => removeTrack(trackMenu.id)}
+          onAdd={addTrack}
+          tracks={tracks}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Держит меню в пределах окна.
+ *
+ * Меню открывается под курсором, а у нижней дорожки курсор стоит у самого
+ * низа окна — половина пунктов оказывалась за краем экрана. Поэтому после
+ * появления меню сдвигается вверх или влево ровно настолько, чтобы влезть.
+ */
+function useMenuPlace(at: { x: number; y: number }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [place, setPlace] = useState({ left: at.x, top: at.y })
+
+  useLayoutEffect(() => {
+    const size = box.current?.getBoundingClientRect()
+    if (!size) return
+    const gap = 8
+    setPlace({
+      left: Math.max(gap, Math.min(at.x, window.innerWidth - size.width - gap)),
+      top: Math.max(gap, Math.min(at.y, window.innerHeight - size.height - gap)),
+    })
+  }, [at.x, at.y])
+
+  return { box, place }
+}
+
+/** Меню дорожки: добавить соседнюю или убрать эту вместе с содержимым. */
+function TrackMenu({
+  at,
+  trackId,
+  tracks,
+  onClose,
+  onRemove,
+  onAdd,
+}: {
+  at: { x: number; y: number }
+  trackId: string
+  tracks: ComposeTrack[]
+  onClose: () => void
+  onRemove: () => void
+  onAdd: (kind: 'video' | 'audio') => void
+}) {
+  useEffect(() => {
+    const close = () => onClose()
+    window.addEventListener('mousedown', close)
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', close)
+    }
+  }, [onClose])
+
+  const { box, place } = useMenuPlace(at)
+
+  const track = tracks.find((item) => item.id === trackId)
+  if (!track) return null
+  // Последнюю дорожку своего вида убрать нельзя: класть файлы стало бы некуда.
+  const alone = tracks.filter((item) => item.kind === track.kind).length <= 1
+
+  const item = (label: string, action: () => void, disabled = false) => (
+    <button
+      type="button"
+      disabled={disabled}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={() => {
+        action()
+        onClose()
+      }}
+      className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[12px] text-ink-dim transition-colors enabled:hover:bg-surface-3 enabled:hover:text-ink disabled:opacity-35"
+    >
+      {label}
+    </button>
+  )
+
+  return (
+    <div
+      ref={box}
+      className="fixed z-50 min-w-[210px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
+      style={place}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {item('Добавить видеодорожку', () => onAdd('video'), tracks.length >= MAX_TRACKS)}
+      {item('Добавить звуковую дорожку', () => onAdd('audio'), tracks.length >= MAX_TRACKS)}
+      <div className="my-1 h-px bg-line-soft" />
+      {item(
+        track.clips.length
+          ? `Удалить дорожку и всё на ней (${track.clips.length})`
+          : 'Удалить дорожку',
+        onRemove,
+        alone,
+      )}
     </div>
   )
 }
@@ -615,6 +751,7 @@ function ClipMenu({
   onClose: () => void
 }) {
   const state = useCompose()
+  const { box, place } = useMenuPlace(at)
   const clip = state.tracks.flatMap((track) => track.clips).find((item) => item.id === clipId)
   const many = state.selected.length > 1
 
@@ -648,8 +785,9 @@ function ClipMenu({
 
   return (
     <div
+      ref={box}
       className="fixed z-50 min-w-[210px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
-      style={{ left: at.x, top: at.y }}
+      style={place}
       onContextMenu={(event) => event.preventDefault()}
     >
       {item('Разрезать под иглой', 'S', () => state.splitAtPlayhead())}
@@ -680,8 +818,96 @@ function ClipMenu({
           state.updateClip(clipId, clip.kind === 'audio' ? { volume: 1 } : { opacity: 1 }),
         clip.kind === 'audio' ? clip.volume === 1 : clip.opacity === 1,
       )}
+
+      {/* Размер и место в кадре — только у картинки: у звука кадра нет.
+          Уменьшенный клип ложится поверх нижней дорожки — так делают
+          «картинку в картинке». */}
+      {clip.kind !== 'audio' && (
+        <>
+          <div className="my-1 h-px bg-line-soft" />
+          <span className="block px-2.5 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-ink-faint">
+            Размер в кадре
+          </span>
+          <div className="flex gap-1 px-1.5 pb-1">
+            {SIZES.map((value) => (
+              <button
+                key={value}
+                type="button"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => {
+                  for (const id of pick(state, clipId)) state.updateClip(id, { size: value })
+                  onClose()
+                }}
+                className={`flex-1 rounded-md py-1 text-[11px] transition-colors ${
+                  Math.abs(clip.size - value) < 0.01
+                    ? 'bg-accent/20 text-accent-soft'
+                    : 'text-ink-dim hover:bg-surface-3 hover:text-ink'
+                }`}
+              >
+                {Math.round(value * 100)}%
+              </button>
+            ))}
+          </div>
+
+          <span className="block px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
+            Где стоит
+          </span>
+          <div className="grid grid-cols-3 gap-1 px-1.5 pb-1">
+            {CORNERS.map((corner) => (
+              <button
+                key={corner.label}
+                type="button"
+                disabled={clip.size >= 1}
+                title={clip.size >= 1 ? 'Сначала уменьшите клип' : corner.label}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => {
+                  for (const id of pick(state, clipId)) {
+                    state.updateClip(id, { x: corner.x, y: corner.y })
+                  }
+                  onClose()
+                }}
+                className={`h-6 rounded-md text-[10px] transition-colors disabled:opacity-30 ${
+                  clip.size < 1 &&
+                  Math.abs(clip.x - corner.x) < 0.01 &&
+                  Math.abs(clip.y - corner.y) < 0.01
+                    ? 'bg-accent/20 text-accent-soft'
+                    : 'text-ink-faint enabled:hover:bg-surface-3 enabled:hover:text-ink'
+                }`}
+              >
+                {corner.mark}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
+}
+
+/** Доли кадра, которые есть смысл предлагать готовыми. */
+const SIZES = [1, 0.5, 0.33, 0.25]
+
+/** Девять мест в кадре: углы, середины сторон и центр. */
+const CORNERS = [
+  { label: 'Левый верхний угол', mark: '↖', x: 0, y: 0 },
+  { label: 'Сверху посередине', mark: '↑', x: 0.5, y: 0 },
+  { label: 'Правый верхний угол', mark: '↗', x: 1, y: 0 },
+  { label: 'Слева посередине', mark: '←', x: 0, y: 0.5 },
+  { label: 'В середине кадра', mark: '•', x: 0.5, y: 0.5 },
+  { label: 'Справа посередине', mark: '→', x: 1, y: 0.5 },
+  { label: 'Левый нижний угол', mark: '↙', x: 0, y: 1 },
+  { label: 'Снизу посередине', mark: '↓', x: 0.5, y: 1 },
+  { label: 'Правый нижний угол', mark: '↘', x: 1, y: 1 },
+]
+
+/**
+ * К каким клипам относится правка из меню.
+ *
+ * Если выбрано несколько, правим все — человек обвёл их рамкой именно
+ * затем. Если выбран другой клип, правим тот, по которому щёлкнули.
+ */
+function pick(state: { selected: string[] }, clipId: string): string[] {
+  return state.selected.includes(clipId) ? state.selected : [clipId]
 }
 
 /**

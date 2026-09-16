@@ -47,6 +47,18 @@ export interface ComposeClip {
   opacity: number
   /** Приближение внутри кадра: 1 — вписано целиком. */
   zoom: number
+  /**
+   * Какую долю кадра занимает клип: 1 — весь кадр, 0.5 — вчетверо меньшая
+   * картинка поверх нижнего слоя. Так делают «картинку в картинке».
+   */
+  size: number
+  /**
+   * Где стоит уменьшенный клип: 0 — вплотную к левому (верхнему) краю, 1 — к
+   * правому (нижнему), 0.5 — посередине. У клипа во весь кадр не значит
+   * ничего: двигать нечего.
+   */
+  x: number
+  y: number
 }
 
 export interface ComposeTrack {
@@ -54,6 +66,9 @@ export interface ComposeTrack {
   kind: 'video' | 'audio'
   clips: ComposeClip[]
 }
+
+/** Больше дорожек человеку не нужно, а таймлайн перестаёт помещаться. */
+export const MAX_TRACKS = 6
 
 /** Сколько висит картинка, если не трогать её длину. */
 export const DEFAULT_IMAGE_SECONDS = 3
@@ -148,6 +163,8 @@ interface State extends Saved {
   resizeClip: (id: string, start: number, duration: number, sourceIn: number) => void
   splitAtPlayhead: () => void
   removeClips: (ids: string[]) => void
+  addTrack: (kind: 'video' | 'audio') => void
+  removeTrack: (id: string) => void
   groupClips: (ids: string[]) => void
   ungroupClips: (ids: string[]) => void
   clearAll: () => void
@@ -190,6 +207,10 @@ function loadSaved(): Saved {
         muted: clip.muted ?? false,
         opacity: clip.opacity ?? 1,
         zoom: clip.zoom ?? 1,
+        // Монтажи прежних версий не знали про размер и место в кадре.
+        size: clip.size ?? 1,
+        x: clip.x ?? 0.5,
+        y: clip.y ?? 0.5,
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
@@ -590,6 +611,46 @@ export const useCompose = create<State>((set, get) => ({
           ),
         })),
         selected: [],
+      }
+    })
+    save(get())
+  },
+
+  // --- дорожки -----------------------------------------------------------
+  /**
+   * Добавляет дорожку.
+   *
+   * Видеодорожка встаёт сверху и становится верхним слоем: так же она и
+   * нарисована, и так же собирается в файл. Звуковые живут ниже всех —
+   * слоёв у звука нет, он просто складывается.
+   */
+  addTrack(kind) {
+    set((state) => {
+      if (state.tracks.length >= MAX_TRACKS) return state
+      const track: ComposeTrack = { id: nextId(), kind, clips: [] }
+      return {
+        tracks: kind === 'video' ? [track, ...state.tracks] : [...state.tracks, track],
+      }
+    })
+    save(get())
+  },
+
+  /**
+   * Убирает дорожку вместе с тем, что на ней лежит.
+   *
+   * Последнюю дорожку своего вида не убираем: класть новые файлы стало бы
+   * некуда, и пустой таймлайн выглядел бы сломанным.
+   */
+  removeTrack(id) {
+    set((state) => {
+      const going = state.tracks.find((track) => track.id === id)
+      if (!going) return state
+      const same = state.tracks.filter((track) => track.kind === going.kind)
+      if (same.length <= 1) return state
+      const gone = going.clips.map((clip) => clip.id)
+      return {
+        tracks: state.tracks.filter((track) => track.id !== id),
+        selected: state.selected.filter((clip) => !gone.includes(clip)),
       }
     })
     save(get())

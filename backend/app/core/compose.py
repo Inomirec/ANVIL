@@ -71,15 +71,17 @@ def apply_crossfades(project: ComposeProject) -> None:
 def clips_at(project: ComposeProject, at: float, span: float) -> list[tuple[int, ComposeClip]]:
     """Клипы, попадающие в отрезок ``[at, at+span]``, снизу вверх по слоям.
 
-    Возвращает вместе с номером дорожки: он задаёт порядок наложения, а
-    внутри дорожки клипы не пересекаются.
+    Возвращает вместе с номером дорожки: он задаёт порядок наложения. Верхняя
+    дорожка на таймлайне — верхний слой в кадре, как в монтажных программах,
+    поэтому нижние дорожки идут первыми. Внутри одной дорожки выше тот клип,
+    который начинается позже.
     """
     found: list[tuple[int, ComposeClip]] = []
     for layer, track in enumerate(project.tracks):
         for clip in track.clips:
             if clip.start < at + span and clip.end > at:
                 found.append((layer, clip))
-    found.sort(key=lambda item: (item[0], item[1].start))
+    found.sort(key=lambda item: (-item[0], item[1].start))
     return found
 
 
@@ -119,6 +121,31 @@ def zoom_filter(clip: ComposeClip, width: int, height: int) -> str:
     big_w = max(2, int(width * clip.zoom) // 2 * 2)
     big_h = max(2, int(height * clip.zoom) // 2 * 2)
     return f",scale={big_w}:{big_h}:flags=lanczos,crop={width}:{height}"
+
+
+def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
+    """Во весь кадр или уменьшенной картинкой поверх нижнего слоя.
+
+    Клип во весь кадр вписывается как обычно — с чёрными полями, если форма
+    не совпала. Уменьшенному поля не нужны и вредны: чёрная рамка вокруг
+    накрыла бы то, что лежит под ним, а ради этого «картинку в картинке» и
+    делают. Приближение у уменьшенного клипа отрезает края у **исходника**,
+    до подгонки размера, — иначе картинку растянуло бы.
+    """
+    if clip.size >= 1.0:
+        return fit_filter(width, height, fps) + zoom_filter(clip, width, height)
+
+    box_w = _even(int(width * clip.size))
+    box_h = _even(int(height * clip.size))
+    parts: list[str] = []
+    if clip.zoom > 1.0:
+        parts.append(f"crop=iw/{clip.zoom:.3f}:ih/{clip.zoom:.3f}")
+    parts.append(
+        f"scale={box_w}:{box_h}:force_original_aspect_ratio=decrease:flags=lanczos"
+    )
+    parts.append("setsar=1")
+    parts.append(f"fps={fps}")
+    return ",".join(parts)
 
 
 def frame_alpha(clip: ComposeClip, moment: float) -> float:
@@ -256,7 +283,7 @@ def build_segment(
 
     inputs: list[str] = []
     chain: list[str] = []
-    video_labels: list[str] = []
+    video_labels: list[tuple[str, ComposeClip]] = []
     audio_labels: list[str] = []
 
     # Чёрный фон на всю длину отрезка. Он же отвечает за пустые места, где ни
@@ -285,12 +312,11 @@ def build_segment(
 
         if clip.kind != "audio":
             chain.append(
-                f"[{index}:v]{fit_filter(width, height, fps)}"
-                f"{zoom_filter(clip, width, height)}"
+                f"[{index}:v]{place_filter(clip, width, height, fps)}"
                 f"{video_fades(clip, at, take, moment=at if still else None)},"
                 f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
             )
-            video_labels.append(f"[v{index}]")
+            video_labels.append((f"[v{index}]", clip))
 
         # Звук берём и у роликов: иначе два видео подряд оказались бы немыми.
         # Только если он там действительно есть — ffmpeg на пустую дорожку
@@ -305,9 +331,15 @@ def build_segment(
     # Слои снизу вверх. eof_action=pass — кончившийся клип просто перестаёт
     # показываться, а не обрывает всю картинку.
     layer = "[bg]"
-    for number, label in enumerate(video_labels):
+    for number, (label, clip) in enumerate(video_labels):
         nxt = f"[s{number}]"
-        chain.append(f"{layer}{label}overlay=eof_action=pass:shortest=0{nxt}")
+        # Уменьшенный клип ставим туда, куда его поместили: доли 0..1 по обеим
+        # сторонам. Считаем от свободного места (W-w), поэтому 0 — вплотную к
+        # краю, 1 — к противоположному, и попасть в угол можно точно.
+        place = ""
+        if clip.size < 1.0:
+            place = f":x=(W-w)*{clip.x:.4f}:y=(H-h)*{clip.y:.4f}"
+        chain.append(f"{layer}{label}overlay=eof_action=pass:shortest=0{place}{nxt}")
         layer = nxt
 
     if audio_labels:
