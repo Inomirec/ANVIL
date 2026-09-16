@@ -1,24 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 
 /**
- * Мастер-шина: уровень звука в децибелах и громкость всего монтажа.
+ * Шина громкости: уровень звука в децибелах и громкость всего монтажа.
  *
  * Шкала показывает, насколько громким получится файл, — ради этого такая
- * штука и стоит в монтажных программах. Фейдер рядом меняет громкость всего
- * монтажа разом и влияет на готовый файл; громкость прослушивания живёт
- * отдельно, на панели под окном просмотра, и на файл не влияет.
+ * штука и стоит в монтажных программах. Фейдер меняет громкость всего
+ * монтажа и влияет на готовый файл; громкость прослушивания живёт отдельно,
+ * на панели под окном просмотра, и на файл не влияет.
+ *
+ * **Вид задаётся шириной, а не отдельной кнопкой.** Шину тянут за левую
+ * границу, и она показывает ровно столько, сколько помещается: сначала один
+ * ползунок с уровнем прямо на нём, потом полоски каналов с делениями, потом
+ * деления отдельной колонкой между каналами. Сжатая до упора — исчезает,
+ * оставляя полоску, за которую её возвращают обратно.
  *
  * Подписи делений нарисованы **внутри** шкалы: вынесенные наружу, они
  * занимали ширину, которой у шины и так немного.
- *
- * Вид выбирается человеком — места под окном просмотра всем нужно разное:
- *
- * * ``off`` — шины нет вовсе, всё место отдано кадру;
- * * ``fader`` — одна колонка: ползунок громкости, и уровень нарисован прямо
- *   на нём, без отдельных полосок сбоку;
- * * ``meters`` — ползунок, рядом две полоски каналов с делениями на них;
- * * ``vegas`` — как в монтажных программах: ползунок, левый канал, деления
- *   между каналами, правый канал.
  */
 
 /** Отметки шкалы, дБ. Ноль — потолок, ниже -60 уже ничего не разобрать. */
@@ -26,6 +23,17 @@ const MARKS = [0, -12, -24, -36, -48]
 const FLOOR = -60
 /** Сколько держится пиковая отметка, прежде чем поползёт вниз. */
 const PEAK_HOLD_MS = 1200
+
+/** Ширина шины: от полоски-ручки до полной раскладки. */
+export const METER_MIN = 7
+export const METER_MAX = 150
+export const METER_DEFAULT = 62
+/** Ниже этой ширины показывать нечего — остаётся только ручка. */
+const HIDDEN_BELOW = 18
+/** С этой ширины рядом с ползунком помещаются полоски каналов. */
+const CHANNELS_FROM = 46
+/** А с этой — деления встают отдельной колонкой между каналами. */
+const RULER_FROM = 74
 
 /** Доля высоты шкалы для уровня в децибелах. */
 function share(db: number): number {
@@ -38,26 +46,13 @@ export interface MeterLevels {
   right: number
 }
 
-/** Вид мастер-шины. */
-export type MeterView = 'off' | 'fader' | 'meters' | 'vegas'
-
-/** Подписи видов — для переключателя над окном просмотра. */
-export const METER_VIEWS: { value: MeterView; label: string }[] = [
-  { value: 'off', label: 'Шина: убрать' },
-  { value: 'fader', label: 'Шина: ползунок' },
-  { value: 'meters', label: 'Шина: со шкалой' },
-  { value: 'vegas', label: 'Шина: как в Vegas' },
-]
-
-/** Ширина шины под каждый вид. */
-const WIDTH: Record<MeterView, number> = { off: 0, fader: 42, meters: 62, vegas: 76 }
-
 export function MasterMeter({
   levels,
   master,
   onMaster,
   active,
-  view,
+  width,
+  onWidth,
 }: {
   /** Текущий уровень по каналам, дБ. */
   levels: MeterLevels
@@ -66,8 +61,9 @@ export function MasterMeter({
   onMaster: (value: number) => void
   /** Идёт ли воспроизведение — по нему гасим пики, когда всё остановлено. */
   active: boolean
-  /** Какой вид шины выбран. */
-  view: MeterView
+  /** Ширина шины в пикселях: её тянут за левую границу. */
+  width: number
+  onWidth: (value: number) => void
 }) {
   const [peaks, setPeaks] = useState<MeterLevels>({ left: FLOOR, right: FLOOR })
   const peakAt = useRef<{ left: number; right: number }>({ left: 0, right: 0 })
@@ -94,7 +90,25 @@ export function MasterMeter({
     if (!active) setPeaks({ left: FLOOR, right: FLOOR })
   }, [active])
 
-  if (view === 'off') return null
+  // Тянем за левую границу. Ширина считается от начала перетаскивания, а не
+  // от прошлого события: иначе она уползает, когда курсор обгоняет отрисовку.
+  const grab = useRef<{ from: number; width: number } | null>(null)
+  useEffect(() => {
+    const move = (event: MouseEvent) => {
+      if (!grab.current) return
+      const next = grab.current.width - (event.clientX - grab.current.from)
+      onWidth(Math.round(Math.min(METER_MAX, Math.max(METER_MIN, next))))
+    }
+    const drop = () => {
+      grab.current = null
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', drop)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', drop)
+    }
+  }, [onWidth])
 
   const fader = (
     <input
@@ -103,78 +117,96 @@ export function MasterMeter({
       max={200}
       value={Math.round(master * 100)}
       onChange={(event) => onMaster(Number(event.target.value) / 100)}
-      title={`Громкость монтажа ${Math.round(master * 100)}% — уходит в готовый файл`}
+      // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
+      // а понять потом, каким он был, — нет.
+      onDoubleClick={() => onMaster(1)}
+      title={`Громкость монтажа ${Math.round(master * 100)}% — уходит в готовый файл.
+Двойное нажатие вернёт 100%`}
       className="master-fader"
     />
   )
 
+  const shown = width >= HIDDEN_BELOW
+  const withChannels = width >= CHANNELS_FROM
+  const withRuler = width >= RULER_FROM
+
   return (
     <div
-      className="flex shrink-0 flex-col items-center border-l border-line-soft bg-surface px-1.5 py-2"
-      style={{ width: WIDTH[view] }}
+      className="relative flex shrink-0 flex-col items-center border-l border-line-soft bg-surface py-2"
+      style={{ width, paddingLeft: shown ? 6 : 0, paddingRight: shown ? 6 : 0 }}
     >
-      <div className="flex min-h-0 flex-1 items-stretch gap-1">
-        {view === 'fader' ? (
-          /* Всё в одной колонке: уровень нарисован под ползунком, деления
-             поверх него. Отдельных полосок сбоку нет — ради этого вид и
-             выбирают, когда места под окном просмотра мало. */
-          <div className="relative min-h-0 w-[22px] overflow-hidden rounded-sm bg-surface-3">
-            <Fill db={Math.max(levels.left, levels.right)} />
-            <Peak db={Math.max(peaks.left, peaks.right)} />
-            <Marks />
-            <input
-              type="range"
-              min={0}
-              max={200}
-              value={Math.round(master * 100)}
-              onChange={(event) => onMaster(Number(event.target.value) / 100)}
-              title={`Громкость монтажа ${Math.round(master * 100)}% — уходит в готовый файл`}
-              className="master-fader over-meter"
-            />
-          </div>
-        ) : view === 'vegas' ? (
-          /* Как в монтажных программах: ползунок, левый канал, деления между
-             каналами, правый канал. */
-          <>
-            {fader}
-            <div className="flex min-h-0 gap-[3px]">
-              <Channel db={levels.left} peak={peaks.left} />
-              <div className="relative w-[18px]">
-                {MARKS.map((db) => (
-                  <div
-                    key={db}
-                    className="absolute inset-x-0 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-ink-faint"
-                    style={{ top: `${(1 - share(db)) * 100}%`, transform: 'translateY(-50%)' }}
-                  >
-                    {db}
-                  </div>
-                ))}
-              </div>
-              <Channel db={levels.right} peak={peaks.right} />
-            </div>
-          </>
-        ) : (
-          <>
-            {fader}
-            {/* Полоски каналов с подписями делений прямо на них */}
-            <div className="relative flex min-h-0 gap-[3px]">
-              {(['left', 'right'] as const).map((side) => (
-                <Channel key={side} db={levels[side]} peak={peaks[side]} />
-              ))}
-              <Marks />
-            </div>
-          </>
-        )}
-      </div>
+      {/* Ручка на границе: за неё шину и тянут. */}
+      <div
+        className="absolute inset-y-0 left-0 z-10 w-[7px] cursor-col-resize hover:bg-accent/30"
+        title="Потяните, чтобы сделать шину шире или убрать её"
+        onMouseDown={(event) => {
+          event.preventDefault()
+          grab.current = { from: event.clientX, width }
+        }}
+        onDoubleClick={() => onWidth(width > HIDDEN_BELOW ? METER_MIN : METER_DEFAULT)}
+      />
 
-      <span
-        className={`mt-1 font-mono text-[10px] tabular-nums ${
-          master > 1 ? 'text-warn' : 'text-ink-faint'
-        }`}
-        title="Громкость монтажа"
-      >
-        {Math.round(master * 100)}%
-      </span>
+      {shown && (
+        <>
+          <div className="flex min-h-0 flex-1 items-stretch gap-1">
+            {withChannels ? (
+              <>
+                {fader}
+                <div className="relative flex min-h-0 gap-[3px]">
+                  <Channel db={levels.left} peak={peaks.left} />
+                  {withRuler && <Ruler />}
+                  <Channel db={levels.right} peak={peaks.right} />
+                  {!withRuler && <Marks />}
+                </div>
+              </>
+            ) : (
+              /* Совсем узкая шина: уровень нарисован прямо под ползунком. */
+              <div className="relative min-h-0 w-[22px] overflow-hidden rounded-sm bg-surface-3">
+                <Fill db={Math.max(levels.left, levels.right)} />
+                <Peak db={Math.max(peaks.left, peaks.right)} />
+                <Marks />
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  value={Math.round(master * 100)}
+                  onChange={(event) => onMaster(Number(event.target.value) / 100)}
+                  onDoubleClick={() => onMaster(1)}
+                  title={`Громкость монтажа ${Math.round(master * 100)}%.
+Двойное нажатие вернёт 100%`}
+                  className="master-fader over-meter"
+                />
+              </div>
+            )}
+          </div>
+
+          <span
+            className={`mt-1 font-mono text-[10px] tabular-nums ${
+              master > 1 ? 'text-warn' : 'text-ink-faint'
+            }`}
+            title="Громкость монтажа"
+          >
+            {Math.round(master * 100)}%
+          </span>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Деления отдельной колонкой — между каналами, когда места хватает. */
+function Ruler() {
+  return (
+    <div className="relative w-[18px]">
+      {MARKS.map((db) => (
+        <div
+          key={db}
+          className="absolute inset-x-0 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-ink-faint"
+          style={{ top: `${(1 - share(db)) * 100}%`, transform: 'translateY(-50%)' }}
+        >
+          {db}
+        </div>
+      ))}
     </div>
   )
 }

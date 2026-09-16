@@ -22,7 +22,7 @@ import {
 } from '../composeStore'
 import { useStore } from '../store'
 import {
-  AUDIO_HEIGHT,
+  COMPACT_HEIGHT,
   ComposeTimeline,
   RULER_HEIGHT,
   TOOLBAR_HEIGHT,
@@ -30,7 +30,7 @@ import {
 } from './ComposeTimeline'
 import { ComposeProjects } from './ComposeProjects'
 import { FolderPicker } from './FolderPicker'
-import { MasterMeter, METER_VIEWS, type MeterView } from './MasterMeter'
+import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Empty, IconButton, Segmented, Select, Toggle } from './ui'
 
@@ -83,6 +83,7 @@ export function ComposeTab() {
   const clearAll = useCompose((state) => state.clearAll)
   const renderIn = useCompose((state) => state.renderIn)
   const renderOut = useCompose((state) => state.renderOut)
+  const compact = useCompose((state) => state.compact)
   const masterVolume = useCompose((state) => state.masterVolume)
   const setMasterVolume = useCompose((state) => state.setMasterVolume)
   const loudnorm = useCompose((state) => state.loudnorm)
@@ -114,11 +115,12 @@ export function ComposeTab() {
   // середину. Выбор запоминается — включают её обычно надолго.
   const [grid, setGrid] = useState(() => localStorage.getItem('sgh.composeGrid') === '1')
   const [snapping, setSnapping] = useState(false)
-  // Вид мастер-шины: места под окном просмотра всем нужно разное, поэтому
-  // выбор за человеком. Запоминаем — меняют его один раз и надолго.
-  const [meterView, setMeterView] = useState<MeterView>(
-    () => (localStorage.getItem('sgh.composeMeter') as MeterView) || 'meters',
-  )
+  // Ширина шины громкости: её тянут за границу, и от ширины зависит, что на
+  // ней помещается. Запоминаем — настраивают это один раз и надолго.
+  const [meterWidth, setMeterWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('sgh.composeMeter'))
+    return Number.isFinite(saved) && saved > 0 ? saved : METER_DEFAULT
+  })
 
   const duration = tracks.reduce(
     (longest, track) =>
@@ -292,16 +294,14 @@ export function ComposeTab() {
   }
 
   // Высота таймлайна растёт вместе с числом дорожек, но до предела: кадр в
-  // окне просмотра важнее, и отдавать ему меньше половины окна нельзя.
+  // окне просмотра важнее, и отдавать ему меньше половины окна нельзя. Сжатые
+  // дорожки занимают втрое меньше — ради этого их и сжимают.
   const timelineHeight = Math.min(
     380,
     TOOLBAR_HEIGHT +
       RULER_HEIGHT +
       12 +
-      tracks.reduce(
-        (sum, track) => sum + (track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT),
-        0,
-      ),
+      tracks.length * (compact ? COMPACT_HEIGHT : TRACK_HEIGHT),
   )
 
   const videoPresets = presets.video ?? []
@@ -414,23 +414,6 @@ export function ComposeTab() {
                   <option value="720">Просмотр: 720p</option>
                 </select>
 
-                <select
-                  value={meterView}
-                  onChange={(event) => {
-                    const value = event.target.value as MeterView
-                    setMeterView(value)
-                    localStorage.setItem('sgh.composeMeter', value)
-                  }}
-                  title="Как показывать громкость монтажа справа от кадра"
-                  className="h-8 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim outline-none hover:text-ink focus:border-accent"
-                >
-                  {METER_VIEWS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-
                 <IconButton
                   title="Сохранить кадр картинкой"
                   onClick={() => void grabFrame()}
@@ -505,7 +488,11 @@ export function ComposeTab() {
             master={masterVolume}
             onMaster={setMasterVolume}
             active={player.playing}
-            view={meterView}
+            width={meterWidth}
+            onWidth={(value) => {
+              setMeterWidth(value)
+              localStorage.setItem('sgh.composeMeter', String(value))
+            }}
           />
         </div>
 

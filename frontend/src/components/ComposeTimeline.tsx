@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import {
   FlagTriangleLeft,
   FlagTriangleRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Headphones,
   Layers,
   Link2,
@@ -27,6 +29,8 @@ import {
   MAX_TRACKS,
   MIN_CLIP_SECONDS,
   snap,
+  trackColor,
+  trackNumber,
   useCompose,
   type ComposeClip,
   type ComposeTrack,
@@ -47,6 +51,16 @@ const PLAYHEAD_SNAP = 6
 /** Высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
 export const TRACK_HEIGHT = 74
 export const AUDIO_HEIGHT = 74
+/** Сжатые дорожки: когда их много, а места мало. Клавиша «Ё». */
+export const COMPACT_HEIGHT = 26
+/** Ширина колонки с названиями дорожек по умолчанию и её пределы. */
+export const HEAD_DEFAULT = 150
+const HEAD_MIN = 24
+const HEAD_MAX = 320
+/** С этой ширины в колонке помещается название. */
+const NAME_FROM = 58
+/** А с этой — и ползунок уровня. */
+const LEVEL_FROM = 118
 /** Линейка времени над дорожками. */
 export const RULER_HEIGHT = 24
 /** Панель кнопок над таймлайном. */
@@ -57,7 +71,7 @@ const TAIL_SECONDS = 8
 const MAX_FADE_RATIO = 0.5
 
 type Drag =
-  | { kind: 'move'; ids: string[]; grab: number; lastAt: number }
+  | { kind: 'move'; ids: string[]; grab: number; lastAt: number; row: number }
   | { kind: 'level'; id: string; top: number; height: number }
   | { kind: 'edge'; id: string; side: 'left' | 'right'; clip: ComposeClip }
   | { kind: 'fade'; id: string; side: 'in' | 'out'; clip: ComposeClip }
@@ -107,12 +121,23 @@ export function ComposeTimeline({
   const removeClips = useCompose((state) => state.removeClips)
   const addTrack = useCompose((state) => state.addTrack)
   const removeTrack = useCompose((state) => state.removeTrack)
+  const renameTrack = useCompose((state) => state.renameTrack)
+  const setTrackLevel = useCompose((state) => state.setTrackLevel)
   const updateClip = useCompose((state) => state.updateClip)
   const markIn = useCompose((state) => state.markIn)
   const markOut = useCompose((state) => state.markOut)
   const clearMarks = useCompose((state) => state.clearMarks)
   const groupClips = useCompose((state) => state.groupClips)
   const ungroupClips = useCompose((state) => state.ungroupClips)
+
+  // Сжатые дорожки и ширина колонки с названиями — про то, как человеку
+  // удобно смотреть, а не про сам монтаж: в файл проекта это не идёт, но
+  // между запусками помнится.
+  const compact = useCompose((state) => state.compact)
+  const setCompact = useCompose((state) => state.setCompact)
+  const headWidth = useCompose((state) => state.headWidth)
+  const setHeadWidth = useCompose((state) => state.setHeadWidth)
+  const rowHeight = compact ? COMPACT_HEIGHT : TRACK_HEIGHT
 
   const [dropAt, setDropAt] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
@@ -144,6 +169,17 @@ export function ComposeTimeline({
       return Math.max(0, (clientX - box.left) / scale)
     },
     [scale],
+  )
+
+  /** Номер дорожки под курсором. Строки одной высоты, поэтому просто делим. */
+  const rowAt = useCallback(
+    (clientY: number) => {
+      const box = canvas.current?.getBoundingClientRect()
+      if (!box) return 0
+      const inside = clientY - box.top - RULER_HEIGHT
+      return Math.floor(inside / rowHeight)
+    },
+    [rowHeight],
   )
 
   // Обработчики висят на окне, поэтому берут всё нужное из хранилища сами:
@@ -201,6 +237,20 @@ export function ComposeTimeline({
       }
 
       if (current.kind === 'move') {
+        // Курсор ушёл на другую дорожку — переносим туда же и клипы. Дорожку
+        // запоминаем не по клипу, а отдельно: если переехать не удалось
+        // (внизу звук, а тащим картинку), клип должен остаться на месте, и
+        // повторять попытку на каждое движение мыши незачем.
+        const row = rowAt(event.clientY)
+        if (row !== current.row) {
+          state.shiftTracks(current.ids, row - current.row)
+          const after = useCompose.getState()
+          const moved = after.tracks.findIndex((track) =>
+            track.clips.some((clip) => clip.id === current.ids[0]),
+          )
+          if (moved >= 0) current.row = moved
+        }
+
         // Один клип липнет к соседям и к игле, у пачки прилипание только
         // мешало бы: у каждого клипа свои края, и к чему липнуть — непонятно.
         if (current.ids.length === 1) {
@@ -273,7 +323,7 @@ export function ComposeTimeline({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [secondsAt, marquee])
+  }, [secondsAt, marquee, rowAt])
 
   // Клавиши как в монтажных программах.
   useEffect(() => {
@@ -296,6 +346,11 @@ export function ComposeTimeline({
       } else if (key === 'u' || key === 'г') {
         event.preventDefault()
         ungroupClips(useCompose.getState().selected)
+      } else if (event.code === 'Backquote') {
+        // «Ё» сжимает дорожки: когда их много, важнее видеть все разом, чем
+        // разглядывать кадры на каждой.
+        event.preventDefault()
+        setCompact(!useCompose.getState().compact)
       } else if (event.key === ' ') {
         event.preventDefault()
         if (player.playing) player.stop()
@@ -449,6 +504,13 @@ export function ComposeTimeline({
         )}
 
         <div className="ml-auto flex items-center gap-1">
+          <IconButton
+            title="Сжать дорожки, чтобы поместились все (Ё)"
+            active={compact}
+            onClick={() => setCompact(!compact)}
+          >
+            {compact ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+          </IconButton>
           <IconButton title="Отдалить (колесо мыши)" onClick={() => setScale(scale / 1.4)}>
             <ZoomOut size={14} />
           </IconButton>
@@ -458,10 +520,25 @@ export function ComposeTimeline({
         </div>
       </div>
 
-      {/* Полотно */}
+      {/* Слева названия дорожек, справа само полотно. Прокручиваются они
+          вместе по высоте, а вбок — только полотно. */}
+      <div className="flex min-h-0 flex-1 overflow-y-auto">
+        <TrackHeads
+          tracks={tracks}
+          width={headWidth}
+          onWidth={setHeadWidth}
+          rowHeight={rowHeight}
+          onRename={renameTrack}
+          onLevel={setTrackLevel}
+          onMenu={(event, id) => {
+            event.preventDefault()
+            setTrackMenu({ x: event.clientX, y: event.clientY, id })
+          }}
+        />
+
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-x-auto overflow-y-auto"
+        className="min-h-0 min-w-0 flex-1 overflow-x-auto"
         onWheel={onWheel}
       >
         <div ref={canvas} style={{ width }} className="relative select-none">
@@ -483,18 +560,32 @@ export function ComposeTimeline({
               className={`relative border-b border-line-soft ${
                 track.kind === 'audio' ? 'bg-ok/5' : 'bg-surface-2/40'
               }`}
-              style={{ height: track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT }}
+              style={{ height: rowHeight }}
               onMouseDown={(event) => {
-                // Нажали по пустому месту дорожки — тянем рамку выделения.
                 if (event.button !== 0 || event.target !== event.currentTarget) return
                 const box = canvas.current?.getBoundingClientRect()
                 if (!box) return
-                select([])
-                drag.current = {
-                  kind: 'marquee',
-                  fromAt: secondsAt(event.clientX),
-                  fromY: event.clientY - box.top,
+                // Нажатие по любому пустому месту ставит иглу — и над клипом,
+                // и под ним, и между ними. Искать для этого узкую полоску
+                // линейки не нужно. Рамка выделения осталась на Ctrl.
+                if (event.ctrlKey || event.metaKey) {
+                  select([])
+                  drag.current = {
+                    kind: 'marquee',
+                    fromAt: secondsAt(event.clientX),
+                    fromY: event.clientY - box.top,
+                  }
+                  return
                 }
+                select([])
+                drag.current = { kind: 'playhead' }
+                setPlayhead(
+                  snap(
+                    secondsAt(event.clientX),
+                    clipEdges(tracks),
+                    PLAYHEAD_SNAP / scale,
+                  ),
+                )
               }}
               onContextMenu={(event) => {
                 if (event.target !== event.currentTarget) return
@@ -530,7 +621,7 @@ export function ComposeTimeline({
                   key={clip.id}
                   clip={clip}
                   scale={scale}
-                  height={track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT}
+                  height={rowHeight}
                   active={selected.includes(clip.id)}
                   onGrab={(event, where) => {
                     const state = useCompose.getState()
@@ -543,7 +634,13 @@ export function ComposeTimeline({
                     select(ids)
                     const at = secondsAt(event.clientX)
                     if (where === 'move') {
-                      drag.current = { kind: 'move', ids, grab: at - clip.start, lastAt: at }
+                      drag.current = {
+                        kind: 'move',
+                        ids,
+                        grab: at - clip.start,
+                        lastAt: at,
+                        row: rowAt(event.clientY),
+                      }
                     } else if (where === 'fadeIn' || where === 'fadeOut') {
                       drag.current = {
                         kind: 'fade',
@@ -620,6 +717,7 @@ export function ComposeTimeline({
           </div>
         </div>
       </div>
+      </div>
 
       {menu && (
         <ClipMenu
@@ -639,6 +737,154 @@ export function ComposeTimeline({
           tracks={tracks}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * Колонка с названиями дорожек — слева от полотна.
+ *
+ * У каждой дорожки свой цвет и номер: когда дорожек много, только по ним и
+ * понятно, где что. Название человек задаёт сам, по умолчанию его нет —
+ * пустая дорожка не должна кричать о себе. Ползунок задаёт уровень всей
+ * дорожки разом: у звука это громкость, у видео — насколько видно то, что на
+ * ней лежит.
+ *
+ * Колонку тянут за правую границу. Чем она уже, тем меньше в ней остаётся:
+ * сначала уходит ползунок, потом название, и остаются цвет с номером.
+ */
+function TrackHeads({
+  tracks,
+  width,
+  onWidth,
+  rowHeight,
+  onRename,
+  onLevel,
+  onMenu,
+}: {
+  tracks: ComposeTrack[]
+  width: number
+  onWidth: (value: number) => void
+  rowHeight: number
+  onRename: (id: string, name: string) => void
+  onLevel: (id: string, level: number) => void
+  onMenu: (event: React.MouseEvent, id: string) => void
+}) {
+  const grab = useRef<{ from: number; width: number } | null>(null)
+
+  useEffect(() => {
+    const move = (event: MouseEvent) => {
+      if (!grab.current) return
+      const next = grab.current.width + (event.clientX - grab.current.from)
+      onWidth(Math.round(Math.min(HEAD_MAX, Math.max(HEAD_MIN, next))))
+    }
+    const drop = () => {
+      grab.current = null
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', drop)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', drop)
+    }
+  }, [onWidth])
+
+  const roomy = width >= NAME_FROM
+  // В сжатых дорожках ползунок встаёт рядом с названием, поэтому места ему
+  // нужно больше: иначе от названия остаётся пара букв.
+  const narrow = rowHeight < TRACK_HEIGHT
+  const withLevel = width >= (narrow ? LEVEL_FROM + 40 : LEVEL_FROM)
+
+  return (
+    <div
+      className="relative shrink-0 border-r border-line bg-surface"
+      style={{ width }}
+    >
+      {/* Пустое место под линейкой: дорожки должны встать вровень с полотном. */}
+      <div style={{ height: RULER_HEIGHT }} className="border-b border-line-soft" />
+
+      {tracks.map((track) => {
+        const colour = trackColor(tracks, track.id)
+        const level = Math.round(track.level * 100)
+        return (
+          <div
+            key={track.id}
+            className="relative flex items-center gap-1.5 overflow-hidden border-b border-line-soft pr-1.5"
+            style={{ height: rowHeight }}
+            onContextMenu={(event) => onMenu(event, track.id)}
+          >
+            {/* Цветная полоса с номером — то, что остаётся при любой ширине. */}
+            <span
+              className="flex h-full w-[18px] shrink-0 items-center justify-center font-mono text-[10px] font-semibold text-black/70"
+              style={{ background: colour }}
+              title={track.kind === 'audio' ? 'Звуковая дорожка' : 'Видеодорожка'}
+            >
+              {trackNumber(tracks, track.id)}
+            </span>
+
+            {roomy && (
+              /* В обычной высоте название и ползунок стоят друг под другом, а
+                 в сжатой — в один ряд: на двадцать шесть пикселей два ряда не
+                 помещаются. */
+              <div
+                className={`flex min-w-0 flex-1 gap-1.5 ${
+                  narrow ? 'items-center' : 'flex-col justify-center py-1'
+                }`}
+              >
+                <input
+                  value={track.name ?? ''}
+                  onChange={(event) => onRename(track.id, event.target.value)}
+                  placeholder={track.kind === 'audio' ? 'Звук' : 'Видео'}
+                  title="Название дорожки"
+                  className={`min-w-0 truncate bg-transparent text-[11.5px] text-ink outline-none placeholder:text-ink-faint/60 ${
+                    narrow ? 'flex-1' : 'w-full'
+                  }`}
+                />
+                {withLevel && (
+                  <div
+                    className={`flex items-center gap-1.5 ${
+                      narrow ? 'w-[76px] shrink-0' : ''
+                    }`}
+                  >
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={level}
+                      onChange={(event) => onLevel(track.id, Number(event.target.value) / 100)}
+                      // Двойное нажатие возвращает обычный уровень: задеть
+                      // ползунок легко, а вспомнить, каким он был, — нет.
+                      onDoubleClick={() => onLevel(track.id, 1)}
+                      title={
+                        track.kind === 'audio'
+                          ? `Громкость дорожки ${level}%`
+                          : `Насколько видно эту дорожку: ${level}%`
+                      }
+                      className="min-w-0 flex-1"
+                    />
+                    {!narrow && (
+                      <span className="w-[30px] shrink-0 text-right font-mono text-[9.5px] tabular-nums text-ink-faint">
+                        {level}%
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* Граница, за которую колонку тянут. */}
+      <div
+        className="absolute inset-y-0 right-0 z-10 w-[5px] cursor-col-resize hover:bg-accent/30"
+        title="Потяните, чтобы сделать колонку шире или уже"
+        onMouseDown={(event) => {
+          event.preventDefault()
+          grab.current = { from: event.clientX, width }
+        }}
+        onDoubleClick={() => onWidth(width > HEAD_MIN ? HEAD_MIN : HEAD_DEFAULT)}
+      />
     </div>
   )
 }

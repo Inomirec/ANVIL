@@ -316,6 +316,11 @@ class ComposeTrack(ComposeModel):
     id: str
     kind: Literal["video", "audio"] = "video"
     clips: list[ComposeClip] = Field(default_factory=list)
+    #: Название дорожки. Пустое — человек его не задавал.
+    name: str = ""
+    #: Уровень всей дорожки: у звука это громкость, у видео — насколько видно
+    #: то, что на ней лежит. Умножается на то же самое у каждого клипа.
+    level: float = Field(default=1.0, ge=0.0, le=2.0)
 
 
 class ComposeProject(ComposeModel):

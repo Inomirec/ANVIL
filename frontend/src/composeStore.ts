@@ -65,6 +65,37 @@ export interface ComposeTrack {
   id: string
   kind: 'video' | 'audio'
   clips: ComposeClip[]
+  /** Название дорожки. Пустое — значит человек его не задавал. */
+  name?: string
+  /**
+   * Уровень всей дорожки: у звука это громкость, у видео — насколько видно
+   * то, что на ней лежит. Умножается на то же самое у каждого клипа.
+   */
+  level: number
+}
+
+/**
+ * Цвета дорожек.
+ *
+ * Видеодорожкам — мягкие тёплые, звуковым — холодные: с одного взгляда видно,
+ * где что, и дорожки не сливаются в одну кашу, когда их много.
+ */
+export const VIDEO_COLORS = ['#8b7bd8', '#c97fa8', '#d69a6a', '#7fa86b']
+export const AUDIO_COLORS = ['#5f9ea0', '#5f86bd', '#6fa8a0', '#7b8fc4']
+
+/** Цвет дорожки по её месту среди дорожек своего вида. */
+export function trackColor(tracks: ComposeTrack[], id: string): string {
+  const track = tracks.find((item) => item.id === id)
+  if (!track) return VIDEO_COLORS[0]
+  const among = tracks.filter((item) => item.kind === track.kind)
+  const place = among.findIndex((item) => item.id === id)
+  const palette = track.kind === 'audio' ? AUDIO_COLORS : VIDEO_COLORS
+  return palette[Math.max(0, place) % palette.length]
+}
+
+/** Номер дорожки среди своих: он и подписан слева, как в монтажных программах. */
+export function trackNumber(tracks: ComposeTrack[], id: string): number {
+  return tracks.findIndex((item) => item.id === id) + 1
 }
 
 /** Больше дорожек человеку не нужно, а таймлайн перестаёт помещаться. */
@@ -139,6 +170,10 @@ interface State extends Saved {
   selected: string[]
   /** Пикселей в секунде: масштаб таймлайна. */
   scale: number
+  /** Сжатые дорожки: когда их много, а места мало. */
+  compact: boolean
+  /** Ширина колонки с названиями дорожек. */
+  headWidth: number
 
   setQuality: (quality: number) => void
   setShape: (shape: string) => void
@@ -148,6 +183,8 @@ interface State extends Saved {
   setFps: (fps: number) => void
   setPlayhead: (at: number) => void
   setScale: (scale: number) => void
+  setCompact: (compact: boolean) => void
+  setHeadWidth: (width: number) => void
   select: (ids: string[]) => void
 
   setMasterVolume: (value: number) => void
@@ -165,6 +202,10 @@ interface State extends Saved {
   removeClips: (ids: string[]) => void
   addTrack: (kind: 'video' | 'audio') => void
   removeTrack: (id: string) => void
+  renameTrack: (id: string, name: string) => void
+  setTrackLevel: (id: string, level: number) => void
+  /** Переносит клипы на соседние дорожки: ``delta`` — на сколько вниз. */
+  shiftTracks: (ids: string[], delta: number) => void
   groupClips: (ids: string[]) => void
   ungroupClips: (ids: string[]) => void
   clearAll: () => void
@@ -189,8 +230,8 @@ function emptyProject(): Saved {
     turned: false,
     custom: false,
     tracks: [
-      { id: 'v1', kind: 'video', clips: [] },
-      { id: 'a1', kind: 'audio', clips: [] },
+      { id: 'v1', kind: 'video', clips: [], level: 1 },
+      { id: 'a1', kind: 'audio', clips: [], level: 1 },
     ],
     renderIn: null,
     renderOut: null,
@@ -214,6 +255,8 @@ function normalize(input: unknown): Saved {
     if (!data || !Array.isArray(data.tracks) || !data.tracks.length) return empty
     const tracks = data.tracks.map((track) => ({
       ...track,
+      // Дорожки прежних версий не знали про свой уровень.
+      level: track.level ?? 1,
       // Клипы из прежних версий не знали про громкость и затухания.
       clips: (track.clips ?? []).map((clip) => ({
         ...clip,
@@ -230,7 +273,7 @@ function normalize(input: unknown): Saved {
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
-      tracks.push({ id: 'a1', kind: 'audio', clips: [] })
+      tracks.push({ id: 'a1', kind: 'audio', clips: [], level: 1 })
     }
     return { ...empty, ...data, tracks }
   } catch {
@@ -347,11 +390,37 @@ function withGroups(tracks: ComposeTrack[], ids: string[]): string[] {
   return [...family]
 }
 
+/** Мелкая настройка окна: запоминаем, но в файл проекта не кладём. */
+function remember(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Приватный режим браузера — тогда просто не запомним.
+  }
+}
+
+function recall(key: string, fallback: number): number {
+  try {
+    const saved = Number(localStorage.getItem(key))
+    return Number.isFinite(saved) && saved > 0 ? saved : fallback
+  } catch {
+    return fallback
+  }
+}
+
 export const useCompose = create<State>((set, get) => ({
   ...loadSaved(),
   playhead: 0,
   selected: [],
   scale: 60,
+  compact: (() => {
+    try {
+      return localStorage.getItem('sgh.composeCompact') === '1'
+    } catch {
+      return false
+    }
+  })(),
+  headWidth: recall('sgh.composeHead', 150),
 
   setQuality(quality) {
     const { shape, turned } = get()
@@ -399,6 +468,18 @@ export const useCompose = create<State>((set, get) => ({
 
   setScale(scale) {
     set({ scale: Math.min(400, Math.max(4, scale)) })
+  },
+
+  // Как человеку удобно смотреть — не часть монтажа, поэтому в файл проекта
+  // это не идёт, но между запусками помнить надо.
+  setCompact(compact) {
+    set({ compact })
+    remember('sgh.composeCompact', compact ? '1' : '0')
+  },
+
+  setHeadWidth(headWidth) {
+    set({ headWidth })
+    remember('sgh.composeHead', String(headWidth))
   },
 
   select(ids) {
@@ -654,7 +735,7 @@ export const useCompose = create<State>((set, get) => ({
   addTrack(kind) {
     set((state) => {
       if (state.tracks.length >= MAX_TRACKS) return state
-      const track: ComposeTrack = { id: nextId(), kind, clips: [] }
+      const track: ComposeTrack = { id: nextId(), kind, clips: [], level: 1 }
       return {
         tracks: kind === 'video' ? [track, ...state.tracks] : [...state.tracks, track],
       }
@@ -679,6 +760,65 @@ export const useCompose = create<State>((set, get) => ({
         tracks: state.tracks.filter((track) => track.id !== id),
         selected: state.selected.filter((clip) => !gone.includes(clip)),
       }
+    })
+    save(get())
+  },
+
+  renameTrack(id, name) {
+    set((state) => ({
+      tracks: state.tracks.map((track) =>
+        track.id === id ? { ...track, name: name.slice(0, 60) } : track,
+      ),
+    }))
+    save(get())
+  },
+
+  setTrackLevel(id, level) {
+    set((state) => ({
+      tracks: state.tracks.map((track) =>
+        track.id === id ? { ...track, level: Math.min(2, Math.max(0, level)) } : track,
+      ),
+    }))
+    save(get())
+  },
+
+  /**
+   * Переносит клипы на соседние дорожки.
+   *
+   * Сдвигаем всех выбранных на одно и то же число дорожек, а не сваливаем их
+   * на одну: иначе разложенные по слоям клипы схлопнулись бы в кучу.
+   *
+   * Считаем отдельно по картинке и по звуку. Если хоть одной картинке
+   * переехать некуда — картинки не двигаются вовсе: половина переехала,
+   * половина осталась, и то, что было разложено по слоям, перепуталось. А вот
+   * звуку это не мешает: у ролика со звуком половинки лежат на разных
+   * дорожках, и картинка должна переезжать между слоями, даже когда звуковых
+   * дорожек всего одна и его звуку двигаться некуда.
+   */
+  shiftTracks(ids, delta) {
+    if (!delta || !ids.length) return
+    set((state) => {
+      const wanted: { clip: ComposeClip; kind: 'video' | 'audio'; to: number }[] = []
+      const stuck = new Set<'video' | 'audio'>()
+      for (const [index, track] of state.tracks.entries()) {
+        for (const clip of track.clips) {
+          if (!ids.includes(clip.id)) continue
+          const target = state.tracks[index + delta]
+          if (!target || target.kind !== track.kind) stuck.add(track.kind)
+          else wanted.push({ clip, kind: track.kind, to: index + delta })
+        }
+      }
+      const moves = wanted.filter((move) => !stuck.has(move.kind))
+      if (!moves.length) return state
+
+      const tracks = state.tracks.map((track, index) => ({
+        ...track,
+        clips: [
+          ...track.clips.filter((clip) => !moves.some((move) => move.clip.id === clip.id)),
+          ...moves.filter((move) => move.to === index).map((move) => move.clip),
+        ],
+      }))
+      return { tracks: settle(tracks) }
     })
     save(get())
   },
