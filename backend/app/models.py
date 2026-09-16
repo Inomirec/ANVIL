@@ -407,10 +407,33 @@ class ComposeSnapshotRequest(ComposeModel):
     output_name: str = "Монтаж"
 
 
+class ComposeRender(ComposeModel):
+    """Чем кодировать готовый монтаж.
+
+    Пресеты обычной обработки сюда не годятся: они про то, как ужать чужой
+    файл до веса пака, а монтаж человек собирает начисто и сам решает, что ему
+    нужно. Поэтому настройки заданы прямо здесь, а пресеты к ним человек
+    складывает свои.
+    """
+
+    video_codec: VideoCodec = "av1_svt"
+    #: Постоянное качество: меньше число — лучше картинка и больше файл.
+    crf: int = Field(default=24, ge=0, le=63)
+    #: Скорость кодирования: у AV1 это число, у H.264 — название пресета.
+    speed_preset: str = "5"
+    #: Кодировать на видеокарте. Подходящий кодировщик подбирается сам.
+    use_gpu: bool = False
+    audio_codec: AudioCodec = "opus"
+    audio_bitrate_kbps: int = Field(default=192, ge=16, le=512)
+    container: Container = "mp4"
+
+
 class ComposeBuildRequest(ComposeModel):
     """Сборка монтажа в готовый файл — обычной задачей в очереди."""
 
     project: ComposeProject
+    #: Чем кодировать. ``None`` — старое поведение через ``preset_id``.
+    render: ComposeRender | None = None
     #: Куда сохранить. ``None`` = подпапка рядом с первым файлом монтажа.
     output_dir: str | None = None
     #: Имя файла без расширения.

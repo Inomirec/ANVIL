@@ -265,6 +265,39 @@ async def remove_project(name: str) -> dict:
     return {"ok": True}
 
 
+#: Свои пресеты сборки лежат одним файлом рядом с настройками.
+def _presets_file() -> Path:
+    return paths.data_dir() / "compose-presets.json"
+
+
+@router.get("/render-presets")
+async def render_presets() -> dict:
+    """Пресеты сборки, которые человек сложил себе сам."""
+    target = _presets_file()
+    if not target.is_file():
+        return {"presets": []}
+    try:
+        data = json.loads(await asyncio.to_thread(target.read_text, "utf-8"))
+    except (OSError, ValueError):
+        return {"presets": []}
+    return {"presets": data if isinstance(data, list) else []}
+
+
+@router.put("/render-presets")
+async def save_render_presets(body: dict) -> dict:
+    """Записывает список своих пресетов целиком.
+
+    Содержимое не разбираем: набор настроек сборки меняется вместе с окном, и
+    заставлять сервер знать о каждом поле незачем.
+    """
+    presets_list = body.get("presets")
+    if not isinstance(presets_list, list):
+        raise HTTPException(400, "Список пресетов не разобран")
+    body_text = json.dumps(presets_list[:50], ensure_ascii=False, indent=1)
+    await asyncio.to_thread(_presets_file().write_text, body_text, "utf-8")
+    return {"saved": len(presets_list[:50])}
+
+
 @router.post("/snapshot")
 async def snapshot(request: ComposeSnapshotRequest) -> dict:
     """Сохраняет кадр монтажа под иглой картинкой — обычной задачей."""

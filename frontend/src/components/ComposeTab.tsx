@@ -8,6 +8,7 @@ import {
   Play,
   RotateCw,
   Search,
+  SlidersHorizontal,
   Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
@@ -30,6 +31,12 @@ import {
 } from './ComposeTimeline'
 import { ComposeFrameBox } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
+import {
+  ComposeRenderSettings,
+  DEFAULT_RENDER,
+  renderSummary,
+  type RenderSettings,
+} from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
@@ -92,13 +99,22 @@ export function ComposeTab() {
 
   const toast = useStore((state) => state.toast)
   const setQueueOpen = useStore((state) => state.setQueueOpen)
-  const presets = useStore((state) => state.presets)
   const settings = useStore((state) => state.settings)
 
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
   const [frameError, setFrameError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [presetId, setPresetId] = useState('pack_balanced')
+  // Чем кодировать готовый файл. Запоминаем: настраивают это редко, а
+  // собирают часто.
+  const [render, setRender] = useState<RenderSettings>(() => {
+    try {
+      const saved = localStorage.getItem('sgh.composeRender')
+      return saved ? { ...DEFAULT_RENDER, ...JSON.parse(saved) } : DEFAULT_RENDER
+    } catch {
+      return DEFAULT_RENDER
+    }
+  })
+  const [renderOpen, setRenderOpen] = useState(false)
   // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
   // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
   const [outputName, setOutputName] = useState('Монтаж')
@@ -241,7 +257,7 @@ export function ComposeTab() {
         },
         output_dir: outputDir,
         output_name: outputName.trim() || 'Монтаж',
-        preset_id: presetId,
+        render,
         start: renderIn,
         end: renderOut,
       })
@@ -315,7 +331,6 @@ export function ComposeTab() {
           .find((clip) => clip.id === selected[0] && clip.kind !== 'audio')
       : undefined
 
-  const videoPresets = presets.video ?? []
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
   // папка первого клипа плюс подпапка из настроек. Показываем её целиком:
   // «рядом с первым файлом» ничего не говорит, когда папок были десятки.
@@ -613,12 +628,22 @@ export function ComposeTab() {
           </div>
 
           <div className="space-y-3 border-t border-line-soft pt-4">
-            <Select
-              label="Насколько сильно жать"
-              value={presetId}
-              options={videoPresets.map((preset) => ({ value: preset.id, label: preset.label }))}
-              onChange={setPresetId}
-            />
+            {/* Чем кодировать — отдельным окном: настроек много, а смотрят их
+                редко. Под кнопкой написано, что получится. */}
+            <div>
+              <span className="label">Сборка</span>
+              <button
+                type="button"
+                onClick={() => setRenderOpen(true)}
+                className="field flex w-full items-center gap-2 text-left hover:border-line"
+              >
+                <SlidersHorizontal size={14} className="shrink-0 text-accent-soft" />
+                <span className="flex-1 text-[12.5px]">Настройки сборки</span>
+              </button>
+              <p className="mt-1 text-[11px] leading-snug text-ink-faint">
+                {renderSummary(render)}
+              </p>
+            </div>
 
             <Toggle
               checked={loudnorm}
@@ -703,6 +728,16 @@ export function ComposeTab() {
       </aside>
 
       <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
+
+      <ComposeRenderSettings
+        open={renderOpen}
+        onClose={() => setRenderOpen(false)}
+        value={render}
+        onChange={(next) => {
+          setRender(next)
+          localStorage.setItem('sgh.composeRender', JSON.stringify(next))
+        }}
+      />
 
       <FolderPicker
         open={pickingFolder}

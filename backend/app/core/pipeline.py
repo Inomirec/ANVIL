@@ -11,6 +11,7 @@ from ..models import (
     AudioOptions,
     ComposeBuildRequest,
     ComposeProject,
+    ComposeRender,
     ComposeSnapshotRequest,
     DownloadItem,
     DownloadRequest,
@@ -404,19 +405,37 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         else Path(config.load().resolved_workspace())
     )
 
-    preset = presets.get(request.preset_id or "pack_balanced") or {}
-    options = preset.get("options", {})
-    # Пресеты живут в тех же понятиях, что и обычное сжатие, поэтому команду
-    # кодека собираем их же кодом — монтаж не заводит свой список кодеков.
-    video = VideoOptions.model_validate(options.get("video", {}))
-    audio = AudioOptions.model_validate(options.get("audio", {}))
-    # Размер кадра задаёт проект, а не пресет: человек выбрал его сам.
-    video.max_height = 0
+    # Настройки сборки приходят от монтажа, а не из общего списка пресетов:
+    # там они про то, как ужать чужой файл до веса пака, а монтаж человек
+    # собирает начисто. Команду кодека всё равно собирает общий код — свой
+    # список кодеков монтаж не заводит.
+    render = request.render or ComposeRender()
+    label = f"{render.video_codec} · {render.audio_codec}"
+    video = VideoOptions(
+        codec=render.video_codec,
+        crf=render.crf,
+        speed_preset=render.speed_preset,
+        use_gpu=render.use_gpu,
+        container=render.container,
+        # Размер кадра и частоту задаёт проект, а не настройки сборки.
+        max_height=0,
+        max_fps=0,
+        # Число качества должно значить ровно то, что задано: подгонка под
+        # разрешение нужна пакам, а здесь она молча меняла бы картинку.
+        adapt_crf=False,
+    )
+    audio = AudioOptions(
+        codec=render.audio_codec,
+        bitrate_kbps=render.audio_bitrate_kbps,
+        # Выравнивание громкости у монтажа своё, на мастер-шине.
+        loudnorm=False,
+    )
+    suffix = render.container if render.container != "auto" else "mp4"
 
     async def runner(ctx: JobContext) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         stem = fsutil.sanitize_name(request.output_name, fallback="Монтаж")
-        output = fsutil.unique_path(directory / f"{stem}.mp4", reserve=True)
+        output = fsutil.unique_path(directory / f"{stem}.{suffix}", reserve=True)
         ctx.job.output = str(output)
         try:
             codec = encode.video_codec_args(video, encode.effective_crf(video, None))
@@ -442,7 +461,7 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         title=f"Монтаж · {clips} {'клип' if clips == 1 else 'клипов'}",
         runner=runner,
         pool="encode",
-        meta={"preset": preset.get("label", "Баланс"), "kind": "video", "compose": True},
+        meta={"preset": label, "kind": "video", "compose": True},
     )
 
 

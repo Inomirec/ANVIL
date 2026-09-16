@@ -162,6 +162,16 @@ export const api = {
     request<{ name: string; project: unknown }>(
       `/api/compose/projects/${encodeURIComponent(name)}`,
     ),
+  /** Свои наборы настроек сборки: лежат рядом с настройками программы. */
+  composeRenderPresets: () =>
+    request<{ presets: import('../components/ComposeRender').RenderPreset[] }>(
+      '/api/compose/render-presets',
+    ),
+  composeRenderPresetsSave: (presets: unknown[]) =>
+    request<{ saved: number }>('/api/compose/render-presets', {
+      method: 'PUT',
+      body: JSON.stringify({ presets }),
+    }),
   composeProjectRemove: (name: string) =>
     request<{ ok: boolean }>(`/api/compose/projects/${encodeURIComponent(name)}`, {
       method: 'DELETE',
