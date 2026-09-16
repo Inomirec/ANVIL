@@ -224,11 +224,28 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
         return ["-c:v", "copy"]
 
     quality = options.crf if crf is None else crf
+    rate = options.bitrate_kbps
+
+    def by_quality(flag: str = "-crf") -> list[str]:
+        """Чем задаём вес: качеством или битрейтом.
+
+        Качество — обычный случай: кодировщик сам решает, сколько потратить на
+        каждый кадр. Битрейт нужен, когда важен предсказуемый вес файла; тогда
+        сжатие идёт одним проходом с ограничением пика — двухпроходное здесь
+        не окупается, а времени занимает вдвое.
+        """
+        if rate <= 0:
+            return [flag, str(quality)]
+        return [
+            "-b:v", f"{rate}k",
+            "-maxrate", f"{int(rate * 1.5)}k",
+            "-bufsize", f"{rate * 2}k",
+        ]
 
     if codec == "av1_svt":
         return [
             "-c:v", "libsvtav1",
-            "-crf", str(quality),
+            *by_quality(),
             "-preset", str(options.speed_preset),
             # tune=0 оптимизирует под субъективное восприятие, а не под PSNR.
             "-svtav1-params", "tune=0",
@@ -241,8 +258,7 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
             # Пресеты SVT («6») NVENC не понимает — у него своя шкала p1..p7.
             "-preset", _gpu_preset(options.speed_preset),
             "-rc", "vbr",
-            "-cq", str(quality),
-            "-b:v", "0",
+            *(["-cq", str(quality), "-b:v", "0"] if rate <= 0 else ["-b:v", f"{rate}k"]),
             "-pix_fmt", "yuv420p",
         ]
 
@@ -266,11 +282,11 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
     if codec == "h264":
         return [
             "-c:v", "libx264",
-            "-crf", str(quality),
+            *by_quality(),
             "-preset", str(options.speed_preset or "fast"),
             # Профиль указываем только для сжатия с потерями: в режиме без
             # потерь x264 с ним просто не запускается.
-            *([] if quality == 0 else ["-profile:v", "high"]),
+            *([] if quality == 0 and rate <= 0 else ["-profile:v", "high"]),
             "-pix_fmt", "yuv420p",
         ]
 
@@ -288,15 +304,14 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
             "-c:v", "h264_nvenc",
             "-preset", _gpu_preset(options.speed_preset),
             "-rc", "vbr",
-            "-cq", str(quality),
-            "-b:v", "0",
+            *(["-cq", str(quality), "-b:v", "0"] if rate <= 0 else ["-b:v", f"{rate}k"]),
             "-pix_fmt", "yuv420p",
         ]
 
     if codec == "h265":
         return [
             "-c:v", "libx265",
-            "-crf", str(quality),
+            *by_quality(),
             "-preset", str(options.speed_preset or "medium"),
             # hvc1 нужен, чтобы файл открывался в плеерах Apple.
             "-tag:v", "hvc1",

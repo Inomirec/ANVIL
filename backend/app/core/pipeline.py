@@ -414,6 +414,7 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
     video = VideoOptions(
         codec=render.video_codec,
         crf=render.crf,
+        bitrate_kbps=render.bitrate_kbps,
         speed_preset=render.speed_preset,
         use_gpu=render.use_gpu,
         container=render.container,

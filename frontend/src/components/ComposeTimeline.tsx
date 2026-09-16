@@ -56,6 +56,8 @@ const GRIP_PIXELS = 10
 const FADE_CORNER = 18
 /** Игла липнет к краям клипов, но слабее, чем клипы друг к другу. */
 const PLAYHEAD_SNAP = 6
+/** Сдвиг, после которого нажатие считается протяжкой, а не щелчком. */
+const DRAG_START = 4
 /** Высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
 export const TRACK_HEIGHT = 74
 export const AUDIO_HEIGHT = 74
@@ -85,6 +87,12 @@ type Drag =
   | { kind: 'fade'; id: string; side: 'in' | 'out'; clip: ComposeClip }
   | { kind: 'playhead' }
   | { kind: 'marquee'; fromAt: number; fromY: number }
+  /**
+   * Нажали по пустому месту и ещё не понятно, чего хотят: короткое нажатие
+   * ставит иглу, нажатие с протяжкой обводит клипы рамкой. Решаем по тому,
+   * сдвинулась мышь или нет.
+   */
+  | { kind: 'pending'; fromAt: number; fromX: number; fromY: number }
   | null
 
 /**
@@ -209,6 +217,20 @@ export function ComposeTimeline({
         return
       }
 
+      if (current.kind === 'pending') {
+        const away =
+          Math.abs(event.clientX - current.fromX) + Math.abs(event.clientY - current.fromY)
+        if (away < DRAG_START) return
+        const box = canvas.current?.getBoundingClientRect()
+        drag.current = {
+          kind: 'marquee',
+          fromAt: current.fromAt,
+          fromY: current.fromY - (box?.top ?? 0),
+        }
+        state.select([])
+        return
+      }
+
       if (current.kind === 'marquee') {
         const box = canvas.current?.getBoundingClientRect()
         if (!box) return
@@ -313,6 +335,14 @@ export function ComposeTimeline({
 
     const onUp = () => {
       const current = drag.current
+      if (current?.kind === 'pending') {
+        // Мышь не сдвинулась — это было обычное нажатие: ставим иглу.
+        const state = useCompose.getState()
+        state.select([])
+        state.setPlayhead(
+          snap(current.fromAt, clipEdges(state.tracks), PLAYHEAD_SNAP / state.scale),
+        )
+      }
       if (current?.kind === 'marquee') {
         const area = marquee
         if (area) {
@@ -447,7 +477,7 @@ export function ComposeTimeline({
             <MusicTrack size={14} />
           </IconButton>
           <IconButton
-            title="Положить сплошной фон под иглу — под картинки с полями или под заставку"
+            title="Положить заливку под иглу: сплошной цвет под картинки с полями, под заставку или полосой поверх кадра"
             onClick={() => addColor('#101018')}
           >
             <PaintBucket size={14} />
@@ -595,35 +625,23 @@ export function ComposeTimeline({
           {tracks.map((track) => (
             <div
               key={track.id}
-              className={`relative border-b border-line-soft ${
-                track.kind === 'audio' ? 'bg-ok/5' : 'bg-surface-2/40'
-              }`}
+              className="relative border-b border-line-soft"
               style={{ height: rowHeight }}
               onMouseDown={(event) => {
                 if (event.button !== 0 || event.target !== event.currentTarget) return
                 const box = canvas.current?.getBoundingClientRect()
                 if (!box) return
                 // Нажатие по любому пустому месту ставит иглу — и над клипом,
-                // и под ним, и между ними. Искать для этого узкую полоску
-                // линейки не нужно. Рамка выделения осталась на Ctrl.
-                if (event.ctrlKey || event.metaKey) {
-                  select([])
-                  drag.current = {
-                    kind: 'marquee',
-                    fromAt: secondsAt(event.clientX),
-                    fromY: event.clientY - box.top,
-                  }
-                  return
+                // и под ним, и между ними: искать для этого узкую полоску
+                // линейки не нужно. А если нажать и потянуть, получится рамка
+                // выделения. Что человек хотел, видно по тому, сдвинулась ли
+                // мышь, поэтому решаем не сразу.
+                drag.current = {
+                  kind: 'pending',
+                  fromAt: secondsAt(event.clientX),
+                  fromX: event.clientX,
+                  fromY: event.clientY,
                 }
-                select([])
-                drag.current = { kind: 'playhead' }
-                setPlayhead(
-                  snap(
-                    secondsAt(event.clientX),
-                    clipEdges(tracks),
-                    PLAYHEAD_SNAP / scale,
-                  ),
-                )
               }}
               onContextMenu={(event) => {
                 if (event.target !== event.currentTarget) return
@@ -652,6 +670,17 @@ export function ComposeTimeline({
                 )
               }}
             >
+              {/* Полотно дорожки покрашено её же цветом и кончается там, где
+                  кончается монтаж. Раньше оно тянулось на весь запас справа, и
+                  казалось, что готовый файл будет длиннее, чем он есть. */}
+              <div
+                className="pointer-events-none absolute inset-y-0 left-0"
+                style={{
+                  width: Math.max(duration * scale, 0),
+                  background: `${trackColor(tracks, track.id)}1c`,
+                }}
+              />
+
               {[...track.clips]
                 .sort((a, b) => a.start - b.start)
                 .map((clip) => (
@@ -772,6 +801,7 @@ export function ComposeTimeline({
           onClose={() => setTrackMenu(null)}
           onRemove={() => removeTrack(trackMenu.id)}
           onAdd={addTrack}
+          onFill={() => addColor('#101018', trackMenu.id)}
           tracks={tracks}
         />
       )}
@@ -961,6 +991,7 @@ function TrackMenu({
   onClose,
   onRemove,
   onAdd,
+  onFill,
 }: {
   at: { x: number; y: number }
   trackId: string
@@ -968,6 +999,7 @@ function TrackMenu({
   onClose: () => void
   onRemove: () => void
   onAdd: (kind: 'video' | 'audio') => void
+  onFill: () => void
 }) {
   useEffect(() => {
     const close = () => onClose()
@@ -1008,6 +1040,8 @@ function TrackMenu({
       style={place}
       onContextMenu={(event) => event.preventDefault()}
     >
+      {item('Добавить заливку под иглой', onFill, track.kind !== 'video')}
+      <div className="my-1 h-px bg-line-soft" />
       {item('Добавить видеодорожку', () => onAdd('video'), tracks.length >= MAX_TRACKS)}
       {item('Добавить звуковую дорожку', () => onAdd('audio'), tracks.length >= MAX_TRACKS)}
       <div className="my-1 h-px bg-line-soft" />
@@ -1105,12 +1139,12 @@ function ClipMenu({
         clip.kind === 'audio' ? clip.volume === 1 : clip.opacity === 1,
       )}
 
-      {/* У фона свой цвет — менять его больше негде. */}
+      {/* У заливки свой цвет — менять его больше негде. */}
       {clip.kind === 'color' && (
         <>
           <div className="my-1 h-px bg-line-soft" />
           <label className="flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim">
-            Цвет фона
+            Цвет заливки
             <input
               type="color"
               value={clip.color ?? '#000000'}
@@ -1425,7 +1459,7 @@ function ClipBox({
       }}
     >
       {solid ? (
-        // У фона нет ни кадров, ни файла — показываем его собственный цвет.
+        // У заливки нет ни кадров, ни файла — показываем её собственный цвет.
         <div className="absolute inset-0" style={{ background: clip.color }} />
       ) : sound ? (
         <>

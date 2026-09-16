@@ -59,6 +59,8 @@ export function MasterMeter({
   active,
   width,
   onWidth,
+  loudnorm,
+  onLoudnorm,
 }: {
   /** Текущий уровень по каналам, дБ. */
   levels: MeterLevels
@@ -70,6 +72,9 @@ export function MasterMeter({
   /** Ширина шины в пикселях: её тянут за левую границу. */
   width: number
   onWidth: (value: number) => void
+  /** Включено ли выравнивание громкости — его видно прямо на шкале. */
+  loudnorm: boolean
+  onLoudnorm: (value: boolean) => void
 }) {
   const [peaks, setPeaks] = useState<MeterLevels>({ left: FLOOR, right: FLOOR })
   const peakAt = useRef<{ left: number; right: number }>({ left: 0, right: 0 })
@@ -164,6 +169,7 @@ export function MasterMeter({
                   {withRuler && <Ruler />}
                   <Channel db={levels.right} peak={peaks.right} />
                   {!withRuler && <Marks />}
+                  {loudnorm && <Target />}
                 </div>
               </>
             ) : (
@@ -172,6 +178,7 @@ export function MasterMeter({
                 <Fill db={Math.max(levels.left, levels.right)} />
                 <Peak db={Math.max(peaks.left, peaks.right)} />
                 <Marks />
+                {loudnorm && <Target />}
                 <input
                   type="range"
                   min={MIN_DB}
@@ -188,18 +195,68 @@ export function MasterMeter({
             )}
           </div>
 
+          {/* Подпись держим внутри ширины шины: длинная строка вроде
+              «+10,5 дБ» раздвигала колонку, и всё окно ехало. */}
           <span
-            className={`mt-1 font-mono text-[9.5px] tabular-nums ${
+            className={`mt-1 w-full overflow-hidden text-center font-mono text-[9px] leading-tight tabular-nums ${
               master > 1 ? 'text-warn' : 'text-ink-faint'
             }`}
-            title="Громкость монтажа"
+            title={`Громкость монтажа ${volumeLabel(master)}`}
           >
-            {volumeLabel(master)}
+            {shortLabel(master)}
           </span>
+
+          {/* Выравнивание: по нему сразу видно, включено ли оно и к чему оно
+              тянет звук. Без этого человек ставил галочку и не понимал,
+              случилось ли что-нибудь. */}
+          <button
+            type="button"
+            onClick={() => onLoudnorm(!loudnorm)}
+            title={
+              loudnorm
+                ? `Выравнивание включено: программа подтянет громкость готового файла к отметке ${TARGET_DB} дБ — тихие места станут громче, громкие тише.
+Нажмите, чтобы выключить`
+                : `Выровнять звук: громкость готового файла будет подтянута к отметке ${TARGET_DB} дБ, как на радио.
+Нажмите, чтобы включить`
+            }
+            className={`mt-1 w-full rounded px-0.5 py-[1px] text-center text-[8.5px] font-semibold uppercase tracking-wide transition-colors ${
+              loudnorm
+                ? 'bg-accent/25 text-accent-soft'
+                : 'text-ink-faint/70 hover:bg-surface-3 hover:text-ink-dim'
+            }`}
+          >
+            выровнять
+          </button>
         </>
       )}
     </div>
   )
+}
+
+/**
+ * К какой громкости тянет выравнивание.
+ *
+ * Это та же цель, что и при обычной обработке (-16 LUFS). Шкала показывает
+ * не LUFS, а мгновенный уровень, поэтому линия — ориентир, а не точное
+ * совпадение: звук будет колебаться вокруг неё.
+ */
+const TARGET_DB = -16
+
+function Target() {
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 border-t border-dashed border-accent-soft/80"
+      style={{ bottom: `${share(TARGET_DB) * 100}%` }}
+      title="Сюда выравнивание тянет громкость"
+    />
+  )
+}
+
+/** Короткая подпись громкости: в узкую колонку длинная не помещается. */
+function shortLabel(gain: number): string {
+  if (gain <= 0) return '−∞'
+  const db = gainToDb(gain)
+  return `${db > 0 ? '+' : ''}${Math.round(db)} дБ`
 }
 
 /** Деления отдельной колонкой — между каналами, когда места хватает. */

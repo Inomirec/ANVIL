@@ -59,6 +59,12 @@ export interface ComposeClip {
    */
   size: number
   /**
+   * Высота клипа в долях кадра, если её задали отдельно от ширины. Ноль —
+   * «как ширина»: клип сохраняет свою форму. Нужно, чтобы растянуть заливку
+   * полосой или прямоугольником любой формы.
+   */
+  sizeY?: number
+  /**
    * Где стоит середина клипа, в долях кадра: 0.5 — посередине. Значения за
    * пределами 0..1 допустимы: клип можно увести за край частично.
    */
@@ -115,8 +121,10 @@ export const MAX_PLACE = 2
 /** Не даёт увести клип совсем за пределы разумного. */
 export function clampPlace(patch: Partial<ComposeClip>): Partial<ComposeClip> {
   const fixed = { ...patch }
-  if (fixed.size !== undefined) {
-    fixed.size = Math.min(MAX_SIZE, Math.max(MIN_SIZE, fixed.size))
+  for (const side of ['size', 'sizeY'] as const) {
+    if (fixed[side] !== undefined && (fixed[side] as number) > 0) {
+      fixed[side] = Math.min(MAX_SIZE, Math.max(MIN_SIZE, fixed[side] as number))
+    }
   }
   for (const side of ['x', 'y'] as const) {
     if (fixed[side] !== undefined) {
@@ -259,7 +267,7 @@ interface State extends Saved {
   clearMarks: () => void
 
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
-  /** Кладёт сплошной фон под иглу — файла для этого не нужно. */
+  /** Кладёт заливку под иглу — файла для этого не нужно. */
   addColor: (color: string, trackId?: string) => string
   addPair: (video: Omit<ComposeClip, 'id'>, trackId?: string) => string
   updateClip: (id: string, patch: Partial<ComposeClip>) => void
@@ -338,6 +346,7 @@ function normalize(input: unknown): Saved {
         x: clip.x ?? 0.5,
         y: clip.y ?? 0.5,
         color: clip.color ?? '#000000',
+        sizeY: clip.sizeY ?? 0,
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
@@ -621,10 +630,10 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   /**
-   * Кладёт сплошной фон — от него не нужно ни файла, ни медиатеки.
+   * Кладёт заливку — от неё не нужно ни файла, ни медиатеки.
    *
-   * Встаёт под иглой на нижнюю видеодорожку: фон затем и нужен, чтобы лежать
-   * под остальным. Длина — как у картинки по умолчанию, дальше её тянут.
+   * Без дорожки встаёт на нижнюю видеодорожку: заливку чаще всего кладут под
+   * остальное. Длина — как у картинки по умолчанию, дальше её тянут.
    */
   addColor(color, trackId) {
     const state = get()
@@ -635,7 +644,7 @@ export const useCompose = create<State>((set, get) => ({
     return get().addClip(
       {
         source: '',
-        name: 'Фон',
+        name: 'Заливка',
         kind: 'color',
         color,
         start: Math.round(state.playhead * 100) / 100,
@@ -650,6 +659,7 @@ export const useCompose = create<State>((set, get) => ({
         opacity: 1,
         zoom: 1,
         size: 1,
+        sizeY: 0,
         x: 0.5,
         y: 0.5,
       },

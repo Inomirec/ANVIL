@@ -135,9 +135,16 @@ def is_placed(clip: ComposeClip) -> bool:
     """Двигали ли клип по кадру или меняли его размер."""
     return (
         abs(clip.size - 1.0) > 1e-6
+        or clip.size_y > 0
         or abs(clip.x - 0.5) > 1e-6
         or abs(clip.y - 0.5) > 1e-6
     )
+
+
+def clip_box(clip: ComposeClip, width: int, height: int) -> tuple[int, int]:
+    """Прямоугольник, в который кладём клип, в пикселях кадра."""
+    tall = clip.size_y if clip.size_y > 0 else clip.size
+    return _even(max(2, int(width * clip.size))), _even(max(2, int(height * tall)))
 
 
 def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
@@ -155,14 +162,15 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
     if not is_placed(clip):
         return fit_filter(width, height, fps) + zoom_filter(clip, width, height)
 
-    box_w = _even(max(2, int(width * clip.size)))
-    box_h = _even(max(2, int(height * clip.size)))
+    box_w, box_h = clip_box(clip, width, height)
     parts: list[str] = []
     if clip.zoom > 1.0:
         parts.append(f"crop=iw/{clip.zoom:.3f}:ih/{clip.zoom:.3f}")
-    parts.append(
-        f"scale={box_w}:{box_h}:force_original_aspect_ratio=decrease:flags=lanczos"
-    )
+    # Заливка занимает прямоугольник целиком: у сплошного цвета формы нет, и
+    # вписывать его с полями бессмысленно. Картинка и ролик форму сохраняют —
+    # растянутое лицо человек точно не заказывал.
+    fit = "" if clip.kind == "color" else ":force_original_aspect_ratio=decrease"
+    parts.append(f"scale={box_w}:{box_h}{fit}:flags=lanczos")
     parts.append("setsar=1")
     parts.append(f"fps={fps}")
     return ",".join(parts)
@@ -325,10 +333,12 @@ def build_segment(
             continue
 
         if clip.kind == "color":
-            # Сплошной фон рисует сам ffmpeg — файла у такого клипа нет.
+            # Заливку рисует сам ffmpeg — файла у такого клипа нет. Сразу в
+            # нужном размере: масштабировать сплошной цвет незачем.
+            box = clip_box(clip, width, height) if is_placed(clip) else (width, height)
             inputs += [
                 "-f", "lavfi", "-t", f"{take:.3f}",
-                "-i", f"color=c={clip.color}:s={width}x{height}:r={fps}",
+                "-i", f"color=c={clip.color}:s={box[0]}x{box[1]}:r={fps}",
             ]
         elif clip.kind == "image":
             # Картинка — один кадр; без -loop она исчезнет сразу же.

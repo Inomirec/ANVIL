@@ -10,6 +10,7 @@ import {
   Search,
   SlidersHorizontal,
   Trash2,
+  X,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, timecode } from '../lib/format'
@@ -29,7 +30,7 @@ import {
   TOOLBAR_HEIGHT,
   TRACK_HEIGHT,
 } from './ComposeTimeline'
-import { ComposeFrameBox } from './ComposeFrameBox'
+import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
 import {
   ComposeRenderSettings,
@@ -130,7 +131,10 @@ export function ComposeTab() {
   const [adding, setAdding] = useState(false)
   // Сетка поверх кадра, как в медиатеке: по ней видно, попадает ли важное в
   // середину. Выбор запоминается — включают её обычно надолго.
-  const [grid, setGrid] = useState(() => localStorage.getItem('sgh.composeGrid') === '1')
+  const [grid, setGrid] = useState<GridKind>(() => {
+    const saved = localStorage.getItem('sgh.composeGrid')
+    return GRIDS.some((item) => item.value === saved) ? (saved as GridKind) : 'none'
+  })
   const [snapping, setSnapping] = useState(false)
   // Ширина шины громкости: её тянут за границу, и от ширины зависит, что на
   // ней помещается. Запоминаем — настраивают это один раз и надолго.
@@ -412,18 +416,24 @@ export function ComposeTab() {
                   </IconButton>
                 </div>
 
-                <IconButton
-                  title="Сетка поверх кадра"
-                  active={grid}
-                  onClick={() => {
-                    setGrid((on) => {
-                      localStorage.setItem('sgh.composeGrid', on ? '0' : '1')
-                      return !on
-                    })
+                {/* Сетка — не только разметка для глаза: клип к её линиям
+                    прилипает, поэтому точное положение можно набрать мышью. */}
+                <select
+                  value={grid}
+                  onChange={(event) => {
+                    const value = event.target.value as GridKind
+                    setGrid(value)
+                    localStorage.setItem('sgh.composeGrid', value)
                   }}
+                  title="Разметка поверх кадра. К её линиям и к краям кадра клип прилипает, когда его двигают."
+                  className="h-8 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim outline-none hover:text-ink focus:border-accent"
                 >
-                  <Grid3x3 size={14} />
-                </IconButton>
+                  {GRIDS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
 
                 <select
                   value={String(player.quality)}
@@ -459,7 +469,7 @@ export function ComposeTab() {
               />
             ) : (
               <div
-                className="relative overflow-hidden rounded-lg bg-black shadow-xl ring-1 ring-line"
+                className="relative overflow-hidden bg-black shadow-xl ring-1 ring-line"
                 style={{
                   aspectRatio: `${width} / ${height}`,
                   // Кадр вписывается в свободное место и не растягивает окно:
@@ -491,17 +501,10 @@ export function ComposeTab() {
                 {/* Рамка выбранного клипа: за неё его двигают и меняют
                     размер прямо в кадре. Пока клип не выбран, рамки нет —
                     иначе она мешала бы просто смотреть. */}
-                {!player.playing && placing && <ComposeFrameBox clip={placing} />}
+                <ComposeGrid kind={grid} />
 
-                {/* Сетка по третям: по ней видно, что попадает в середину
-                    кадра, а что уедет к краю. */}
-                {grid && (
-                  <div className="pointer-events-none absolute inset-0">
-                    <div className="absolute inset-y-0 left-1/3 w-px bg-white/25" />
-                    <div className="absolute inset-y-0 left-2/3 w-px bg-white/25" />
-                    <div className="absolute inset-x-0 top-1/3 h-px bg-white/25" />
-                    <div className="absolute inset-x-0 top-2/3 h-px bg-white/25" />
-                  </div>
+                {!player.playing && placing && (
+                  <ComposeFrameBox clip={placing} grid={grid} />
                 )}
 
                 {player.error && (
@@ -519,6 +522,8 @@ export function ComposeTab() {
             master={masterVolume}
             onMaster={setMasterVolume}
             active={player.playing}
+            loudnorm={loudnorm}
+            onLoudnorm={setLoudnorm}
             width={meterWidth}
             onWidth={(value) => {
               setMeterWidth(value)
@@ -628,71 +633,74 @@ export function ComposeTab() {
           </div>
 
           <div className="space-y-3 border-t border-line-soft pt-4">
-            {/* Чем кодировать — отдельным окном: настроек много, а смотрят их
-                редко. Под кнопкой написано, что получится. */}
-            <div>
-              <span className="label">Сборка</span>
-              <button
-                type="button"
-                onClick={() => setRenderOpen(true)}
-                className="field flex w-full items-center gap-2 text-left hover:border-line"
-              >
-                <SlidersHorizontal size={14} className="shrink-0 text-accent-soft" />
-                <span className="flex-1 text-[12.5px]">Настройки сборки</span>
-              </button>
-              <p className="mt-1 text-[11px] leading-snug text-ink-faint">
-                {renderSummary(render)}
-              </p>
-            </div>
-
             <Toggle
               checked={loudnorm}
               onChange={setLoudnorm}
               label="Выровнять звук"
-              hint="Приводит громкость готового файла к единому уровню — та же настройка, что и при обычной обработке."
+              hint="Подтянет громкость готового файла к единому уровню: тихие места станут громче, громкие — тише. То же самое делают на радио, чтобы не крутить ручку от ролика к ролику. Отметка, к которой всё тянется, видна на шкале громкости."
             />
-
-            <label className="block">
-              <span className="label">Имя файла</span>
-              <input
-                className="field"
-                value={outputName}
-                onChange={(event) => setOutputName(event.target.value)}
-                placeholder="Монтаж"
-              />
-            </label>
-
-            <div>
-              <span className="label">Куда сохранить</span>
-              <button
-                type="button"
-                onClick={() => setPickingFolder(true)}
-                className="field flex w-full items-center gap-2 text-left hover:border-line"
-                title={outputDir ?? defaultOut ?? 'Папку выберет программа'}
-              >
-                <FolderOpen size={14} className="shrink-0 text-accent-soft" />
-                <span className="min-w-0 flex-1 truncate text-[11.5px]">
-                  {outputDir ?? defaultOut ?? 'Положите файл на таймлайн'}
-                </span>
-              </button>
-              {outputDir && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOutputDir(null)
-                    localStorage.removeItem('sgh.composeOut')
-                  }}
-                  className="mt-1 text-[11px] text-ink-faint hover:text-ink-dim"
-                >
-                  Вернуть папку рядом с исходником
-                </button>
-              )}
-            </div>
           </div>
         </div>
 
-        {/* Сборка — главная кнопка, остальное по краям значками: три кнопки в
-            ряд занимали треть панели, а нажимают из них обычно одну. */}
+        {/* Всё про готовый файл собрано в одном месте, над кнопкой сборки:
+            чем кодировать, как назвать и куда положить. Раньше это лежало
+            вперемешку с настройками кадра и читалось как чужое. */}
+        <div className="space-y-2 border-t border-line-soft px-4 py-3">
+          <div>
+            <button
+              type="button"
+              onClick={() => setRenderOpen(true)}
+              className="field flex w-full items-center gap-2 text-left hover:border-line"
+            >
+              <SlidersHorizontal size={14} className="shrink-0 text-accent-soft" />
+              <span className="flex-1 text-[12.5px]">Настройки сборки</span>
+            </button>
+            <p className="mt-1 text-[11px] leading-snug text-ink-faint">
+              {renderSummary(render)}
+            </p>
+          </div>
+
+          {/* Имя и папка — одной строкой: это про один и тот же файл. */}
+          <div className="flex items-center gap-2">
+            <input
+              className="field min-w-0 flex-1"
+              value={outputName}
+              onChange={(event) => setOutputName(event.target.value)}
+              placeholder="Монтаж"
+              title="Имя готового файла"
+            />
+            <button
+              type="button"
+              onClick={() => setPickingFolder(true)}
+              title={`Куда сохранить: ${outputDir ?? defaultOut ?? 'папку выберет программа'}`}
+              className="field flex w-[42px] shrink-0 items-center justify-center px-0 hover:border-line"
+            >
+              <FolderOpen size={15} className="text-accent-soft" />
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <p
+              className="min-w-0 flex-1 truncate text-[10.5px] text-ink-faint"
+              title={outputDir ?? defaultOut ?? undefined}
+            >
+              {outputDir ?? defaultOut ?? 'Положите файл на таймлайн'}
+            </p>
+            {outputDir && (
+              <button
+                type="button"
+                title="Вернуть папку рядом с первым файлом монтажа"
+                onClick={() => {
+                  setOutputDir(null)
+                  localStorage.removeItem('sgh.composeOut')
+                }}
+                className="shrink-0 rounded p-0.5 text-ink-faint hover:text-ink-dim"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+
         <div className="flex items-stretch gap-2 border-t border-line-soft px-4 py-3">
           {/* Монтаж запоминается сам, но только последний: чтобы вести
               несколько, их сохраняют под именами. */}
