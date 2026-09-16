@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import re
 import tempfile
 from pathlib import Path
@@ -13,11 +14,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from .. import paths
-from ..core import binaries, compose, pipeline
+from ..core import binaries, compose, fsutil, pipeline, trash
 from ..models import (
     ComposeBuildRequest,
     ComposeDraftRequest,
     ComposeFrameRequest,
+    ComposeProjectFile,
     ComposeSnapshotRequest,
 )
 from . import media
@@ -166,6 +168,101 @@ async def draft_file(name: str, request: Request) -> Response:
     if not target.is_file():
         raise HTTPException(404, "Просмотр уже удалён")
     return media.ranged_file(target, request)
+
+
+#: Расширение файла монтажа. Внутри обычный JSON — его можно открыть
+#: блокнотом, но своё расширение не даёт спутать его с чем-то ещё.
+_PROJECT_SUFFIX = ".sghproj"
+
+
+def _projects_dir() -> Path:
+    directory = paths.data_dir() / "projects"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _project_path(name: str) -> Path:
+    """Путь к файлу проекта по его имени.
+
+    Имя приходит от человека, поэтому чистим его тем же способом, что и имена
+    результатов, и приклеиваем расширение сами: так из имени не получится
+    выйти в чужую папку.
+    """
+    stem = fsutil.sanitize_name(name, fallback="Монтаж")
+    return _projects_dir() / f"{stem}{_PROJECT_SUFFIX}"
+
+
+@router.get("/projects")
+async def projects() -> dict:
+    """Список сохранённых монтажей, новые сверху."""
+    directory = _projects_dir()
+
+    def collect() -> list[dict]:
+        found = []
+        for item in directory.glob(f"*{_PROJECT_SUFFIX}"):
+            try:
+                data = json.loads(item.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            tracks = data.get("tracks") or []
+            found.append({
+                "name": item.stem,
+                "savedAt": item.stat().st_mtime,
+                "clips": sum(len(track.get("clips") or []) for track in tracks),
+            })
+        found.sort(key=lambda item: item["savedAt"], reverse=True)
+        return found
+
+    return {"folder": str(directory), "projects": await asyncio.to_thread(collect)}
+
+
+@router.post("/projects")
+async def save_project(request: ComposeProjectFile) -> dict:
+    """Сохраняет монтаж в файл под выбранным именем.
+
+    Содержимое не разбираем: то, что прислал интерфейс, так и ложится в файл.
+    Это нарочно — в монтаже есть поля, нужные только окну (масштаб таймлайна,
+    вид шины), и заставлять сервер знать о них незачем.
+    """
+    target = _project_path(request.name)
+    body = json.dumps(
+        {"format": "sigame-helper-compose", "version": 1, **request.project},
+        ensure_ascii=False,
+        indent=1,
+    )
+    await asyncio.to_thread(target.write_text, body, "utf-8")
+    return {"name": target.stem, "path": str(target)}
+
+
+@router.get("/projects/{name}")
+async def open_project(name: str) -> dict:
+    """Отдаёт сохранённый монтаж целиком."""
+    target = _project_path(name)
+    if not target.is_file():
+        raise HTTPException(404, "Такого монтажа нет — возможно, файл удалили")
+    try:
+        data = json.loads(await asyncio.to_thread(target.read_text, "utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, "Файл монтажа испорчен и не читается") from exc
+    return {"name": target.stem, "project": data}
+
+
+@router.delete("/projects/{name}")
+async def remove_project(name: str) -> dict:
+    """Убирает сохранённый монтаж.
+
+    Файл уходит в корзину — как и всё остальное, что программа удаляет: часа
+    работы человек лишаться не должен из-за промаха по кнопке. Если корзина
+    недоступна, удаляем обычным способом.
+    """
+    target = _project_path(name)
+    if not target.is_file():
+        raise HTTPException(404, "Такого монтажа нет")
+    try:
+        await asyncio.to_thread(trash.to_trash, target)
+    except OSError:
+        await asyncio.to_thread(target.unlink)
+    return {"ok": True}
 
 
 @router.post("/snapshot")

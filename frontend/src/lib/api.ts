@@ -150,6 +150,22 @@ export const api = {
   composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
   /** Снимок кадра монтажа — уходит в очередь, как «Сохранить кадр». */
   composeSnapshot: (payload: unknown) => post<Job>('/api/compose/snapshot', payload),
+
+  /** Сохранённые монтажи: список, сохранение, открытие и удаление. */
+  composeProjects: () =>
+    request<{ folder: string; projects: { name: string; savedAt: number; clips: number }[] }>(
+      '/api/compose/projects',
+    ),
+  composeProjectSave: (name: string, project: unknown) =>
+    post<{ name: string; path: string }>('/api/compose/projects', { name, project }),
+  composeProjectOpen: (name: string) =>
+    request<{ name: string; project: unknown }>(
+      `/api/compose/projects/${encodeURIComponent(name)}`,
+    ),
+  composeProjectRemove: (name: string) =>
+    request<{ ok: boolean }>(`/api/compose/projects/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
   /** Кусок монтажа для просмотра: собирается быстрым кодеком и кэшируется. */
   composeDraft: (payload: unknown) =>
     post<{ url: string; at: number; span: number; size: number }>('/api/compose/draft', payload),

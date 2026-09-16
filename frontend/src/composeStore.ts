@@ -169,12 +169,18 @@ interface State extends Saved {
   ungroupClips: (ids: string[]) => void
   clearAll: () => void
 
+  /** Монтаж целиком — для сохранения в файл. */
+  snapshot: () => Saved
+  /** Открыть сохранённый монтаж вместо нынешнего. */
+  loadProject: (data: unknown) => void
+
   duration: () => number
   findClip: (id: string | null) => { clip: ComposeClip; track: ComposeTrack } | null
 }
 
-function loadSaved(): Saved {
-  const empty: Saved = {
+/** Пустой монтаж — с него начинается и новый проект, и первый запуск. */
+function emptyProject(): Saved {
+  return {
     width: 1280,
     height: 720,
     fps: 30,
@@ -191,11 +197,21 @@ function loadSaved(): Saved {
     masterVolume: 1,
     loudnorm: false,
   }
+}
+
+/**
+ * Приводит прочитанный монтаж в порядок.
+ *
+ * Читаем мы и то, что программа сохранила сама, и файл проекта, который мог
+ * быть записан прежней версией, — в обоих случаях каких-то полей может не
+ * быть. Недостающее подставляем, а совсем непонятное отдаём пустым монтажом:
+ * лучше пустой таймлайн, чем окно, которое не открывается.
+ */
+function normalize(input: unknown): Saved {
+  const empty = emptyProject()
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return empty
-    const data = JSON.parse(raw) as Saved
-    if (!Array.isArray(data.tracks) || !data.tracks.length) return empty
+    const data = input as Saved
+    if (!data || !Array.isArray(data.tracks) || !data.tracks.length) return empty
     const tracks = data.tracks.map((track) => ({
       ...track,
       // Клипы из прежних версий не знали про громкость и затухания.
@@ -222,20 +238,31 @@ function loadSaved(): Saved {
   }
 }
 
+function loadSaved(): Saved {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return normalize(raw ? JSON.parse(raw) : null)
+  } catch {
+    return emptyProject()
+  }
+}
+
+/** Всё, что составляет монтаж: и для автосохранения, и для файла проекта. */
+function toSaved(state: State): Saved {
+  const {
+    width, height, fps, quality, shape, turned, custom, tracks,
+    renderIn, renderOut, masterVolume, loudnorm,
+  } = state
+  return {
+    width, height, fps, quality, shape, turned, custom, tracks,
+    renderIn, renderOut, masterVolume, loudnorm,
+  }
+}
+
 /** Монтаж запоминается сам: закрытое окно не должно стоить часа работы. */
 function save(state: State): void {
   try {
-    const {
-      width, height, fps, quality, shape, turned, custom, tracks,
-      renderIn, renderOut, masterVolume, loudnorm,
-    } = state
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        width, height, fps, quality, shape, turned, custom, tracks,
-        renderIn, renderOut, masterVolume, loudnorm,
-      }),
-    )
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSaved(state)))
   } catch {
     // Приватный режим браузера — тогда просто не запомним.
   }
@@ -709,6 +736,21 @@ export const useCompose = create<State>((set, get) => ({
       renderIn: null,
       renderOut: null,
     }))
+    save(get())
+  },
+
+  snapshot() {
+    return toSaved(get())
+  },
+
+  /**
+   * Открывает сохранённый монтаж вместо нынешнего.
+   *
+   * Игла и выделение при этом сбрасываются: в чужом монтаже они ничего не
+   * значат, а клипа, который был выбран, там может и не быть.
+   */
+  loadProject(data) {
+    set({ ...normalize(data), playhead: 0, selected: [] })
     save(get())
   },
 

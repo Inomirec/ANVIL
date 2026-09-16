@@ -4,6 +4,7 @@ import {
   Film,
   FolderOpen,
   Grid3x3,
+  Save,
   Play,
   RotateCw,
   Search,
@@ -27,6 +28,7 @@ import {
   TOOLBAR_HEIGHT,
   TRACK_HEIGHT,
 } from './ComposeTimeline'
+import { ComposeProjects } from './ComposeProjects'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_VIEWS, type MeterView } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
@@ -102,6 +104,8 @@ export function ComposeTab() {
     () => localStorage.getItem('sgh.composeOut') || null,
   )
   const [pickingFolder, setPickingFolder] = useState(false)
+  // Окно сохранённых монтажей: программа сама помнит только последний.
+  const [projectsOpen, setProjectsOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const player = useComposePlayer(videoRef)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
@@ -669,6 +673,12 @@ export function ComposeTab() {
             <Play size={15} />
             Собрать видео
           </Button>
+          {/* Монтаж запоминается сам, но только последний: чтобы вести
+              несколько, их сохраняют под именами. */}
+          <Button className="w-full" onClick={() => setProjectsOpen(true)}>
+            <Save size={14} />
+            Мои монтажи
+          </Button>
           <Button
             className="w-full"
             disabled={!clips}
@@ -683,6 +693,8 @@ export function ComposeTab() {
           </Button>
         </div>
       </aside>
+
+      <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
 
       <FolderPicker
         open={pickingFolder}

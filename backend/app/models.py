@@ -370,6 +370,18 @@ class ComposeDraftRequest(ComposeModel):
     height: int = Field(default=360, ge=144, le=1080)
 
 
+class ComposeProjectFile(ComposeModel):
+    """Сохранение монтажа в файл.
+
+    ``project`` — то, что прислал интерфейс, как есть. Разбирать его серверу
+    незачем: часть полей нужна только окну, а состав меняется вместе с
+    вкладкой.
+    """
+
+    name: str = "Монтаж"
+    project: dict
+
+
 class ComposeSnapshotRequest(ComposeModel):
     """Снимок кадра монтажа — то же, что «Сохранить кадр» в медиатеке.
 
