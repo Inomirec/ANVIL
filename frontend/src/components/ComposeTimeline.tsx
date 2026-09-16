@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   FlagTriangleLeft,
   FlagTriangleRight,
+  Headphones,
   Loader2,
   Music2,
+  Pause,
+  Play as PlayIcon,
+  Repeat,
   Scissors,
   Trash2,
   VolumeX,
@@ -64,11 +68,23 @@ type Drag =
 export function ComposeTimeline({
   onDropFile,
   adding,
+  player,
 }: {
   /** Файл притащили из медиатеки: путь, секунда и дорожка, куда его положили. */
   onDropFile: (path: string, at: number, trackId: string) => void
   /** Файл сейчас читается — показываем, что программа занята, а не висит. */
   adding: boolean
+  /** Управление просмотром: кнопки стоят здесь, рядом с остальными. */
+  player: {
+    playing: boolean
+    preparing: boolean
+    loop: boolean
+    setLoop: (value: boolean) => void
+    volume: number
+    setVolume: (value: number) => void
+    start: () => void
+    stop: () => void
+  }
 }) {
   const tracks = useCompose((state) => state.tracks)
   const playhead = useCompose((state) => state.playhead)
@@ -267,6 +283,10 @@ export function ComposeTimeline({
       } else if (key === 'u' || key === 'г') {
         event.preventDefault()
         ungroupClips(useCompose.getState().selected)
+      } else if (event.key === ' ') {
+        event.preventDefault()
+        if (player.playing) player.stop()
+        else player.start()
       } else if (event.key === 'Delete') {
         const ids = useCompose.getState().selected
         if (ids.length) removeClips(ids)
@@ -274,7 +294,7 @@ export function ComposeTimeline({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [splitAtPlayhead, removeClips, markIn, markOut, groupClips, ungroupClips])
+  }, [splitAtPlayhead, removeClips, markIn, markOut, groupClips, ungroupClips, player])
 
   /**
    * Колесо приближает и отдаляет — как в монтажных программах.
@@ -308,6 +328,42 @@ export function ComposeTimeline({
     <div className="flex h-full flex-col">
       {/* Панель инструментов */}
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-3">
+        <IconButton
+          title={player.playing ? 'Пауза' : 'Смотреть с иглы (пробел)'}
+          onClick={() => (player.playing ? player.stop() : player.start())}
+          active={player.playing}
+        >
+          {player.preparing ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : player.playing ? (
+            <Pause size={14} />
+          ) : (
+            <PlayIcon size={14} />
+          )}
+        </IconButton>
+        <IconButton
+          title="Повторять по кругу"
+          onClick={() => player.setLoop(!player.loop)}
+          active={player.loop}
+        >
+          <Repeat size={14} />
+        </IconButton>
+        {/* Громкость прослушивания: на готовый файл не влияет, поэтому стоит
+            здесь, рядом с кнопками просмотра, а не на мастер-шине. */}
+        <div className="flex w-[86px] items-center gap-1" title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}>
+          <Headphones size={13} className="shrink-0 text-ink-faint" />
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(player.volume * 100)}
+            onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
+            className="w-full"
+          />
+        </div>
+
+        <span className="mx-1 h-4 w-px bg-line-soft" />
+
         <IconButton title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
           <Scissors size={14} />
         </IconButton>

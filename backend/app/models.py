@@ -314,6 +314,12 @@ class ComposeProject(ComposeModel):
     width: int = Field(default=1280, ge=16, le=7680)
     height: int = Field(default=720, ge=16, le=4320)
     fps: int = Field(default=30, ge=1, le=120)
+    #: Громкость всего монтажа разом — фейдер мастер-шины. Влияет на готовый
+    #: файл, в отличие от громкости прослушивания.
+    master_volume: float = Field(default=1.0, ge=0.0, le=2.0)
+    #: Привести громкость готового файла к единому уровню (EBU R128) — то же
+    #: выравнивание, что и при обычной обработке.
+    loudnorm: bool = False
     tracks: list[ComposeTrack] = Field(default_factory=list)
 
     @property

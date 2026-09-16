@@ -95,6 +95,27 @@
   input[type='range']:disabled::-webkit-slider-thumb {
     background: var(--color-ink-faint);
   }
+
+  /* Фейдер мастер-шины стоит вертикально, как в монтажных программах:
+     громче — выше. */
+  input[type='range'].master-fader {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 16px;
+    height: auto;
+    align-self: stretch;
+  }
+  input[type='range'].master-fader::-webkit-slider-runnable-track {
+    width: 4px;
+    height: 100%;
+  }
+  input[type='range'].master-fader::-webkit-slider-thumb {
+    margin-top: 0;
+    margin-left: -5px;
+    width: 14px;
+    height: 10px;
+    border-radius: 3px;
+  }
 }
 
 @layer components {

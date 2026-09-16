@@ -37,6 +37,10 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     return Number.isFinite(saved) && saved > 0 ? Math.min(1, saved) : 0.8
   })
 
+  const [loop, setLoop] = useState(false)
+  const loopRef = useRef(false)
+  loopRef.current = loop
+
   const chunk = useRef<Chunk | null>(null)
   const ahead = useRef<Chunk | null>(null)
   const height = useRef(START_HEIGHT)
@@ -57,6 +61,10 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
       width: state.width,
       height: state.height,
       fps: state.fps,
+      // Громкость монтажа и выравнивание идут и в просмотр: иначе на слух
+      // он отличался бы от готового файла.
+      masterVolume: state.masterVolume,
+      loudnorm: state.loudnorm,
       tracks: state.tracks,
     }
   }, [])
@@ -114,7 +122,10 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     if (!element) return
     setError(null)
     setPreparing(true)
-    const at = useCompose.getState().playhead
+    const state = useCompose.getState()
+    // Метка начала отрезка задаёт и начало просмотра: смотреть то, что не
+    // попадёт в файл, обычно незачем.
+    const at = Math.max(state.playhead, state.renderIn ?? 0)
     const first = await fetchChunk(at)
     setPreparing(false)
     if (!first || !alive.current) return
@@ -136,8 +147,21 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   const onEnded = useCallback(async () => {
     const element = video.current
     if (!element) return
+    const state = useCompose.getState()
     const current = chunk.current
-    const nextAt = current ? current.at + current.span : 0
+    let nextAt = current ? current.at + current.span : 0
+
+    // Дошли до конца — с повтором начинаем сначала, с метки начала отрезка,
+    // если она стоит. Без повтора просто останавливаемся.
+    const finish = state.renderOut ?? state.duration()
+    if (nextAt >= finish - 0.05) {
+      if (!loopRef.current) {
+        stop()
+        return
+      }
+      nextAt = state.renderIn ?? 0
+      ahead.current = null
+    }
 
     let next = ahead.current
     if (!next) {
@@ -224,5 +248,8 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     }
   }, [])
 
-  return { playing, preparing, error, levels, volume, setVolume, start, stop, onEnded }
+  return {
+    playing, preparing, error, levels, volume, setVolume, loop, setLoop,
+    start, stop, onEnded,
+  }
 }

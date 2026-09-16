@@ -112,6 +112,10 @@ interface Saved {
   /** Метки отрезка сборки. ``null`` = собрать всё. */
   renderIn: number | null
   renderOut: number | null
+  /** Громкость всего монтажа — фейдер мастер-шины. Уходит в готовый файл. */
+  masterVolume: number
+  /** Выровнять громкость готового файла, как при обычной обработке. */
+  loudnorm: boolean
 }
 
 interface State extends Saved {
@@ -131,6 +135,8 @@ interface State extends Saved {
   setScale: (scale: number) => void
   select: (ids: string[]) => void
 
+  setMasterVolume: (value: number) => void
+  setLoudnorm: (value: boolean) => void
   markIn: () => void
   markOut: () => void
   clearMarks: () => void
@@ -165,6 +171,8 @@ function loadSaved(): Saved {
     ],
     renderIn: null,
     renderOut: null,
+    masterVolume: 1,
+    loudnorm: false,
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -196,11 +204,15 @@ function loadSaved(): Saved {
 /** Монтаж запоминается сам: закрытое окно не должно стоить часа работы. */
 function save(state: State): void {
   try {
-    const { width, height, fps, quality, shape, turned, custom, tracks, renderIn, renderOut } = state
+    const {
+      width, height, fps, quality, shape, turned, custom, tracks,
+      renderIn, renderOut, masterVolume, loudnorm,
+    } = state
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        width, height, fps, quality, shape, turned, custom, tracks, renderIn, renderOut,
+        width, height, fps, quality, shape, turned, custom, tracks,
+        renderIn, renderOut, masterVolume, loudnorm,
       }),
     )
   } catch {
@@ -332,6 +344,16 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   // --- метки отрезка сборки ---------------------------------------------
+  setMasterVolume(value) {
+    set({ masterVolume: Math.min(2, Math.max(0, value)) })
+    save(get())
+  },
+
+  setLoudnorm(value) {
+    set({ loudnorm: value })
+    save(get())
+  },
+
   markIn() {
     const { playhead, renderOut } = get()
     set({

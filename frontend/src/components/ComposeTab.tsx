@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Film, FolderOpen, Loader2, Pause, Play, RotateCw, Trash2 } from 'lucide-react'
+import { Film, FolderOpen, Play, RotateCw, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, timecode } from '../lib/format'
 import {
@@ -14,7 +14,7 @@ import { ComposeTimeline } from './ComposeTimeline'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
-import { Button, Empty, Segmented, Select } from './ui'
+import { Button, Empty, Segmented, Select, Toggle } from './ui'
 
 /**
  * Вкладка «Монтаж».
@@ -42,6 +42,10 @@ export function ComposeTab() {
   const clearAll = useCompose((state) => state.clearAll)
   const renderIn = useCompose((state) => state.renderIn)
   const renderOut = useCompose((state) => state.renderOut)
+  const masterVolume = useCompose((state) => state.masterVolume)
+  const setMasterVolume = useCompose((state) => state.setMasterVolume)
+  const loudnorm = useCompose((state) => state.loudnorm)
+  const setLoudnorm = useCompose((state) => state.setLoudnorm)
 
   const toast = useStore((state) => state.toast)
   const setQueueOpen = useStore((state) => state.setQueueOpen)
@@ -84,11 +88,16 @@ export function ComposeTab() {
       pending.current?.abort()
       const control = new AbortController()
       pending.current = control
-      const { width: w, height: h, fps, tracks: list } = useCompose.getState()
+      const view = useCompose.getState()
       api
         .composeFrame(
           {
-            project: { width: w, height: h, fps, tracks: list },
+            project: {
+              width: view.width,
+              height: view.height,
+              fps: view.fps,
+              tracks: view.tracks,
+            },
             at: playhead,
             preview_width: 960,
           },
@@ -162,9 +171,16 @@ export function ComposeTab() {
   async function build() {
     setBusy(true)
     try {
-      const { width: w, height: h, fps, tracks: list } = useCompose.getState()
+      const state = useCompose.getState()
       await api.composeBuild({
-        project: { width: w, height: h, fps, tracks: list },
+        project: {
+          width: state.width,
+          height: state.height,
+          fps: state.fps,
+          masterVolume: state.masterVolume,
+          loudnorm: state.loudnorm,
+          tracks: state.tracks,
+        },
         output_dir: outputDir,
         output_name: outputName.trim() || 'Монтаж',
         preset_id: presetId,
@@ -212,9 +228,19 @@ export function ComposeTab() {
               // после группировки или рамки их обычно несколько, и требовать
               // ровно одного значило бы «колесо иногда не работает».
               const state = useCompose.getState()
-              const picked = state.tracks
+              const visible = state.tracks
                 .flatMap((track) => track.clips)
-                .filter((clip) => state.selected.includes(clip.id) && clip.kind !== 'audio')
+                .filter((clip) => clip.kind !== 'audio')
+              // Ничего не выбрано — приближаем то, что сейчас в кадре: человек
+              // видит эту картинку перед собой и крутит колесо именно по ней,
+              // а лезть на таймлайн выделять её заранее незачем.
+              const picked = state.selected.length
+                ? visible.filter((clip) => state.selected.includes(clip.id))
+                : visible.filter(
+                    (clip) =>
+                      clip.start <= state.playhead &&
+                      clip.start + clip.duration > state.playhead,
+                  )
               if (!picked.length) return
               event.preventDefault()
               for (const clip of picked) {
@@ -260,28 +286,6 @@ export function ComposeTab() {
                   </p>
                 )}
 
-                {/* Кнопка просмотра поверх кадра — как в обычном плеере. */}
-                <button
-                  type="button"
-                  onClick={() => (player.playing ? player.stop() : void player.start())}
-                  className="group absolute inset-0 flex items-center justify-center"
-                  title={player.playing ? 'Остановить просмотр' : 'Посмотреть монтаж с иглы'}
-                >
-                  <span
-                    className={`flex h-14 w-14 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur transition-opacity ${
-                      player.playing ? 'opacity-0 group-hover:opacity-100' : 'opacity-85'
-                    }`}
-                  >
-                    {player.preparing ? (
-                      <Loader2 size={22} className="animate-spin" />
-                    ) : player.playing ? (
-                      <Pause size={22} />
-                    ) : (
-                      <Play size={22} className="ml-0.5" />
-                    )}
-                  </span>
-                </button>
-
                 {player.error && (
                   <p className="absolute inset-x-0 bottom-0 bg-danger/85 px-3 py-1.5 text-center text-[11px] text-white">
                     {player.error}
@@ -293,8 +297,8 @@ export function ComposeTab() {
 
           <MasterMeter
             levels={player.levels}
-            volume={player.volume}
-            onVolume={player.setVolume}
+            master={masterVolume}
+            onMaster={setMasterVolume}
             active={player.playing}
           />
         </div>
@@ -303,6 +307,7 @@ export function ComposeTab() {
         <div className="h-[220px] shrink-0 border-t border-line-soft bg-surface">
           <ComposeTimeline
             adding={adding}
+            player={player}
             onDropFile={(path, at, trackId) => void dropFile(path, at, trackId)}
           />
         </div>
@@ -401,6 +406,13 @@ export function ComposeTab() {
               value={presetId}
               options={videoPresets.map((preset) => ({ value: preset.id, label: preset.label }))}
               onChange={setPresetId}
+            />
+
+            <Toggle
+              checked={loudnorm}
+              onChange={setLoudnorm}
+              label="Выровнять звук"
+              hint="Приводит громкость готового файла к единому уровню — та же настройка, что и при обычной обработке."
             />
 
             <label className="block">

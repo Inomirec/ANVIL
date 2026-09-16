@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { Volume1, Volume2, VolumeX } from 'lucide-react'
 
 /**
- * Мастер-шина: уровень звука в децибелах и громкость прослушивания.
+ * Мастер-шина: уровень звука в децибелах и громкость всего монтажа.
  *
- * Показывает, насколько громким получится файл, — именно то, ради чего такая
- * шкала стоит в монтажных программах. Ползунок рядом меняет только громкость
- * в наушниках: на готовый файл он не влияет, поэтому уровень снимается **до**
- * него. Иначе, убавив звук у себя, человек увидел бы тихий монтаж и полез бы
- * его усиливать.
+ * Шкала показывает, насколько громким получится файл, — ради этого такая
+ * штука и стоит в монтажных программах. Фейдер рядом меняет громкость всего
+ * монтажа разом и влияет на готовый файл; громкость прослушивания живёт
+ * отдельно, на панели под окном просмотра, и на файл не влияет.
+ *
+ * Подписи делений нарисованы **внутри** шкалы: вынесенные наружу, они
+ * занимали ширину, которой у шины и так немного.
  */
 
 /** Отметки шкалы, дБ. Ноль — потолок, ниже -60 уже ничего не разобрать. */
-const MARKS = [0, -6, -12, -18, -24, -30, -36, -42, -48, -54, -60]
+const MARKS = [0, -12, -24, -36, -48]
 const FLOOR = -60
 /** Сколько держится пиковая отметка, прежде чем поползёт вниз. */
 const PEAK_HOLD_MS = 1200
@@ -30,15 +31,15 @@ export interface MeterLevels {
 
 export function MasterMeter({
   levels,
-  volume,
-  onVolume,
+  master,
+  onMaster,
   active,
 }: {
   /** Текущий уровень по каналам, дБ. */
   levels: MeterLevels
-  /** Громкость прослушивания, 0..1. */
-  volume: number
-  onVolume: (value: number) => void
+  /** Громкость всего монтажа, 0..2. Уходит в готовый файл. */
+  master: number
+  onMaster: (value: number) => void
   /** Идёт ли воспроизведение — по нему гасим пики, когда всё остановлено. */
   active: boolean
 }) {
@@ -67,54 +68,50 @@ export function MasterMeter({
     if (!active) setPeaks({ left: FLOOR, right: FLOOR })
   }, [active])
 
-  const Icon = volume <= 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2
-
   return (
-    <div className="flex w-[104px] shrink-0 flex-col border-l border-line-soft bg-surface px-2 py-2">
-      <span className="mb-1 text-center text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-        Уровень
-      </span>
+    <div className="flex w-[62px] shrink-0 flex-col items-center border-l border-line-soft bg-surface px-1.5 py-2">
+      <div className="flex min-h-0 flex-1 items-stretch gap-1">
+        {/* Фейдер громкости всего монтажа */}
+        <input
+          type="range"
+          min={0}
+          max={200}
+          value={Math.round(master * 100)}
+          onChange={(event) => onMaster(Number(event.target.value) / 100)}
+          title={`Громкость монтажа ${Math.round(master * 100)}% — уходит в готовый файл`}
+          className="master-fader"
+        />
 
-      <div className="flex min-h-0 flex-1 gap-1.5">
-        {/* Ползунок громкости прослушивания */}
-        <div className="flex w-5 flex-col items-center">
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(volume * 100)}
-            onChange={(event) => onVolume(Number(event.target.value) / 100)}
-            title={`Громкость прослушивания ${Math.round(volume * 100)}% — на готовый файл не влияет`}
-            className="master-volume"
-          />
-        </div>
-
-        {/* Шкала с подписями */}
-        <div className="relative w-6 shrink-0">
-          {MARKS.map((db) => (
-            <div
-              key={db}
-              className="absolute right-0 flex w-full items-center justify-end gap-0.5"
-              style={{ top: `${(1 - share(db)) * 100}%`, transform: 'translateY(-50%)' }}
-            >
-              <span className="font-mono text-[8px] tabular-nums text-ink-faint">{db}</span>
-              <span className="h-px w-1 bg-line" />
-            </div>
-          ))}
-        </div>
-
-        {/* Полоски каналов */}
-        <div className="flex min-h-0 flex-1 gap-1">
+        {/* Полоски каналов с подписями делений прямо на них */}
+        <div className="relative flex min-h-0 gap-[3px]">
           {(['left', 'right'] as const).map((side) => (
             <Channel key={side} db={levels[side]} peak={peaks[side]} />
           ))}
+
+          <div className="pointer-events-none absolute inset-0">
+            {MARKS.map((db) => (
+              <div
+                key={db}
+                className="absolute inset-x-0 flex items-center"
+                style={{ top: `${(1 - share(db)) * 100}%`, transform: 'translateY(-50%)' }}
+              >
+                <span className="w-full bg-black/45 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-white/70">
+                  {db}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="mt-1.5 flex items-center justify-center gap-1 text-[10px] text-ink-faint">
-        <Icon size={11} />
-        {Math.round(volume * 100)}%
-      </div>
+      <span
+        className={`mt-1 font-mono text-[10px] tabular-nums ${
+          master > 1 ? 'text-warn' : 'text-ink-faint'
+        }`}
+        title="Громкость монтажа"
+      >
+        {Math.round(master * 100)}%
+      </span>
     </div>
   )
 }
@@ -125,7 +122,7 @@ function Channel({ db, peak }: { db: number; peak: number }) {
   const loud = db > -6
   const hot = db > -1
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden rounded-sm bg-surface-3">
+    <div className="relative min-h-0 w-[9px] overflow-hidden rounded-sm bg-surface-3">
       <div
         className={`absolute inset-x-0 bottom-0 transition-[height] duration-75 ${
           hot ? 'bg-danger' : loud ? 'bg-warn' : 'bg-ok'

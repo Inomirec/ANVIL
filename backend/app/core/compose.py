@@ -299,10 +299,19 @@ def build_segment(
         layer = nxt
 
     if audio_labels:
-        chain.append(
+        mixed = (
             "".join(audio_labels)
-            + f"amix=inputs={len(audio_labels)}:normalize=0:duration=longest[aout]"
+            + f"amix=inputs={len(audio_labels)}:normalize=0:duration=longest"
         )
+        # Громкость всего монтажа и выравнивание — уже после смешивания:
+        # это про готовый файл целиком, а не про отдельные клипы. Порядок
+        # тот же, что и при обычной обработке: громкость до выравнивания,
+        # иначе loudnorm вернул бы её обратно и ползунок не делал бы ничего.
+        if abs(project.master_volume - 1.0) > 1e-6:
+            mixed += f",volume={project.master_volume:.3g}"
+        if project.loudnorm:
+            mixed += ",loudnorm=I=-16:TP=-1.5:LRA=11"
+        chain.append(mixed + "[aout]")
 
     args = [binaries.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y"]
     args += inputs
