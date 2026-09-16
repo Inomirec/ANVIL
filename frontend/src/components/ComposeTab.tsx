@@ -94,24 +94,20 @@ function SizeField({
 /**
  * Какие клипы приближает колесо и кнопки.
  *
- * Берём все выбранные, а не строго один: после группировки или рамки их
- * обычно несколько, и требовать ровно одного значило бы «приближение иногда
- * не работает». Ничего не выбрано — приближаем то, что сейчас в кадре: человек
- * видит эту картинку перед собой, и лезть на таймлайн выделять её незачем.
+ * Всё, что сейчас в кадре, и не важно, что выбрано на таймлайне. Приближение
+ * относится к картинке целиком: когда на экране два файла, а приближается один
+ * из них, получается не приближение, а перекос. Выделение тут ни при чём —
+ * человек смотрит в окно просмотра, а не на дорожки.
  */
-function zoomTargets(state: {
-  tracks: ComposeTrack[]
-  selected: string[]
-  playhead: number
-}): ComposeClip[] {
-  const visible = state.tracks
+function zoomTargets(state: { tracks: ComposeTrack[]; playhead: number }): ComposeClip[] {
+  return state.tracks
     .flatMap((track) => track.clips)
-    .filter((clip) => clip.kind !== 'audio')
-  return state.selected.length
-    ? visible.filter((clip) => state.selected.includes(clip.id))
-    : visible.filter(
-        (clip) => clip.start <= state.playhead && clip.start + clip.duration > state.playhead,
-      )
+    .filter(
+      (clip) =>
+        clip.kind !== 'audio' &&
+        clip.start <= state.playhead &&
+        clip.start + clip.duration > state.playhead,
+    )
 }
 
 /**
@@ -339,7 +335,7 @@ export function ComposeTab() {
   // Насколько приближено то, что сейчас в кадре. Показываем самое большое из
   // выбранных: иначе непонятно, почему картинка мыльная — приблизил колесом,
   // забыл, и следов на экране не осталось.
-  const zoomed = zoomTargets({ tracks, selected, playhead })
+  const zoomed = zoomTargets({ tracks, playhead })
   const zoom = zoomed.reduce((most, clip) => Math.max(most, clip.zoom), 1)
 
   /** Приближает или отдаляет всё, к чему сейчас относится колесо. */
@@ -432,10 +428,8 @@ export function ComposeTab() {
           <div
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-2/60 p-4"
             onWheel={(event) => {
-              // Колесо над кадром приближает выбранные картинки и видео — как
-              // в монтажных программах. Берём все выбранные, а не строго один:
-              // после группировки или рамки их обычно несколько, и требовать
-              // ровно одного значило бы «колесо иногда не работает».
+              // Колесо над кадром приближает всё, что сейчас в кадре: это
+              // приближение картинки целиком, а не одного файла из неё.
               const state = useCompose.getState()
               const picked = zoomTargets(state)
               if (!picked.length) return
@@ -465,8 +459,8 @@ export function ComposeTab() {
                     disabled={zoom <= 1}
                     title={
                       zoom > 1
-                        ? 'Приближение внутри картинки — нажмите, чтобы вернуть как было'
-                        : 'Приближение внутри картинки: обрезает её края. Колесо над кадром или эти кнопки. Размер клипа в кадре меняется рамкой на выбранном клипе'
+                        ? 'Приближение — нажмите, чтобы вернуть как было'
+                        : 'Приближение: обрезает края у всего, что сейчас в кадре. Колесо над кадром или эти кнопки. Размер отдельного клипа меняется рамкой на нём самом'
                     }
                     className={`inline-flex h-8 items-center gap-1 rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
                       zoom > 1
