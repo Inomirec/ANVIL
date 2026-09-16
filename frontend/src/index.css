@@ -116,6 +116,26 @@
     height: 10px;
     border-radius: 3px;
   }
+
+  /* Тот же фейдер, но лежащий поверх шкалы уровня: дорожка прозрачная,
+     потому что под ней и рисуется сам уровень. */
+  input[type='range'].master-fader.over-meter {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  input[type='range'].master-fader.over-meter::-webkit-slider-runnable-track {
+    width: 100%;
+    background: transparent;
+  }
+  input[type='range'].master-fader.over-meter::-webkit-slider-thumb {
+    margin-left: 0;
+    width: 100%;
+    height: 5px;
+    border-radius: 2px;
+    border-width: 1px;
+  }
 }
 
 @layer components {

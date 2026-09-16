@@ -22,7 +22,7 @@ import {
 import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
 import { FolderPicker } from './FolderPicker'
-import { MasterMeter } from './MasterMeter'
+import { MasterMeter, METER_VIEWS, type MeterView } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Empty, IconButton, Segmented, Select, Toggle } from './ui'
 
@@ -104,6 +104,11 @@ export function ComposeTab() {
   // середину. Выбор запоминается — включают её обычно надолго.
   const [grid, setGrid] = useState(() => localStorage.getItem('sgh.composeGrid') === '1')
   const [snapping, setSnapping] = useState(false)
+  // Вид мастер-шины: места под окном просмотра всем нужно разное, поэтому
+  // выбор за человеком. Запоминаем — меняют его один раз и надолго.
+  const [meterView, setMeterView] = useState<MeterView>(
+    () => (localStorage.getItem('sgh.composeMeter') as MeterView) || 'meters',
+  )
 
   const duration = tracks.reduce(
     (longest, track) =>
@@ -383,6 +388,23 @@ export function ComposeTab() {
                   <option value="720">Просмотр: 720p</option>
                 </select>
 
+                <select
+                  value={meterView}
+                  onChange={(event) => {
+                    const value = event.target.value as MeterView
+                    setMeterView(value)
+                    localStorage.setItem('sgh.composeMeter', value)
+                  }}
+                  title="Как показывать громкость монтажа справа от кадра"
+                  className="h-8 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim outline-none hover:text-ink focus:border-accent"
+                >
+                  {METER_VIEWS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+
                 <IconButton
                   title="Сохранить кадр картинкой"
                   onClick={() => void grabFrame()}
@@ -457,6 +479,7 @@ export function ComposeTab() {
             master={masterVolume}
             onMaster={setMasterVolume}
             active={player.playing}
+            view={meterView}
           />
         </div>
 
