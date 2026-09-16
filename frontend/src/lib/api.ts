@@ -148,6 +148,8 @@ export const api = {
     return response.blob()
   },
   composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
+  /** Снимок кадра монтажа — уходит в очередь, как «Сохранить кадр». */
+  composeSnapshot: (payload: unknown) => post<Job>('/api/compose/snapshot', payload),
   /** Кусок монтажа для просмотра: собирается быстрым кодеком и кэшируется. */
   composeDraft: (payload: unknown) =>
     post<{ url: string; at: number; span: number; size: number }>('/api/compose/draft', payload),

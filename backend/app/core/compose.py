@@ -330,7 +330,10 @@ def build_segment(
     args += ["-filter_complex", ";".join(chain), "-map", layer]
 
     if still:
-        args += ["-frames:v", "1", "-q:v", "3"]
+        args += ["-frames:v", "1"]
+        # Кадру окна просмотра хватает JPEG; снимок, который человек забирает
+        # себе, сохраняем PNG — для этого сюда и передают кодек.
+        args += codec or ["-q:v", "3"]
     else:
         if audio_labels:
             args += ["-map", "[aout]"]

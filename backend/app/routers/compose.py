@@ -14,7 +14,12 @@ from fastapi.responses import Response
 
 from .. import paths
 from ..core import binaries, compose, pipeline
-from ..models import ComposeBuildRequest, ComposeDraftRequest, ComposeFrameRequest
+from ..models import (
+    ComposeBuildRequest,
+    ComposeDraftRequest,
+    ComposeFrameRequest,
+    ComposeSnapshotRequest,
+)
 from . import media
 
 router = APIRouter(prefix="/api/compose", tags=["compose"])
@@ -161,6 +166,24 @@ async def draft_file(name: str, request: Request) -> Response:
     if not target.is_file():
         raise HTTPException(404, "Просмотр уже удалён")
     return media.ranged_file(target, request)
+
+
+@router.post("/snapshot")
+async def snapshot(request: ComposeSnapshotRequest) -> dict:
+    """Сохраняет кадр монтажа под иглой картинкой — обычной задачей."""
+    try:
+        project = await compose.prepare(request.project)
+    except FileNotFoundError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if not project.duration:
+        raise HTTPException(400, "На таймлайне пусто — нечего снимать")
+
+    try:
+        job = pipeline.submit_compose_frame(request, project)
+    except (PermissionError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return job.to_dict()
 
 
 @router.post("/build")

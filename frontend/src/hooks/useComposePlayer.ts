@@ -21,6 +21,14 @@ const MIN_HEIGHT = 288
 /** Дольше этого ждать первый кадр нельзя — берём качество помельче. */
 const SLOW_SECONDS = 2.5
 
+/**
+ * Качество просмотра. «Авто» начинает с середины и понижает само, если
+ * машина не успевает; остальные значения программа не трогает — человек
+ * выбрал и получил.
+ */
+export type PreviewQuality = 'auto' | 360 | 480 | 720
+const QUALITY_KEY = 'sgh.composeQuality'
+
 interface Chunk {
   url: string
   at: number
@@ -36,6 +44,15 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     const saved = Number(localStorage.getItem('sgh.composeVolume'))
     return Number.isFinite(saved) && saved > 0 ? Math.min(1, saved) : 0.8
   })
+
+  const [quality, setQuality] = useState<PreviewQuality>(() => {
+    const saved = localStorage.getItem(QUALITY_KEY)
+    return saved === '360' || saved === '480' || saved === '720'
+      ? (Number(saved) as PreviewQuality)
+      : 'auto'
+  })
+  const qualityRef = useRef<PreviewQuality>(quality)
+  qualityRef.current = quality
 
   const [loop, setLoop] = useState(false)
   const loopRef = useRef(false)
@@ -83,16 +100,18 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     async (at: number, mine: number): Promise<Chunk | null> => {
       const started = performance.now()
       try {
+        const asked = qualityRef.current
         const data = await api.composeDraft({
           project: snapshot(),
           at,
           span: CHUNK_SECONDS,
-          height: height.current,
+          height: asked === 'auto' ? height.current : asked,
         })
         // Собиралось долго — дальше берём кадр помельче. Человек этого не
-        // видит, зато просмотр перестаёт спотыкаться на слабой машине.
+        // видит, зато просмотр перестаёт спотыкаться на слабой машине. Если
+        // качество выбрано руками, ничего не подбираем: выбор есть выбор.
         const spent = (performance.now() - started) / 1000
-        if (spent > SLOW_SECONDS && height.current > MIN_HEIGHT) {
+        if (asked === 'auto' && spent > SLOW_SECONDS && height.current > MIN_HEIGHT) {
           height.current = Math.max(MIN_HEIGHT, Math.round(height.current / 1.5))
         }
         return { url: data.url, at: data.at, span: data.span }
@@ -255,6 +274,12 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     return () => clearInterval(timer)
   }, [playing, volume, video])
 
+  // Выбранное качество запоминается; «авто» начинает подбор заново.
+  useEffect(() => {
+    localStorage.setItem(QUALITY_KEY, String(quality))
+    height.current = quality === 'auto' ? START_HEIGHT : quality
+  }, [quality])
+
   // Громкость прослушивания меняется на ходу и запоминается.
   useEffect(() => {
     if (audio.current) audio.current.gain.gain.value = volume
@@ -272,6 +297,6 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
 
   return {
     playing, preparing, error, levels, volume, setVolume, loop, setLoop,
-    start, stop, onEnded,
+    quality, setQuality, start, stop, onEnded,
   }
 }

@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { Film, FolderOpen, Play, RotateCw, Trash2 } from 'lucide-react'
+import {
+  Camera,
+  Film,
+  FolderOpen,
+  Grid3x3,
+  Play,
+  RotateCw,
+  Search,
+  Trash2,
+} from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, timecode } from '../lib/format'
 import {
@@ -8,13 +17,37 @@ import {
   FRAME_SHAPES,
   useCompose,
   type ComposeClip,
+  type ComposeTrack,
 } from '../composeStore'
 import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
-import { Button, Empty, Segmented, Select, Toggle } from './ui'
+import { Button, Empty, IconButton, Segmented, Select, Toggle } from './ui'
+
+/**
+ * Какие клипы приближает колесо и кнопки.
+ *
+ * Берём все выбранные, а не строго один: после группировки или рамки их
+ * обычно несколько, и требовать ровно одного значило бы «приближение иногда
+ * не работает». Ничего не выбрано — приближаем то, что сейчас в кадре: человек
+ * видит эту картинку перед собой, и лезть на таймлайн выделять её незачем.
+ */
+function zoomTargets(state: {
+  tracks: ComposeTrack[]
+  selected: string[]
+  playhead: number
+}): ComposeClip[] {
+  const visible = state.tracks
+    .flatMap((track) => track.clips)
+    .filter((clip) => clip.kind !== 'audio')
+  return state.selected.length
+    ? visible.filter((clip) => state.selected.includes(clip.id))
+    : visible.filter(
+        (clip) => clip.start <= state.playhead && clip.start + clip.duration > state.playhead,
+      )
+}
 
 /**
  * Вкладка «Монтаж».
@@ -67,6 +100,10 @@ export function ComposeTab() {
   const player = useComposePlayer(videoRef)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
   const [adding, setAdding] = useState(false)
+  // Сетка поверх кадра, как в медиатеке: по ней видно, попадает ли важное в
+  // середину. Выбор запоминается — включают её обычно надолго.
+  const [grid, setGrid] = useState(() => localStorage.getItem('sgh.composeGrid') === '1')
+  const [snapping, setSnapping] = useState(false)
 
   const duration = tracks.reduce(
     (longest, track) =>
@@ -195,6 +232,47 @@ export function ComposeTab() {
     }
   }
 
+  // Насколько приближено то, что сейчас в кадре. Показываем самое большое из
+  // выбранных: иначе непонятно, почему картинка мыльная — приблизил колесом,
+  // забыл, и следов на экране не осталось.
+  const zoomed = zoomTargets({ tracks, selected, playhead })
+  const zoom = zoomed.reduce((most, clip) => Math.max(most, clip.zoom), 1)
+
+  /** Приближает или отдаляет всё, к чему сейчас относится колесо. */
+  function changeZoom(factor: number) {
+    const state = useCompose.getState()
+    const picked = zoomTargets(state)
+    for (const clip of picked) {
+      const next = Math.min(8, Math.max(1, factor === 0 ? 1 : clip.zoom * factor))
+      state.updateClip(clip.id, { zoom: Number(next.toFixed(3)) })
+    }
+  }
+
+  /** Сохраняет то, что сейчас в окне просмотра, картинкой. */
+  async function grabFrame() {
+    setSnapping(true)
+    try {
+      const view = useCompose.getState()
+      await api.composeSnapshot({
+        project: {
+          width: view.width,
+          height: view.height,
+          fps: view.fps,
+          tracks: view.tracks,
+        },
+        at: view.playhead,
+        outputDir: outputDir,
+        outputName: outputName || 'Монтаж',
+      })
+      toast('Кадр сохранён — в полном размере кадра проекта, без сжатия', 'ok')
+      setQueueOpen(true)
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    } finally {
+      setSnapping(false)
+    }
+  }
+
   const videoPresets = presets.video ?? []
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
   // папка первого клипа плюс подпапка из настроек. Показываем её целиком:
@@ -221,26 +299,14 @@ export function ComposeTab() {
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div
-            className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-surface-2/60 p-4"
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-2/60 p-4"
             onWheel={(event) => {
               // Колесо над кадром приближает выбранные картинки и видео — как
               // в монтажных программах. Берём все выбранные, а не строго один:
               // после группировки или рамки их обычно несколько, и требовать
               // ровно одного значило бы «колесо иногда не работает».
               const state = useCompose.getState()
-              const visible = state.tracks
-                .flatMap((track) => track.clips)
-                .filter((clip) => clip.kind !== 'audio')
-              // Ничего не выбрано — приближаем то, что сейчас в кадре: человек
-              // видит эту картинку перед собой и крутит колесо именно по ней,
-              // а лезть на таймлайн выделять её заранее незачем.
-              const picked = state.selected.length
-                ? visible.filter((clip) => state.selected.includes(clip.id))
-                : visible.filter(
-                    (clip) =>
-                      clip.start <= state.playhead &&
-                      clip.start + clip.duration > state.playhead,
-                  )
+              const picked = zoomTargets(state)
               if (!picked.length) return
               event.preventDefault()
               for (const clip of picked) {
@@ -249,6 +315,85 @@ export function ComposeTab() {
               }
             }}
           >
+            {/* Панель над кадром: сетка, приближение, качество и снимок.
+                Поверх картинки её ставить нельзя — кнопка посреди кадра
+                закрывает собой то, ради чего окно и нужно. */}
+            {clips > 0 && (
+              <div className="mb-2 flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                <div className="mr-auto flex items-center gap-1">
+                  <IconButton
+                    title="Отдалить"
+                    onClick={() => changeZoom(1 / 1.1)}
+                    disabled={!zoomed.length || zoom <= 1}
+                  >
+                    <span className="text-[13px] font-semibold">−</span>
+                  </IconButton>
+                  <button
+                    type="button"
+                    onClick={() => changeZoom(0)}
+                    disabled={zoom <= 1}
+                    title={
+                      zoom > 1
+                        ? 'Нажмите, чтобы вернуть обычный размер'
+                        : 'Приближение: колесо над кадром или эти кнопки'
+                    }
+                    className={`inline-flex h-8 items-center gap-1 rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
+                      zoom > 1
+                        ? 'bg-accent/20 text-accent-soft hover:bg-accent/30'
+                        : 'text-ink-faint'
+                    }`}
+                  >
+                    <Search size={12} />
+                    ×{zoom.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}
+                  </button>
+                  <IconButton
+                    title="Приблизить"
+                    onClick={() => changeZoom(1.1)}
+                    disabled={!zoomed.length || zoom >= 8}
+                  >
+                    <span className="text-[13px] font-semibold">+</span>
+                  </IconButton>
+                </div>
+
+                <IconButton
+                  title="Сетка поверх кадра"
+                  active={grid}
+                  onClick={() => {
+                    setGrid((on) => {
+                      localStorage.setItem('sgh.composeGrid', on ? '0' : '1')
+                      return !on
+                    })
+                  }}
+                >
+                  <Grid3x3 size={14} />
+                </IconButton>
+
+                <select
+                  value={String(player.quality)}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    player.setQuality(value === 'auto' ? 'auto' : (Number(value) as 360 | 480 | 720))
+                  }}
+                  title="Качество просмотра. На готовый файл не влияет — только на то, что видно здесь."
+                  className="h-8 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim outline-none hover:text-ink focus:border-accent"
+                >
+                  <option value="auto">Просмотр: авто</option>
+                  <option value="360">Просмотр: 360p</option>
+                  <option value="480">Просмотр: 480p</option>
+                  <option value="720">Просмотр: 720p</option>
+                </select>
+
+                <IconButton
+                  title="Сохранить кадр картинкой"
+                  onClick={() => void grabFrame()}
+                  disabled={snapping}
+                >
+                  <Camera size={14} />
+                </IconButton>
+              </div>
+            )}
+
+            <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden">
             {!clips ? (
               <Empty
                 icon={<Film size={44} />}
@@ -286,6 +431,17 @@ export function ComposeTab() {
                   </p>
                 )}
 
+                {/* Сетка по третям: по ней видно, что попадает в середину
+                    кадра, а что уедет к краю. */}
+                {grid && (
+                  <div className="pointer-events-none absolute inset-0">
+                    <div className="absolute inset-y-0 left-1/3 w-px bg-white/25" />
+                    <div className="absolute inset-y-0 left-2/3 w-px bg-white/25" />
+                    <div className="absolute inset-x-0 top-1/3 h-px bg-white/25" />
+                    <div className="absolute inset-x-0 top-2/3 h-px bg-white/25" />
+                  </div>
+                )}
+
                 {player.error && (
                   <p className="absolute inset-x-0 bottom-0 bg-danger/85 px-3 py-1.5 text-center text-[11px] text-white">
                     {player.error}
@@ -293,6 +449,7 @@ export function ComposeTab() {
                 )}
               </div>
             )}
+            </div>
           </div>
 
           <MasterMeter

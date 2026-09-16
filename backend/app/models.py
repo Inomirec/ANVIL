@@ -358,6 +358,22 @@ class ComposeDraftRequest(ComposeModel):
     height: int = Field(default=360, ge=144, le=1080)
 
 
+class ComposeSnapshotRequest(ComposeModel):
+    """Снимок кадра монтажа — то же, что «Сохранить кадр» в медиатеке.
+
+    Кадр берётся в полном размере проекта и сохраняется PNG без сжатия:
+    сжимать его, если понадобится, есть чем — обычной панелью картинок.
+    """
+
+    project: ComposeProject
+    #: Момент на таймлайне, в секундах.
+    at: float = Field(default=0.0, ge=0)
+    #: Куда сохранить. ``None`` = подпапка рядом с первым файлом монтажа.
+    output_dir: str | None = None
+    #: Имя файла без расширения; к нему приписывается время кадра.
+    output_name: str = "Монтаж"
+
+
 class ComposeBuildRequest(ComposeModel):
     """Сборка монтажа в готовый файл — обычной задачей в очереди."""
 

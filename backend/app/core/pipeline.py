@@ -11,6 +11,7 @@ from ..models import (
     AudioOptions,
     ComposeBuildRequest,
     ComposeProject,
+    ComposeSnapshotRequest,
     DownloadItem,
     DownloadRequest,
     ExportRequest,
@@ -315,6 +316,72 @@ def submit_frame_grab(request: FrameGrabRequest) -> Job:
 
 
 # --- монтаж -------------------------------------------------------------
+
+def submit_compose_frame(request: ComposeSnapshotRequest, project: ComposeProject) -> Job:
+    """Сохраняет кадр монтажа под иглой картинкой.
+
+    То же, что «Сохранить кадр» в медиатеке, только кадр собирается из всего
+    монтажа: со всеми слоями, затуханиями и приближением — ровно таким, каким
+    человек видит его в окне просмотра. Размер берём полный, проектный:
+    в окне картинка мельче, а забирают её обычно чтобы использовать.
+    """
+    first = next((clip.source for track in project.tracks for clip in track.clips), None)
+    directory = (
+        Path(request.output_dir).expanduser()
+        if request.output_dir
+        else fsutil.default_output_dir(Path(first), "image")
+        if first
+        else Path(config.load().resolved_workspace())
+    )
+
+    async def runner(ctx: JobContext) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = f"{int(request.at // 60):02d}-{request.at % 60:05.2f}".replace(".", "_")
+        stem = fsutil.sanitize_name(f"{request.output_name} {stamp}", fallback="кадр")
+        output = fsutil.unique_path(directory / f"{stem}.png", reserve=True)
+        ctx.job.output = str(output)
+        try:
+            ctx.progress(0.15, "Собираю кадр")
+            args = compose.build_segment(
+                project, output, at=request.at,
+                span=1.0 / max(project.fps, 1), still=True, codec=["-c:v", "png"],
+            )
+            ctx.log("$ " + encode.to_display_string(args))
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+                creationflags=binaries.CREATE_NO_WINDOW,
+                env=binaries.subprocess_env(),
+            )
+            ctx.track(process)
+            try:
+                _, err = await process.communicate()
+            finally:
+                ctx.untrack(process)
+            if process.returncode != 0 or not output.exists():
+                raise RuntimeError(
+                    failure_text(err.decode("utf-8", "replace").splitlines())
+                    or "не удалось собрать кадр"
+                )
+            ctx.meta(
+                sizeAfter=output.stat().st_size,
+                width=project.width,
+                height=project.height,
+            )
+            ctx.progress(1.0, "Готово")
+            bus.publish("library.changed", {"path": str(directory)})
+        finally:
+            fsutil.release_path(output)
+
+    return manager.submit(
+        kind="image",
+        title="Кадр монтажа",
+        runner=runner,
+        pool="image",
+        meta={"preset": "стоп-кадр · PNG", "kind": "image"},
+    )
+
 
 def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job:
     """Собирает монтаж в готовый файл — обычной задачей в очереди.
