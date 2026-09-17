@@ -198,7 +198,7 @@ async def audio_waveform(path: str, buckets: int = waveform.DEFAULT_BUCKETS) -> 
         raise HTTPException(400, "У этого файла нет звуковой дорожки")
 
     try:
-        return await waveform.peaks(target, max(120, min(buckets, 4000)))
+        return await waveform.peaks(target, max(120, min(buckets, 12000)))
     except (RuntimeError, OSError) as exc:
         raise HTTPException(500, f"Не удалось построить звуковую волну: {exc}") from exc
 

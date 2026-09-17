@@ -175,13 +175,19 @@ export function dbToGain(db: number): number {
   return db <= MIN_DB ? 0 : Math.pow(10, db / 20)
 }
 
-/** Положение на шкале, 0..1: снизу тишина, 0 дБ заметно выше середины. */
+/**
+ * Положение на шторке клипа, 0..1: снизу тишина, сверху обычная громкость.
+ *
+ * Усиливать шторкой нельзя: её тянут на глаз, мимоходом, и случайно поднять
+ * громкость выше исходной куда проще, чем заметить это потом. Усиление живёт
+ * на дорожке, где у него есть число и подпись.
+ */
 export function volumeShare(gain: number): number {
-  return Math.min(1, Math.max(0, (gainToDb(gain) - MIN_DB) / (MAX_DB - MIN_DB)))
+  return Math.min(1, Math.max(0, (gainToDb(Math.min(gain, 1)) - MIN_DB) / -MIN_DB))
 }
 
 export function shareToVolume(share: number): number {
-  const db = MIN_DB + Math.min(1, Math.max(0, share)) * (MAX_DB - MIN_DB)
+  const db = MIN_DB + Math.min(1, Math.max(0, share)) * -MIN_DB
   return dbToGain(db)
 }
 
@@ -940,15 +946,16 @@ export const useCompose = create<State>((set, get) => ({
   /**
    * Убирает дорожку вместе с тем, что на ней лежит.
    *
-   * Последнюю дорожку своего вида не убираем: класть новые файлы стало бы
-   * некуда, и пустой таймлайн выглядел бы сломанным.
+   * Убрать можно любую, в том числе последнюю звуковую или последнюю
+   * видеодорожку: бывает монтаж из одного только видео или одного только
+   * звука, и лишняя пустая дорожка там только мешает. Не даём снять лишь
+   * самую последнюю — на пустом таймлайне некуда было бы положить файл.
    */
   removeTrack(id) {
     set((state) => {
+      if (state.tracks.length <= 1) return state
       const going = state.tracks.find((track) => track.id === id)
       if (!going) return state
-      const same = state.tracks.filter((track) => track.kind === going.kind)
-      if (same.length <= 1) return state
       const gone = going.clips.map((clip) => clip.id)
       return {
         tracks: state.tracks.filter((track) => track.id !== id),
@@ -1120,14 +1127,30 @@ export const useCompose = create<State>((set, get) => ({
     save(get())
   },
 
+  /**
+   * Убирает с таймлайна всё: и клипы, и лишние дорожки.
+   *
+   * Дорожки заводят под конкретный монтаж, и после очистки они висят пустыми —
+   * удалять их по одной незачем. Остаётся по одной каждого вида, чтобы было
+   * куда положить следующий файл.
+   */
   clearAll() {
-    set((state) => ({
-      tracks: state.tracks.map((track) => ({ ...track, clips: [] })),
-      selected: [],
-      playhead: 0,
-      renderIn: null,
-      renderOut: null,
-    }))
+    set((state) => {
+      const first = (kind: 'video' | 'audio') => state.tracks.find((t) => t.kind === kind)
+      const kept = [first('video'), first('audio')].filter(Boolean) as ComposeTrack[]
+      return {
+        tracks: (kept.length ? kept : state.tracks.slice(0, 1)).map((track) => ({
+          ...track,
+          clips: [],
+          name: '',
+          level: 1,
+        })),
+        selected: [],
+        playhead: 0,
+        renderIn: null,
+        renderOut: null,
+      }
+    })
     save(get())
   },
 

@@ -137,7 +137,14 @@ export function MasterMeter({
         disabled={loudnorm}
         onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
         // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
-        // а понять потом, каким он был, — нет.
+        // а понять потом, каким он был, — нет. Второе нажатие перехватываем
+        // до того, как ползунок прыгнет под курсор: иначе он успевал встать
+        // туда, куда ткнули, и «вернуть 0 дБ» возвращало что попало.
+        onMouseDown={(event) => {
+          if (event.detail < 2) return
+          event.preventDefault()
+          onMaster(1)
+        }}
         onDoubleClick={() => onMaster(1)}
         title={
           loudnorm
@@ -196,7 +203,6 @@ export function MasterMeter({
                   {withRuler && <Ruler />}
                   <Channel db={levels.right} peak={peaks.right} />
                   {!withRuler && <Marks />}
-                  {loudnorm && <Target />}
                 </div>
               </>
             ) : (
@@ -205,7 +211,6 @@ export function MasterMeter({
                 <Fill db={Math.max(levels.left, levels.right)} />
                 <Peak db={Math.max(peaks.left, peaks.right)} />
                 <Marks />
-                {loudnorm && <Target />}
                 <input
                   type="range"
                   min={MIN_DB}
@@ -213,6 +218,11 @@ export function MasterMeter({
                   step={0.5}
                   value={gainToDb(master)}
                   onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
+                  onMouseDown={(event) => {
+                    if (event.detail < 2) return
+                    event.preventDefault()
+                    onMaster(1)
+                  }}
                   onDoubleClick={() => onMaster(1)}
                   title={`Громкость монтажа ${volumeLabel(master)}.
 Двойное нажатие вернёт 0 дБ`}
@@ -225,25 +235,6 @@ export function MasterMeter({
         </>
       )}
     </div>
-  )
-}
-
-/**
- * К какой громкости тянет выравнивание.
- *
- * Это та же цель, что и при обычной обработке (-16 LUFS). Шкала показывает
- * не LUFS, а мгновенный уровень, поэтому линия — ориентир, а не точное
- * совпадение: звук будет колебаться вокруг неё.
- */
-const TARGET_DB = -16
-
-function Target() {
-  return (
-    <div
-      className="pointer-events-none absolute inset-x-0 border-t border-dashed border-accent-soft/80"
-      style={{ bottom: `${share(TARGET_DB) * 100}%` }}
-      title="Сюда выравнивание тянет громкость"
-    />
   )
 }
 
@@ -262,7 +253,10 @@ function Ruler() {
         <div
           key={db}
           className="absolute inset-x-0 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-ink-faint"
-          style={{ top: `${(1 - share(db)) * 100}%`, transform: 'translateY(-50%)' }}
+          style={{
+            top: `${Math.min(97, Math.max(3, (1 - share(db)) * 100))}%`,
+            transform: 'translateY(-50%)',
+          }}
         >
           {db}
         </div>
@@ -279,7 +273,12 @@ function Marks() {
         <div
           key={db}
           className="absolute inset-x-0 flex items-center"
-          style={{ top: `${(1 - share(db)) * 100}%`, transform: 'translateY(-50%)' }}
+          style={{
+            // Крайние подписи прижимаем внутрь: у потолка «0» наполовину
+            // уходило за край шкалы и читалось как обрезок.
+            top: `${Math.min(97, Math.max(3, (1 - share(db)) * 100))}%`,
+            transform: 'translateY(-50%)',
+          }}
         >
           <span className="w-full bg-black/45 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-white/70">
             {db}

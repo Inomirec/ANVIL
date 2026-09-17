@@ -184,11 +184,18 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
 
       if (current.kind === 'corner') {
         // Уголок тянет обе стороны и сохраняет форму рамки. Противоположный
-        // уголок при этом стоит на месте.
+        // уголок при этом стоит на месте. Тянущийся угол прилипает к сетке:
+        // попасть в её линию на глаз почти невозможно, а подогнать размер под
+        // разметку хочется чаще всего.
         const ratio = current.ratio || 1
+        const stuckX = atX + stick([atX], 0, guides)
+        const stuckY = atY + stick([atY], 0, guides)
         const size = Math.max(
           MIN_SIZE,
-          Math.max(Math.abs(atX - current.anchorX), Math.abs(atY - current.anchorY) / ratio),
+          Math.max(
+            Math.abs(stuckX - current.anchorX),
+            Math.abs(stuckY - current.anchorY) / ratio,
+          ),
         )
         const wide = atX >= current.anchorX ? 1 : -1
         const down = atY >= current.anchorY ? 1 : -1
@@ -207,15 +214,17 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       // Край тянет одну сторону: с этого мгновения у клипа своя форма, и
       // высоту надо хранить отдельно. Противоположный край не двигается.
       if (current.side === 'x') {
-        const size = Math.max(MIN_SIZE, Math.abs(atX - current.anchor))
-        const wide = atX >= current.anchor ? 1 : -1
+        const edge = atX + stick([atX], 0, guides)
+        const size = Math.max(MIN_SIZE, Math.abs(edge - current.anchor))
+        const wide = edge >= current.anchor ? 1 : -1
         state.updateClip(
           clip.id,
           clampPlace({ size, sizeY: tall, x: current.anchor + (wide * size) / 2 }),
         )
       } else {
-        const sizeY = Math.max(MIN_SIZE, Math.abs(atY - current.anchor))
-        const down = atY >= current.anchor ? 1 : -1
+        const edge = atY + stick([atY], 0, guides)
+        const sizeY = Math.max(MIN_SIZE, Math.abs(edge - current.anchor))
+        const down = edge >= current.anchor ? 1 : -1
         state.updateClip(
           clip.id,
           clampPlace({ sizeY, y: current.anchor + (down * sizeY) / 2 }),
@@ -345,9 +354,10 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         ),
       )}
 
+      {/* Размер в пикселях, а не в долях кадра: «9 × 15%» человеку ничего не
+          говорит, а «192 × 108» он сравнит с чем угодно. */}
       <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] tabular-nums text-white/85">
-        {Math.round(clip.size * 100)}
-        {Math.abs(tall - clip.size) > 0.005 ? ` × ${Math.round(tall * 100)}` : ''}%
+        {Math.round(clip.size * frameW)} × {Math.round(tall * frameH)}
       </span>
     </div>
   )

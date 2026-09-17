@@ -97,8 +97,11 @@ export const api = {
     return request<LibraryResponse>(`/api/library?${query.toString()}`)
   },
   fileInfo: (path: string) => request<FileInfo>(`/api/library/info?path=${encodeURIComponent(path)}`),
-  waveform: (path: string) =>
-    request<Waveform>(`/api/library/waveform?path=${encodeURIComponent(path)}`),
+  waveform: (path: string, buckets?: number) =>
+    request<Waveform>(
+      `/api/library/waveform?path=${encodeURIComponent(path)}` +
+        (buckets ? `&buckets=${Math.round(buckets)}` : ''),
+    ),
   filmstrip: (path: string) =>
     request<FilmstripInfo>(`/api/library/filmstrip?path=${encodeURIComponent(path)}`),
   deleteFile: (path: string) => post<{ ok: boolean }>('/api/library/delete', { path }),

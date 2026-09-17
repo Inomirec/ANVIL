@@ -45,6 +45,17 @@ import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Dropdown, Empty, IconButton, Segmented, Toggle } from './ui'
 
 /**
+ * Насколько увеличен экран просмотра.
+ *
+ * Это увеличительное стекло, а не правка монтажа: файлы остаются какими были,
+ * просто кадр показан крупнее — чтобы выровнять картинку по сетке или
+ * разглядеть край. Приближение самих файлов отсюда убрано: когда в кадре
+ * несколько файлов, оно приближало каждый в его собственных границах, и
+ * получался не наезд, а перекос.
+ */
+const VIEWS = [1, 1.5, 2, 3, 4]
+
+/**
  * Поле размера кадра.
  *
  * Набранное держим строкой и применяем, только когда поле оставили или нажали
@@ -162,7 +173,7 @@ export function ComposeTab() {
   const [renderOpen, setRenderOpen] = useState(false)
   // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
   // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
-  const [outputName, setOutputName] = useState('Монтаж')
+  const [outputName, setOutputName] = useState('')
   const [outputDir, setOutputDir] = useState<string | null>(
     () => localStorage.getItem('sgh.composeOut') || null,
   )
@@ -170,6 +181,7 @@ export function ComposeTab() {
   // Окно сохранённых монтажей: программа сама помнит только последний.
   const [projectsOpen, setProjectsOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const frameBox = useRef<HTMLDivElement>(null)
   const player = useComposePlayer(videoRef)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
   const [adding, setAdding] = useState(false)
@@ -187,6 +199,11 @@ export function ComposeTab() {
   })
   const grid: GridKind = gridOn ? gridKind : 'none'
   const [snapping, setSnapping] = useState(false)
+  // Увеличительное стекло над кадром: во сколько раз и вокруг какой точки.
+  // Точку запоминаем ту, где было колесо, — тогда под курсором остаётся то
+  // же место, а не середина кадра.
+  const [view, setView] = useState(1)
+  const [viewAt, setViewAt] = useState({ x: 50, y: 50 })
   // Ширина шины громкости: её тянут за границу, и от ширины зависит, что на
   // ней помещается. Запоминаем — настраивают это один раз и надолго.
   const [meterWidth, setMeterWidth] = useState(() => {
@@ -332,21 +349,6 @@ export function ComposeTab() {
     }
   }
 
-  // Насколько приближено то, что сейчас в кадре. Показываем самое большое из
-  // выбранных: иначе непонятно, почему картинка мыльная — приблизил колесом,
-  // забыл, и следов на экране не осталось.
-  const zoomed = zoomTargets({ tracks, playhead })
-  const zoom = zoomed.reduce((most, clip) => Math.max(most, clip.zoom), 1)
-
-  /** Приближает или отдаляет всё, к чему сейчас относится колесо. */
-  function changeZoom(factor: number) {
-    const state = useCompose.getState()
-    const picked = zoomTargets(state)
-    for (const clip of picked) {
-      const next = Math.min(8, Math.max(1, factor === 0 ? 1 : clip.zoom * factor))
-      state.updateClip(clip.id, { zoom: Number(next.toFixed(3)) })
-    }
-  }
 
   /** Сохраняет то, что сейчас в окне просмотра, картинкой. */
   async function grabFrame() {
@@ -384,22 +386,21 @@ export function ComposeTab() {
       tracks.length * (compact ? COMPACT_HEIGHT : TRACK_HEIGHT),
   )
 
-  // Клип, который сейчас двигают по кадру: рамка появляется, когда выбран
-  // ровно один клип с картинкой и он в этот момент виден. На нескольких сразу
-  // рамка врала бы — размер и место у каждого свои, — а двигать то, чего в
-  // кадре нет, значит вслепую.
-  const placing =
-    selected.length === 1
-      ? tracks
-          .flatMap((track) => track.clips)
-          .find(
-            (clip) =>
-              clip.id === selected[0] &&
-              clip.kind !== 'audio' &&
-              clip.start <= playhead &&
-              clip.start + clip.duration > playhead,
-          )
-      : undefined
+  // Клип, который сейчас двигают по кадру: рамка появляется, когда среди
+  // выбранного ровно одна картинка и она в этот момент видна. Звук в счёт не
+  // идёт — иначе у ролика со звуком, где выбирается сразу пара, рамки не было
+  // вовсе. На нескольких картинках сразу рамка врала бы: размер и место у
+  // каждой свои, — а двигать то, чего в кадре нет, значит вслепую.
+  const shown = tracks
+    .flatMap((track) => track.clips)
+    .filter(
+      (clip) =>
+        selected.includes(clip.id) &&
+        clip.kind !== 'audio' &&
+        clip.start <= playhead &&
+        clip.start + clip.duration > playhead,
+    )
+  const placing = shown.length === 1 ? shown[0] : undefined
 
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
   // папка первого клипа плюс подпапка из настроек. Показываем её целиком:
@@ -417,7 +418,9 @@ export function ComposeTab() {
       : undefined
 
   return (
-    <div className="flex h-full">
+    // Пока файл читается, курсор показывает, что программа занята: файл
+    // ложится на дорожку не мгновенно, и без этого кажется, что окно зависло.
+    <div className={`flex h-full ${adding ? 'cursor-progress' : ''}`}>
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Окно просмотра.
 
@@ -428,16 +431,19 @@ export function ComposeTab() {
           <div
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-2/60 p-4"
             onWheel={(event) => {
-              // Колесо над кадром приближает всё, что сейчас в кадре: это
-              // приближение картинки целиком, а не одного файла из неё.
-              const state = useCompose.getState()
-              const picked = zoomTargets(state)
-              if (!picked.length) return
-              event.preventDefault()
-              for (const clip of picked) {
-                const next = Math.min(8, Math.max(1, clip.zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)))
-                state.updateClip(clip.id, { zoom: Number(next.toFixed(3)) })
+              // Колесо увеличивает сам экран просмотра, а не файлы на нём.
+              if (!clips) return
+              const box = frameBox.current?.getBoundingClientRect()
+              if (box) {
+                setViewAt({
+                  x: Math.min(100, Math.max(0, ((event.clientX - box.left) / box.width) * 100)),
+                  y: Math.min(100, Math.max(0, ((event.clientY - box.top) / box.height) * 100)),
+                })
               }
+              event.preventDefault()
+              setView((was) =>
+                Math.min(6, Math.max(1, Number((was * (event.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(3)))),
+              )
             }}
           >
             {/* Панель над кадром: сетка, приближение, качество и снимок.
@@ -445,39 +451,36 @@ export function ComposeTab() {
                 закрывает собой то, ради чего окно и нужно. */}
             {clips > 0 && (
               <div className="mb-2 flex shrink-0 flex-wrap items-center justify-center gap-1.5">
-                <div className="flex items-center gap-1">
-                  <IconButton
-                    title="Отдалить: показать картинку целиком"
-                    onClick={() => changeZoom(1 / 1.1)}
-                    disabled={!zoomed.length || zoom <= 1}
-                  >
-                    <span className="text-[13px] font-semibold">−</span>
-                  </IconButton>
+                {/* Увеличительное стекло: сколько сейчас и выбор кратности.
+                    Нажатие на число возвращает обычный размер. */}
+                <div className="flex items-center">
                   <button
                     type="button"
-                    onClick={() => changeZoom(0)}
-                    disabled={zoom <= 1}
-                    title={
-                      zoom > 1
-                        ? 'Приближение — нажмите, чтобы вернуть как было'
-                        : 'Приближение: обрезает края у всего, что сейчас в кадре. Колесо над кадром или эти кнопки. Размер отдельного клипа меняется рамкой на нём самом'
-                    }
-                    className={`inline-flex h-8 items-center gap-1 rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
-                      zoom > 1
+                    onClick={() => {
+                      setView(1)
+                      setViewAt({ x: 50, y: 50 })
+                    }}
+                    title="Увеличение экрана просмотра — на готовый файл не влияет. Колесо над кадром. Нажмите, чтобы вернуть обычный размер."
+                    className={`inline-flex h-8 items-center rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
+                      view > 1
                         ? 'bg-accent/20 text-accent-soft hover:bg-accent/30'
-                        : 'text-ink-faint'
+                        : 'text-ink-faint hover:text-ink'
                     }`}
                   >
-                    <Search size={12} />
-                    ×{zoom.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}
+                    {Math.round(view * 100)}%
                   </button>
-                  <IconButton
-                    title="Приблизить: обрезать края картинки"
-                    onClick={() => changeZoom(1.1)}
-                    disabled={!zoomed.length || zoom >= 8}
+                  <Dropdown
+                    value={String(view)}
+                    title="Насколько увеличить экран"
+                    className="flex h-8 w-4 items-center justify-center text-ink-faint hover:text-ink"
+                    options={VIEWS.map((item) => ({
+                      value: String(item),
+                      label: `Экран ${Math.round(item * 100)}%`,
+                    }))}
+                    onChange={(item) => setView(Number(item))}
                   >
-                    <span className="text-[13px] font-semibold">+</span>
-                  </IconButton>
+                    <ChevronDown size={12} />
+                  </Dropdown>
                 </div>
 
                 {/* Сетка — не только разметка для глаза: клип к её линиям
@@ -531,7 +534,7 @@ export function ComposeTab() {
                     )
                   }
                 >
-                  Просмотр: {player.quality === 'auto' ? 'авто' : `${player.quality}p`}
+                  {player.quality === 'auto' ? 'авто' : `${player.quality}p`}
                   <ChevronDown size={12} className="text-ink-faint" />
                 </Dropdown>
 
@@ -554,6 +557,7 @@ export function ComposeTab() {
               />
             ) : (
               <div
+                ref={frameBox}
                 className="relative overflow-hidden bg-black shadow-xl ring-1 ring-line"
                 style={{
                   aspectRatio: `${width} / ${height}`,
@@ -564,6 +568,16 @@ export function ComposeTab() {
                   maxHeight: '100%',
                   height: '100%',
                   width: 'auto',
+                }}
+              >
+              {/* Всё содержимое кадра увеличивается целиком — и картинка, и
+                  сетка, и рамка клипа. Точка увеличения та, где было колесо,
+                  поэтому нужное место остаётся под курсором. */}
+              <div
+                className="absolute inset-0"
+                style={{
+                  transform: `scale(${view})`,
+                  transformOrigin: `${viewAt.x}% ${viewAt.y}%`,
                 }}
               >
                 {/* Пока смотрим — играет собранный кусок, иначе показываем
@@ -591,6 +605,8 @@ export function ComposeTab() {
                 {!player.playing && placing && (
                   <ComposeFrameBox clip={placing} grid={grid} />
                 )}
+
+              </div>
 
                 {player.error && (
                   <p className="absolute inset-x-0 bottom-0 bg-danger/85 px-3 py-1.5 text-center text-[11px] text-white">
@@ -711,7 +727,7 @@ export function ComposeTab() {
               checked={loudnorm}
               onChange={setLoudnorm}
               label="Выровнять звук"
-              hint="Приведёт громкость готового файла к общему уровню — отметка видна на шкале справа. Пока включено, громкость монтажа не крутится: выравнивание её всё равно перебьёт."
+              hint="Приводит громкость всего файла к общему уровню, как на радио. Пока включено, фейдер громкости заперт."
             />
           </div>
         </div>
@@ -740,7 +756,7 @@ export function ComposeTab() {
               className="field min-w-0 flex-1"
               value={outputName}
               onChange={(event) => setOutputName(event.target.value)}
-              placeholder="Монтаж"
+              placeholder="Название будущего файла"
               title="Имя готового файла"
             />
             <button

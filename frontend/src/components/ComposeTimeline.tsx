@@ -618,7 +618,13 @@ export function ComposeTimeline({
         />
 
       <div ref={scroller} className="min-h-0 min-w-0 flex-1 overflow-x-auto">
-        <div ref={canvas} style={{ width }} className="relative select-none">
+        {/* Полотно не уже видимой части: иначе справа остаётся пустое место,
+            куда файл бросить нельзя, а выглядит оно так же, как дорожка. */}
+        <div
+          ref={canvas}
+          style={{ width, minWidth: '100%' }}
+          className="relative select-none"
+        >
           <Ruler
             span={span}
             scale={scale}
@@ -679,16 +685,21 @@ export function ComposeTimeline({
                 )
               }}
             >
-              {/* Полотно дорожки покрашено её же цветом и кончается там, где
-                  кончается монтаж. Раньше оно тянулось на весь запас справа, и
-                  казалось, что готовый файл будет длиннее, чем он есть. */}
+              {/* Полотно покрашено целиком: это место, куда можно положить
+                  файл, и обрывать краску там, где кончился монтаж, нельзя —
+                  дальше дорожка выглядела бы чужой и мёртвой. Где кончается
+                  монтаж, показывает отдельная черта. */}
               <div
-                className="pointer-events-none absolute inset-y-0 left-0"
-                style={{
-                  width: Math.max(duration * scale, 0),
-                  background: `${trackColor(tracks, track.id)}1c`,
-                }}
+                className="pointer-events-none absolute inset-0"
+                style={{ background: `${trackColor(tracks, track.id)}1c` }}
               />
+              {duration > 0 && (
+                <div
+                  className="pointer-events-none absolute inset-y-0 w-px bg-line"
+                  style={{ left: duration * scale }}
+                  title="Здесь кончается монтаж"
+                />
+              )}
 
               {[...track.clips]
                 .sort((a, b) => a.start - b.start)
@@ -917,7 +928,7 @@ function TrackHeads({
                     narrow ? 'flex-1' : 'w-full'
                   }`}
                 />
-                {withLevel && (
+                {withLevel && sound && (
                   <div
                     className={`flex items-center gap-1.5 ${
                       narrow ? 'w-[92px] shrink-0' : ''
@@ -935,6 +946,12 @@ function TrackHeads({
                       }}
                       // Двойное нажатие возвращает обычный уровень: задеть
                       // ползунок легко, а вспомнить, каким он был, — нет.
+                      // Перехватываем до прыжка ползунка под курсор.
+                      onMouseDown={(event) => {
+                        if (event.detail < 2) return
+                        event.preventDefault()
+                        onLevel(track.id, 1)
+                      }}
                       onDoubleClick={() => onLevel(track.id, 1)}
                       title={
                         sound
@@ -1025,7 +1042,10 @@ function TrackMenu({
   const track = tracks.find((item) => item.id === trackId)
   if (!track) return null
   // Последнюю дорожку своего вида убрать нельзя: класть файлы стало бы некуда.
-  const alone = tracks.filter((item) => item.kind === track.kind).length <= 1
+  // Не даём снять самую последнюю дорожку: на пустом таймлайне некуда было бы
+  // положить файл. Последнюю звуковую или последнюю видео — можно: бывает
+  // монтаж из одного только видео или одного только звука.
+  const alone = tracks.length <= 1
 
   const item = (label: string, action: () => void, disabled = false) => (
     <button
@@ -1334,7 +1354,18 @@ function useStrip(path: string, enabled: boolean): FilmstripInfo | null {
   return strip
 }
 
-function useWave(path: string, enabled: boolean): number[] | null {
+/**
+ * Точек волны просим по длине файла, а не поровну на все.
+ *
+ * Одно и то же число точек на тридцатисекундный ролик и на десятиминутную
+ * запись даёт совсем разную подробность: у длинного файла волна вырождается в
+ * несколько ступенек. Считаем примерно по сорок точек на секунду.
+ */
+function wavePoints(seconds: number): number {
+  return Math.min(12000, Math.max(900, Math.round((seconds || 30) * 40)))
+}
+
+function useWave(path: string, enabled: boolean, seconds: number): number[] | null {
   const [peaks, setPeaks] = useState<number[] | null>(() => waveCache.get(path) ?? null)
   useEffect(() => {
     if (!enabled || waveCache.has(path)) {
@@ -1343,7 +1374,7 @@ function useWave(path: string, enabled: boolean): number[] | null {
     }
     let alive = true
     api
-      .waveform(path)
+      .waveform(path, wavePoints(seconds))
       .then((data) => {
         waveCache.set(path, data.peaks ?? null)
         if (alive) setPeaks(data.peaks ?? null)
@@ -1352,7 +1383,7 @@ function useWave(path: string, enabled: boolean): number[] | null {
     return () => {
       alive = false
     }
-  }, [path, enabled])
+  }, [path, enabled, seconds])
   return peaks
 }
 
@@ -1436,7 +1467,7 @@ function ClipBox({
   // а запрос стоит времени.
   const detailed = box > 40
   const strip = useStrip(clip.source, detailed && clip.kind === 'video')
-  const peaks = useWave(clip.source, detailed && sound)
+  const peaks = useWave(clip.source, detailed && sound, clip.sourceDuration || clip.duration)
   const thumb = `/api/library/thumbnail?path=${encodeURIComponent(clip.source)}`
 
   const fadeInWidth = (clip.fadeIn / clip.duration) * box
@@ -1501,8 +1532,11 @@ function ClipBox({
 
       {/* Линия уровня, как на дорожке в медиатеке: у звука это громкость,
           у картинки — прозрачность. Тянется вверх-вниз. */}
+      {/* Шторка приглушена, пока её не трогали: пока громкость обычная, она
+          ничего не сообщает, а внимание забирает. Стоит увести её вниз — она
+          проступает вместе с подписью. */}
       <div
-        className="absolute inset-x-0 z-10 cursor-ns-resize"
+        className="group/level absolute inset-x-0 z-10 cursor-ns-resize"
         style={{ top: `${(1 - level) * 100}%`, height: 9, marginTop: -4 }}
         title={
           sound
@@ -1516,13 +1550,17 @@ function ClipBox({
         }}
       >
         <div
-          className={`mt-[3px] h-[3px] w-full ${
+          className={`mt-[3px] h-[3px] w-full transition-opacity ${
             sound ? 'bg-ok/90' : 'bg-accent-soft/90'
-          } ${level >= 1 ? 'opacity-45' : 'opacity-100'}`}
+          } ${
+            level >= 1
+              ? 'opacity-20 group-hover/level:opacity-90 group-hover:opacity-60'
+              : 'opacity-100'
+          }`}
         />
         {/* Насколько убавлено — прямо на линии: иначе «на сколько тише» можно
-            только гадать по её высоте. */}
-        {!short && box > 54 && (
+            только гадать по её высоте. У нетронутой шторки писать нечего. */}
+        {!short && box > 54 && level < 1 && (
           <span
             className="pointer-events-none absolute right-1 -top-[1px] rounded bg-black/55 px-1 font-mono text-[9px] leading-[11px] tabular-nums text-white/80"
           >

@@ -66,12 +66,18 @@ function settingsOf(preset: RenderPreset): RenderSettings {
   return settings
 }
 
-/** Совпадают ли нынешние настройки с набором — по этому его и подсвечиваем. */
+/**
+ * Совпадают ли нынешние настройки с набором — по этому его и подсвечиваем.
+ *
+ * Способ задания веса (качеством или битрейтом) в счёт не идёт: набор — это
+ * кодеки и их настройки, а чем крутить вес, человек решает отдельно. Иначе
+ * одно переключение снимало подсветку, хотя по сути ничего не менялось.
+ */
 function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
   const settings = settingsOf(preset)
-  return (Object.keys(settings) as (keyof RenderSettings)[]).every(
-    (key) => value[key] === settings[key],
-  )
+  return (Object.keys(settings) as (keyof RenderSettings)[])
+    .filter((key) => key !== 'bitrateKbps')
+    .every((key) => value[key] === settings[key])
 }
 
 const VIDEO_CODECS = [
@@ -97,55 +103,62 @@ const CONTAINERS = [
 /**
  * Шкала качества у каждого кодека своя.
  *
- * Одно и то же число у AV1 и H.264 означает совсем разную картинку, и без
- * подписей понять, где ещё хорошо, а где уже сыпется, невозможно.
+ * Одно и то же число у AV1 и H.264 означает совсем разную картинку, поэтому у
+ * каждого свои отметки. Слова описывают саму картинку, а не сравнение с
+ * исходником: «как оригинал» говорить нельзя — исходников на таймлайне может
+ * быть сколько угодно, и все они разные.
+ *
+ * Шкала кончается там же, где кончаются слова. Раньше после самой верхней
+ * отметки оставался ещё кусок ползунка, и было непонятно, что он значит.
  */
-const QUALITY_SCALE: Record<string, { max: number; marks: { at: number; label: string }[] }> = {
+const QUALITY_SCALE = {
   av1_svt: {
-    max: 63,
+    max: 58,
     marks: [
-      { at: 18, label: 'как оригинал' },
-      { at: 28, label: 'отлично' },
-      { at: 38, label: 'хорошо' },
-      { at: 48, label: 'заметно хуже' },
-      { at: 58, label: 'сыпется' },
+      { at: 18, label: 'наивысшее' },
+      { at: 28, label: 'высокое' },
+      { at: 38, label: 'среднее' },
+      { at: 48, label: 'низкое' },
+      { at: 58, label: 'плохое' },
     ],
   },
   h265: {
-    max: 51,
+    max: 42,
     marks: [
-      { at: 16, label: 'как оригинал' },
-      { at: 22, label: 'отлично' },
-      { at: 28, label: 'хорошо' },
-      { at: 34, label: 'заметно хуже' },
-      { at: 42, label: 'сыпется' },
+      { at: 16, label: 'наивысшее' },
+      { at: 22, label: 'высокое' },
+      { at: 28, label: 'среднее' },
+      { at: 34, label: 'низкое' },
+      { at: 42, label: 'плохое' },
     ],
   },
   h264: {
-    max: 51,
+    max: 40,
     marks: [
-      { at: 14, label: 'как оригинал' },
-      { at: 20, label: 'отлично' },
-      { at: 26, label: 'хорошо' },
-      { at: 32, label: 'заметно хуже' },
-      { at: 40, label: 'сыпется' },
+      { at: 14, label: 'наивысшее' },
+      { at: 20, label: 'высокое' },
+      { at: 26, label: 'среднее' },
+      { at: 32, label: 'низкое' },
+      { at: 40, label: 'плохое' },
     ],
   },
-}
+} as Record<string, { max: number; marks: { at: number; label: string }[] }>
 
 /**
  * Подписи к шкале битрейта.
  *
- * Голое число кбит/с ничего не говорит: понятно оно только тем, кто и так
- * знает, сколько нужно. Поэтому рядом написано, для какой картинки это
- * обычно берут.
+ * Голое число кбит/с ничего не говорит. Шкала кончается на четырнадцати
+ * тысячах: это верх разумного для 1080p, а программой в основном собирают
+ * именно его. Кому нужно больше — впишет число руками. Пока верх был
+ * тридцать тысяч, три четверти ползунка занимали значения, которые никто не
+ * ставит, а нужные подписи налезали друг на друга.
  */
+const BITRATE_MAX = 14000
 const BITRATE_MARKS = [
   { at: 1500, label: 'мало' },
   { at: 4000, label: '720p' },
-  { at: 9000, label: '1080p' },
-  { at: 18000, label: '1440p' },
-  { at: 30000, label: '4K' },
+  { at: 8000, label: '1080p' },
+  { at: 12000, label: 'с запасом' },
 ]
 
 /** Какая подпись подходит нынешнему числу качества. */
@@ -191,6 +204,45 @@ export function renderSummary(value: RenderSettings): string {
       ? 'без звука'
       : `${value.audioCodec.toUpperCase()} ${value.audioBitrateKbps} кбит/с`
   return `${name} · ${weight} · ${sound} · ${value.container.toUpperCase()}`
+}
+
+/** Поле для числа: набранное применяется по Enter или когда поле оставили. */
+function NumberEntry({
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  value: number
+  min: number
+  max: number
+  onChange: (value: number) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const apply = () => {
+    if (draft === null) return
+    const next = Number(draft)
+    setDraft(null)
+    if (Number.isFinite(next) && next >= min) onChange(Math.min(max, Math.round(next)))
+  }
+  return (
+    <span className="flex items-baseline gap-1">
+      <input
+        type="number"
+        value={draft ?? value}
+        min={min}
+        max={max}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={apply}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') apply()
+          if (event.key === 'Escape') setDraft(null)
+        }}
+        className="w-[76px] rounded-md border border-line-soft bg-surface-2 px-1.5 py-0.5 text-right font-mono text-[12px] tabular-nums text-ink outline-none focus:border-accent"
+      />
+      <span className="text-[11px] text-ink-faint">кбит/с</span>
+    </span>
+  )
 }
 
 /**
@@ -435,20 +487,31 @@ export function ComposeRenderSettings({
 
           {byBitrate ? (
             <div>
-              <Slider
-                label="Битрейт видео"
-                value={value.bitrateKbps}
+              <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                <span className="label mb-0">Битрейт видео</span>
+                {/* Число можно вписать руками: ползунок кончается на разумном
+                    для 1080p, а кому нужно больше — наберёт сам. */}
+                <NumberEntry
+                  value={value.bitrateKbps}
+                  min={200}
+                  max={200000}
+                  onChange={(bitrateKbps) => set({ bitrateKbps })}
+                />
+              </div>
+              <input
+                type="range"
+                className="w-full"
                 min={500}
-                max={40000}
+                max={BITRATE_MAX}
                 step={250}
-                onChange={(bitrateKbps) => set({ bitrateKbps })}
-                suffix=" кбит/с"
+                value={Math.min(value.bitrateKbps, BITRATE_MAX)}
+                onChange={(event) => set({ bitrateKbps: Number(event.target.value) })}
               />
               <ScaleMarks
                 marks={BITRATE_MARKS}
                 min={500}
-                max={40000}
-                at={value.bitrateKbps}
+                max={BITRATE_MAX}
+                at={Math.min(value.bitrateKbps, BITRATE_MAX)}
               />
             </div>
           ) : (
