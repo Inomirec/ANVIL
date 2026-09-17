@@ -15,7 +15,9 @@ import {
   Play as PlayIcon,
   Repeat,
   Scissors,
+  SkipBack,
   Trash2,
+  Undo2,
   VolumeX,
   X,
   ZoomIn,
@@ -381,6 +383,20 @@ export function ComposeTimeline({
       const tag = (event.target as HTMLElement | null)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       const key = event.key.toLowerCase()
+
+      // Ctrl+Z и Ctrl+A — то же, что и везде. Без своей обработки Ctrl+A
+      // выделял всю страницу, а отменять правку было нечем.
+      if (event.ctrlKey || event.metaKey) {
+        if (key === 'z' || key === 'я') {
+          event.preventDefault()
+          useCompose.getState().undo()
+        } else if (key === 'a' || key === 'ф') {
+          event.preventDefault()
+          useCompose.getState().selectAll()
+        }
+        return
+      }
+      if (event.altKey) return
       if (key === 's' || key === 'ы') {
         event.preventDefault()
         splitAtPlayhead()
@@ -458,6 +474,15 @@ export function ComposeTimeline({
       <div className="grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-line-soft px-3">
         {/* Слева: что делают с клипами и дорожками */}
         <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+          <IconButton
+            title="Отменить последнее действие (Ctrl+Z)"
+            onClick={() => useCompose.getState().undo()}
+          >
+            <Undo2 size={14} />
+          </IconButton>
+
+          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+
           <IconButton title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
             <Scissors size={14} />
           </IconButton>
@@ -518,6 +543,15 @@ export function ComposeTimeline({
 
         {/* Посередине: просмотр */}
         <div className="flex items-center gap-1.5">
+          <IconButton
+            title="В начало монтажа"
+            onClick={() => {
+              player.stop()
+              setPlayhead(0)
+            }}
+          >
+            <SkipBack size={14} />
+          </IconButton>
           <IconButton
             title={player.playing ? 'Пауза' : 'Смотреть с иглы (пробел)'}
             onClick={() => (player.playing ? player.stop() : player.start())}
@@ -712,6 +746,9 @@ export function ComposeTimeline({
                   active={selected.includes(clip.id)}
                   onGrab={(event, where) => {
                     const state = useCompose.getState()
+                    // Запоминаем монтаж до правки: одно Ctrl+Z вернёт всё
+                    // перетаскивание целиком, а не по пикселю.
+                    state.mark()
                     const many = event.ctrlKey || event.shiftKey
                     const ids = many
                       ? [...new Set([...state.selected, clip.id])]
@@ -741,6 +778,7 @@ export function ComposeTimeline({
                   }}
                   onMute={() => updateClip(clip.id, { muted: !clip.muted })}
                   onLevel={(top, height) => {
+                    useCompose.getState().mark()
                     select([clip.id])
                     drag.current = { kind: 'level', id: clip.id, top, height }
                   }}

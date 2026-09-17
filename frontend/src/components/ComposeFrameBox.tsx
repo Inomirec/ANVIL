@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 import {
   clampPlace,
-  clipTall,
+  clipRect,
   MIN_SIZE,
+  rectToSize,
   useCompose,
   type ComposeClip,
 } from '../composeStore'
@@ -143,11 +144,11 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
     | null
   >(null)
 
-  // Рамка повторяет форму самой картинки, а не кадра: по её краям человек и
-  // выравнивает. У заливки формы нет — там рамка какая задана.
+  // Рамка повторяет саму картинку, а не отведённое ей место: у вертикального
+  // ролика место втрое выше картинки, и тянуть было бы не за что.
   const frameW = useCompose((state) => state.width)
   const frameH = useCompose((state) => state.height)
-  const tall = clipTall(clip, frameW, frameH)
+  const { w: wide, h: tall } = clipRect(clip, frameW, frameH)
 
   useEffect(() => {
     const move = (event: MouseEvent) => {
@@ -187,25 +188,24 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         // уголок при этом стоит на месте. Тянущийся угол прилипает к сетке:
         // попасть в её линию на глаз почти невозможно, а подогнать размер под
         // разметку хочется чаще всего.
-        const ratio = current.ratio || 1
+        const shape = current.ratio || 1
         const stuckX = atX + stick([atX], 0, guides)
         const stuckY = atY + stick([atY], 0, guides)
-        const size = Math.max(
+        const w = Math.max(
           MIN_SIZE,
-          Math.max(
-            Math.abs(stuckX - current.anchorX),
-            Math.abs(stuckY - current.anchorY) / ratio,
-          ),
+          Math.max(Math.abs(stuckX - current.anchorX), Math.abs(stuckY - current.anchorY) / shape),
         )
-        const wide = atX >= current.anchorX ? 1 : -1
+        const h = w * shape
+        const right = atX >= current.anchorX ? 1 : -1
         const down = atY >= current.anchorY ? 1 : -1
+        const free = clip.sizeY && clip.sizeY > 0
         state.updateClip(
           clip.id,
           clampPlace({
-            size,
-            sizeY: clip.sizeY && clip.sizeY > 0 ? size * ratio : 0,
-            x: current.anchorX + (wide * size) / 2,
-            y: current.anchorY + (down * size * ratio) / 2,
+            size: free ? w : rectToSize(w, h),
+            sizeY: free ? h : 0,
+            x: current.anchorX + (right * w) / 2,
+            y: current.anchorY + (down * h) / 2,
           }),
         )
         return
@@ -216,10 +216,10 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       if (current.side === 'x') {
         const edge = atX + stick([atX], 0, guides)
         const size = Math.max(MIN_SIZE, Math.abs(edge - current.anchor))
-        const wide = edge >= current.anchor ? 1 : -1
+        const right = edge >= current.anchor ? 1 : -1
         state.updateClip(
           clip.id,
-          clampPlace({ size, sizeY: tall, x: current.anchor + (wide * size) / 2 }),
+          clampPlace({ size, sizeY: tall, x: current.anchor + (right * size) / 2 }),
         )
       } else {
         const edge = atY + stick([atY], 0, guides)
@@ -250,6 +250,19 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
   const reset = () =>
     useCompose.getState().updateClip(clip.id, { size: 1, sizeY: 0, x: 0.5, y: 0.5 })
 
+  /**
+   * Ручки держим внутри окна просмотра.
+   *
+   * У клипа во весь кадр рамка совпадает с краями окна, и ручки наполовину
+   * уходили за него: чтобы взяться за размер, клип приходилось сначала
+   * отодвигать. Поэтому место ручки считаем в кадре и прижимаем к его краю.
+   */
+  const INSET = 0.014
+  const place = (share: number, from: number, span: number) => {
+    const at = Math.min(1 - INSET, Math.max(INSET, from + share * span))
+    return ((at - from) / (span || 1)) * 100
+  }
+
   const handle = (
     key: string,
     at: { x: number; y: number; cursor: string },
@@ -261,8 +274,8 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       title={hint}
       className="absolute h-3 w-3 rounded-[2px] border border-base bg-accent-soft"
       style={{
-        left: `${at.x * 100}%`,
-        top: `${at.y * 100}%`,
+        left: `${place(at.x, clip.x - wide / 2, wide)}%`,
+        top: `${place(at.y, clip.y - tall / 2, tall)}%`,
         transform: 'translate(-50%, -50%)',
         cursor: at.cursor,
       }}
@@ -274,6 +287,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         if (event.button !== 0) return
         event.preventDefault()
         event.stopPropagation()
+        useCompose.getState().mark()
         const { frameW, frameH } = frame()
         start(frameW, frameH)
       }}
@@ -285,9 +299,9 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       ref={box}
       className="absolute cursor-move rounded-[3px] border border-dashed border-accent-soft/90 bg-accent/5"
       style={{
-        left: `${(clip.x - clip.size / 2) * 100}%`,
+        left: `${(clip.x - wide / 2) * 100}%`,
         top: `${(clip.y - tall / 2) * 100}%`,
-        width: `${clip.size * 100}%`,
+        width: `${wide * 100}%`,
         height: `${tall * 100}%`,
       }}
       title={`${clip.name}: тяните за середину, уголки меняют размер, края растягивают.
@@ -297,6 +311,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         if (event.button !== 0) return
         event.preventDefault()
         event.stopPropagation()
+        useCompose.getState().mark()
         const { frameW, frameH } = frame()
         drag.current = {
           kind: 'move',
@@ -306,7 +321,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
           fromY: event.clientY,
           x: clip.x,
           y: clip.y,
-          w: clip.size,
+          w: wide,
           h: tall,
         }
       }}
@@ -321,9 +336,9 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
               frameW,
               frameH,
               // Противоположный уголок: он и остаётся на месте.
-              anchorX: clip.x + (corner.x === 0 ? clip.size / 2 : -clip.size / 2),
+              anchorX: clip.x + (corner.x === 0 ? wide / 2 : -wide / 2),
               anchorY: clip.y + (corner.y === 0 ? tall / 2 : -tall / 2),
-              ratio: tall / clip.size,
+              ratio: tall / wide,
             }
           },
           'Тяните — клип станет крупнее или мельче, противоположный угол останется на месте',
@@ -346,7 +361,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
               side: edge.side,
               anchor:
                 edge.side === 'x'
-                  ? clip.x + (edge.x === 0 ? clip.size / 2 : -clip.size / 2)
+                  ? clip.x + (edge.x === 0 ? wide / 2 : -wide / 2)
                   : clip.y + (edge.y === 0 ? tall / 2 : -tall / 2),
             }
           },
@@ -357,7 +372,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       {/* Размер в пикселях, а не в долях кадра: «9 × 15%» человеку ничего не
           говорит, а «192 × 108» он сравнит с чем угодно. */}
       <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] tabular-nums text-white/85">
-        {Math.round(clip.size * frameW)} × {Math.round(tall * frameH)}
+        {Math.round(wide * frameW)} × {Math.round(tall * frameH)}
       </span>
     </div>
   )

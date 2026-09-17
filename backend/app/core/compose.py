@@ -147,19 +147,15 @@ def is_placed(clip: ComposeClip) -> bool:
 
 
 def clip_box(clip: ComposeClip, width: int, height: int) -> tuple[int, int]:
-    """Прямоугольник, в который кладём клип, в пикселях кадра.
+    """Прямоугольник, отведённый клипу, в пикселях кадра.
 
-    Высоту берём заданную, а если её не задавали — считаем по форме самого
-    файла. Тогда рамка совпадает с картинкой, и выравнивать её по краям кадра
-    можно точно; иначе у квадратной картинки в широком кадре рамка была бы
-    шире самой картинки.
+    Это именно место под клип, а не сам клип: картинка вписывается внутрь,
+    сохраняя свою форму, поэтому вертикальное видео займёт только середину
+    прямоугольника. Считать высоту по форме файла нельзя — у вертикального
+    ролика такое «место» вылезало за кадр в несколько раз, и размер прыгал.
     """
-    box_w = _even(max(2, int(width * clip.size)))
-    if clip.size_y > 0:
-        return box_w, _even(max(2, int(height * clip.size_y)))
-    if clip.ratio > 0:
-        return box_w, _even(max(2, int(box_w / clip.ratio)))
-    return box_w, _even(max(2, int(height * clip.size)))
+    tall = clip.size_y if clip.size_y > 0 else clip.size
+    return _even(max(2, int(width * clip.size))), _even(max(2, int(height * tall)))
 
 
 def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:

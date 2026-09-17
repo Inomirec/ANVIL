@@ -5,6 +5,7 @@ import {
   Film,
   FolderOpen,
   Grid3x3,
+  Loader2,
   Save,
   Play,
   RotateCw,
@@ -43,6 +44,25 @@ import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Dropdown, Empty, IconButton, Segmented, Toggle } from './ui'
+
+/** Значок занятости, который едет за курсором, пока читается файл. */
+function BusyMark() {
+  const [at, setAt] = useState({ x: -100, y: -100 })
+  useEffect(() => {
+    const move = (event: MouseEvent) => setAt({ x: event.clientX, y: event.clientY })
+    window.addEventListener('mousemove', move)
+    return () => window.removeEventListener('mousemove', move)
+  }, [])
+  return (
+    <span
+      className="pointer-events-none fixed z-50 flex items-center gap-1.5 rounded-lg bg-surface-3/95 px-2 py-1 text-[11px] text-ink shadow-lg ring-1 ring-line"
+      style={{ left: at.x + 16, top: at.y + 16 }}
+    >
+      <Loader2 size={12} className="animate-spin text-accent-soft" />
+      читаю файл…
+    </span>
+  )
+}
 
 /**
  * Насколько увеличен экран просмотра.
@@ -418,9 +438,11 @@ export function ComposeTab() {
       : undefined
 
   return (
-    // Пока файл читается, курсор показывает, что программа занята: файл
-    // ложится на дорожку не мгновенно, и без этого кажется, что окно зависло.
-    <div className={`flex h-full ${adding ? 'cursor-progress' : ''}`}>
+    // Пока файл читается, у курсора висит подпись: файл ложится на дорожку не
+    // мгновенно, и без этого кажется, что окно зависло. Одного вида курсора
+    // мало — его смену легко не заметить.
+    <div className={`relative flex h-full ${adding ? 'cursor-progress' : ''}`}>
+      {adding && <BusyMark />}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Окно просмотра.
 

@@ -125,15 +125,37 @@ export const MIN_PLACE = -1
 export const MAX_PLACE = 2
 
 /**
- * Высота рамки клипа в долях кадра.
+ * Где на кадре лежит сама картинка клипа — доли кадра.
  *
- * Заданную берём как есть, иначе считаем по форме файла: рамка должна
- * совпадать с самой картинкой, а не быть квадратом вокруг неё.
+ * Клипу отведён прямоугольник ``size`` на ``sizeY`` (а если высоту не задавали,
+ * то ``size`` на ``size``), и картинка вписывается внутрь, сохраняя свою форму.
+ * Рамка в окне просмотра рисуется по самой картинке, а не по отведённому
+ * месту: у вертикального ролика место шире картинки втрое, и тянуть было бы
+ * не за что.
  */
-export function clipTall(clip: ComposeClip, frameW: number, frameH: number): number {
-  if (clip.sizeY && clip.sizeY > 0) return clip.sizeY
-  if (clip.ratio && clip.ratio > 0) return (clip.size * frameW) / clip.ratio / frameH
-  return clip.size
+export function clipRect(
+  clip: ComposeClip,
+  frameW: number,
+  frameH: number,
+): { w: number; h: number } {
+  const boxW = clip.size
+  const boxH = clip.sizeY && clip.sizeY > 0 ? clip.sizeY : clip.size
+  // У заливки формы нет — она занимает отведённое место целиком.
+  if (!clip.ratio || clip.ratio <= 0 || clip.kind === 'color') return { w: boxW, h: boxH }
+  // Вписываем прямоугольник формы ratio в отведённое место.
+  const wide = (boxH * frameH * clip.ratio) / frameW
+  const w = Math.min(boxW, wide)
+  return { w, h: (w * frameW) / clip.ratio / frameH }
+}
+
+/**
+ * Обратный счёт: какое место отвести, чтобы картинка вышла нужного размера.
+ *
+ * Картинка касается той стороны отведённого места, которая её и ограничила,
+ * поэтому место — это большая из двух сторон.
+ */
+export function rectToSize(w: number, h: number): number {
+  return Math.max(w, h)
 }
 
 /** Не даёт увести клип совсем за пределы разумного. */
@@ -281,6 +303,14 @@ interface State extends Saved {
   setPlayhead: (at: number) => void
   setScale: (scale: number) => void
   setCompact: (compact: boolean) => void
+  /** Запомнить нынешнее состояние перед действием — для отмены. */
+  mark: () => void
+  /** Вернуть монтаж к тому, что было до последнего действия. */
+  undo: () => void
+  /** Есть ли что отменять. */
+  canUndo: () => boolean
+  /** Выделить все клипы монтажа. */
+  selectAll: () => void
   setHeadWidth: (width: number) => void
   select: (ids: string[]) => void
 
@@ -416,6 +446,17 @@ function save(state: State): void {
     // Приватный режим браузера — тогда просто не запомним.
   }
 }
+
+/**
+ * История правок для отмены.
+ *
+ * Снимок кладётся **до** действия, а не после каждой перерисовки: во время
+ * перетаскивания монтаж меняется десятки раз в секунду, и отменять пришлось бы
+ * по пикселю. Поэтому программа сама отмечает начало действия — нажатие мыши,
+ * разрез, удаление, — и одно нажатие Ctrl+Z возвращает всё действие целиком.
+ */
+const HISTORY_LIMIT = 60
+const history: Saved[] = []
 
 let counter = 0
 const nextId = () => `c${Date.now().toString(36)}${(counter++).toString(36)}`
@@ -643,6 +684,35 @@ export const useCompose = create<State>((set, get) => ({
     remember('sgh.composeHead', String(headWidth))
   },
 
+  mark() {
+    history.push(toSaved(get()))
+    if (history.length > HISTORY_LIMIT) history.shift()
+  },
+
+  undo() {
+    // Пропускаем снимки, в которых ничего не менялось: отметка ставится по
+    // нажатию мыши, а нажать можно и не сдвинув ничего. Иначе первое Ctrl+Z
+    // выглядело бы так, будто оно не сработало.
+    const now = JSON.stringify(toSaved(get()))
+    let was = history.pop()
+    while (was && JSON.stringify(was) === now) was = history.pop()
+    if (!was) return
+    // Игла и выделение не восстанавливаются: клипа, который был выбран, после
+    // отмены может и не быть, а игла к правке отношения не имеет.
+    set({ ...normalize(was), selected: [] })
+    save(get())
+  },
+
+  canUndo() {
+    return history.length > 0
+  },
+
+  selectAll() {
+    set((state) => ({
+      selected: state.tracks.flatMap((track) => track.clips).map((clip) => clip.id),
+    }))
+  },
+
   select(ids) {
     // Группа — одно целое: взяв один клип, берём и его соседей. Иначе
     // выделенным выглядит только ролик, а его звуковая дорожка — нет, хотя
@@ -687,6 +757,7 @@ export const useCompose = create<State>((set, get) => ({
 
   // --- клипы -------------------------------------------------------------
   addClip(clip, trackId) {
+    get().mark()
     const id = nextId()
     set((state) => {
       // Звук ложится на звуковую дорожку, картинки и видео — на видеодорожку,
@@ -758,6 +829,7 @@ export const useCompose = create<State>((set, get) => ({
    * убавить его или убрать совсем.
    */
   addPair(video, trackId) {
+    get().mark()
     const groupId = nextId()
     const videoId = nextId()
     const audioId = nextId()
@@ -809,9 +881,17 @@ export const useCompose = create<State>((set, get) => ({
       const links = new Set(
         all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.groupId).filter(Boolean),
       )
-      const moving = all
-        .filter((clip) => ids.includes(clip.id) || (clip.groupId && links.has(clip.groupId)))
-        .map((clip) => clip.id)
+      const family = all.filter(
+        (clip) => ids.includes(clip.id) || (clip.groupId && links.has(clip.groupId)),
+      )
+      const moving = family.map((clip) => clip.id)
+
+      // У начала таймлайна пачка едет как одно целое: если каждый клип
+      // упирается в ноль сам по себе, передние встают, задние продолжают
+      // ехать — и разложенное по порядку съезжается в кучу.
+      const edge = family.reduce((least, clip) => Math.min(least, clip.start), Infinity)
+      const step = Number.isFinite(edge) ? Math.max(shift, -edge) : shift
+      if (!step) return state
 
       return {
         tracks: settle(
@@ -820,7 +900,7 @@ export const useCompose = create<State>((set, get) => ({
             if (!touched) return track
             const shifted = track.clips.map((clip) =>
               moving.includes(clip.id)
-                ? { ...clip, start: Math.max(0, clip.start + shift) }
+                ? { ...clip, start: Math.max(0, clip.start + step) }
                 : clip,
             )
             return { ...track, clips: shifted }
@@ -870,6 +950,7 @@ export const useCompose = create<State>((set, get) => ({
    * режутся вместе, иначе они разъехались бы.
    */
   splitAtPlayhead() {
+    get().mark()
     const at = get().playhead
     const made: string[] = []
     set((state) => ({
@@ -906,6 +987,7 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   removeClips(ids) {
+    get().mark()
     set((state) => {
       const all = state.tracks.flatMap((track) => track.clips)
       const links = new Set(
@@ -933,6 +1015,7 @@ export const useCompose = create<State>((set, get) => ({
    * слоёв у звука нет, он просто складывается.
    */
   addTrack(kind) {
+    get().mark()
     set((state) => {
       if (state.tracks.length >= MAX_TRACKS) return state
       const track: ComposeTrack = { id: nextId(), kind, clips: [], level: 1 }
@@ -952,6 +1035,7 @@ export const useCompose = create<State>((set, get) => ({
    * самую последнюю — на пустом таймлайне некуда было бы положить файл.
    */
   removeTrack(id) {
+    get().mark()
     set((state) => {
       if (state.tracks.length <= 1) return state
       const going = state.tracks.find((track) => track.id === id)
@@ -1090,6 +1174,7 @@ export const useCompose = create<State>((set, get) => ({
    * собственную дорожку — и при первом же перетаскивании они разъехались бы.
    */
   groupClips(ids) {
+    get().mark()
     if (ids.length < 2) return
     const groupId = nextId()
     set((state) => {
@@ -1116,6 +1201,7 @@ export const useCompose = create<State>((set, get) => ({
 
   /** Выпускает клипы из группы — дальше они ходят сами по себе. */
   ungroupClips(ids) {
+    get().mark()
     set((state) => ({
       tracks: state.tracks.map((track) => ({
         ...track,
@@ -1135,6 +1221,7 @@ export const useCompose = create<State>((set, get) => ({
    * куда положить следующий файл.
    */
   clearAll() {
+    get().mark()
     set((state) => {
       const first = (kind: 'video' | 'audio') => state.tracks.find((t) => t.kind === kind)
       const kept = [first('video'), first('audio')].filter(Boolean) as ComposeTrack[]
@@ -1165,6 +1252,7 @@ export const useCompose = create<State>((set, get) => ({
    * значат, а клипа, который был выбран, там может и не быть.
    */
   loadProject(data) {
+    get().mark()
     set({ ...normalize(data), playhead: 0, selected: [] })
     save(get())
   },
