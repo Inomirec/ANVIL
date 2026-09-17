@@ -45,9 +45,16 @@ import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Dropdown, Empty, IconButton, Segmented, Toggle } from './ui'
 
-/** Значок занятости, который едет за курсором, пока читается файл. */
-function BusyMark() {
-  const [at, setAt] = useState({ x: -100, y: -100 })
+/**
+ * Значок занятости у курсора.
+ *
+ * Появляется там, куда бросили файл, и дальше едет за мышью. Начальное место
+ * важно: во время перетаскивания мышь не шлёт обычных движений, и значок,
+ * который ждёт первого из них, так и остаётся за краем экрана — человек видит
+ * зависшее окно без единого признака работы.
+ */
+function BusyMark({ from, text }: { from: { x: number; y: number }; text: string }) {
+  const [at, setAt] = useState(from)
   useEffect(() => {
     const move = (event: MouseEvent) => setAt({ x: event.clientX, y: event.clientY })
     window.addEventListener('mousemove', move)
@@ -59,7 +66,7 @@ function BusyMark() {
       style={{ left: at.x + 16, top: at.y + 16 }}
     >
       <Loader2 size={12} className="animate-spin text-accent-soft" />
-      читаю файл…
+      {text}
     </span>
   )
 }
@@ -204,7 +211,12 @@ export function ComposeTab() {
   const frameBox = useRef<HTMLDivElement>(null)
   const player = useComposePlayer(videoRef)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
-  const [adding, setAdding] = useState(false)
+  // Держим и место, откуда началась работа: значок должен появиться под
+  // курсором сразу, а не после первого движения мыши.
+  const [adding, setAdding] = useState<{ x: number; y: number } | null>(null)
+  // Кадр под иглой иногда считается заметно дольше обычного — на длинном
+  // монтаже это выглядит как зависание. Показываем то же, что и при чтении.
+  const [slowFrame, setSlowFrame] = useState(false)
   // Сетка поверх кадра, как в медиатеке: по ней видно, попадает ли важное в
   // середину. Выбор запоминается — включают её обычно надолго.
   // Сетку часто включают и выключают, поэтому у неё отдельная кнопка, а вид
@@ -219,11 +231,11 @@ export function ComposeTab() {
   })
   const grid: GridKind = gridOn ? gridKind : 'none'
   const [snapping, setSnapping] = useState(false)
-  // Увеличительное стекло над кадром: во сколько раз и вокруг какой точки.
-  // Точку запоминаем ту, где было колесо, — тогда под курсором остаётся то
-  // же место, а не середина кадра.
+  // Увеличительное стекло над кадром: во сколько раз и насколько сдвинут.
+  // Сдвиг в пикселях от середины — так кадр можно и таскать зажатым колесом,
+  // и приближать к точке под курсором.
   const [view, setView] = useState(1)
-  const [viewAt, setViewAt] = useState({ x: 50, y: 50 })
+  const [pan, setPan] = useState({ x: 0, y: 0 })
   // Ширина шины громкости: её тянут за границу, и от ширины зависит, что на
   // ней помещается. Запоминаем — настраивают это один раз и надолго.
   const [meterWidth, setMeterWidth] = useState(() => {
@@ -247,10 +259,12 @@ export function ComposeTab() {
       if (!clips) setFrameUrl(null)
       return
     }
+    let slow: ReturnType<typeof setTimeout> | null = null
     const timer = setTimeout(() => {
       pending.current?.abort()
       const control = new AbortController()
       pending.current = control
+      slow = setTimeout(() => setSlowFrame(true), 400)
       const view = useCompose.getState()
       api
         .composeFrame(
@@ -277,8 +291,15 @@ export function ComposeTab() {
           if (error.name === 'AbortError') return
           setFrameError(error.message)
         })
+        .finally(() => {
+          if (slow) clearTimeout(slow)
+          setSlowFrame(false)
+        })
     }, 80)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      if (slow) clearTimeout(slow)
+    }
   }, [playhead, clips, tracks, player.playing])
 
   // Картинку держим ровно до следующей: иначе браузер копит их в памяти.
@@ -287,8 +308,13 @@ export function ComposeTab() {
   }, [frameUrl])
 
   /** Файл притащили из медиатеки — добавляем клип на дорожку. */
-  async function dropFile(path: string, at: number, trackId: string) {
-    setAdding(true)
+  async function dropFile(
+    path: string,
+    at: number,
+    trackId: string,
+    from: { x: number; y: number },
+  ) {
+    setAdding(from)
     try {
       const info = await api.fileInfo(path)
       if (info.kind === 'other') {
@@ -338,7 +364,7 @@ export function ComposeTab() {
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {
-      setAdding(false)
+      setAdding(null)
     }
   }
 
@@ -441,8 +467,11 @@ export function ComposeTab() {
     // Пока файл читается, у курсора висит подпись: файл ложится на дорожку не
     // мгновенно, и без этого кажется, что окно зависло. Одного вида курсора
     // мало — его смену легко не заметить.
-    <div className={`relative flex h-full ${adding ? 'cursor-progress' : ''}`}>
-      {adding && <BusyMark />}
+    <div className={`relative flex h-full ${adding || slowFrame ? 'cursor-progress' : ''}`}>
+      {adding && <BusyMark from={adding} text="читаю файл…" />}
+      {!adding && slowFrame && (
+        <BusyMark from={{ x: 24, y: 24 }} text="собираю кадр…" />
+      )}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Окно просмотра.
 
@@ -454,18 +483,45 @@ export function ComposeTab() {
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-2/60 p-4"
             onWheel={(event) => {
               // Колесо увеличивает сам экран просмотра, а не файлы на нём.
+              // Точка под курсором остаётся на месте: иначе на приближении
+              // нужный кусок кадра уезжает неизвестно куда.
               if (!clips) return
+              event.preventDefault()
               const box = frameBox.current?.getBoundingClientRect()
+              const next = Math.min(
+                6,
+                Math.max(1, Number((view * (event.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(3))),
+              )
               if (box) {
-                setViewAt({
-                  x: Math.min(100, Math.max(0, ((event.clientX - box.left) / box.width) * 100)),
-                  y: Math.min(100, Math.max(0, ((event.clientY - box.top) / box.height) * 100)),
+                const toX = event.clientX - (box.left + box.width / 2)
+                const toY = event.clientY - (box.top + box.height / 2)
+                const keep = next / view
+                setPan({
+                  x: next === 1 ? 0 : toX - (toX - pan.x) * keep,
+                  y: next === 1 ? 0 : toY - (toY - pan.y) * keep,
                 })
               }
+              setView(next)
+            }}
+            // Зажатое колесо таскает кадр: при большом увеличении иначе не
+            // добраться до нужного угла.
+            onMouseDown={(event) => {
+              if (event.button !== 1 || view <= 1) return
               event.preventDefault()
-              setView((was) =>
-                Math.min(6, Math.max(1, Number((was * (event.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(3)))),
-              )
+              const from = { x: event.clientX, y: event.clientY }
+              const was = { ...pan }
+              const move = (moved: MouseEvent) => {
+                setPan({
+                  x: was.x + (moved.clientX - from.x),
+                  y: was.y + (moved.clientY - from.y),
+                })
+              }
+              const drop = () => {
+                window.removeEventListener('mousemove', move)
+                window.removeEventListener('mouseup', drop)
+              }
+              window.addEventListener('mousemove', move)
+              window.addEventListener('mouseup', drop)
             }}
           >
             {/* Панель над кадром: сетка, приближение, качество и снимок.
@@ -480,9 +536,9 @@ export function ComposeTab() {
                     type="button"
                     onClick={() => {
                       setView(1)
-                      setViewAt({ x: 50, y: 50 })
+                      setPan({ x: 0, y: 0 })
                     }}
-                    title="Увеличение экрана просмотра — на готовый файл не влияет. Колесо над кадром. Нажмите, чтобы вернуть обычный размер."
+                    title="Увеличение экрана просмотра — на готовый файл не влияет. Колесо приближает, зажатое колесо таскает кадр. Нажмите, чтобы вернуть обычный размер."
                     className={`inline-flex h-8 items-center rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
                       view > 1
                         ? 'bg-accent/20 text-accent-soft hover:bg-accent/30'
@@ -499,7 +555,10 @@ export function ComposeTab() {
                       value: String(item),
                       label: `Экран ${Math.round(item * 100)}%`,
                     }))}
-                    onChange={(item) => setView(Number(item))}
+                    onChange={(item) => {
+                      setView(Number(item))
+                      setPan({ x: 0, y: 0 })
+                    }}
                   >
                     <ChevronDown size={12} />
                   </Dropdown>
@@ -598,8 +657,7 @@ export function ComposeTab() {
               <div
                 className="absolute inset-0"
                 style={{
-                  transform: `scale(${view})`,
-                  transformOrigin: `${viewAt.x}% ${viewAt.y}%`,
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${view})`,
                 }}
               >
                 {/* Пока смотрим — играет собранный кусок, иначе показываем
@@ -660,9 +718,9 @@ export function ComposeTab() {
           style={{ height: timelineHeight }}
         >
           <ComposeTimeline
-            adding={adding}
+            adding={adding !== null}
             player={player}
-            onDropFile={(path, at, trackId) => void dropFile(path, at, trackId)}
+            onDropFile={(path, at, trackId, from) => void dropFile(path, at, trackId, from)}
           />
         </div>
       </div>

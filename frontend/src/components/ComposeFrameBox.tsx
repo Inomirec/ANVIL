@@ -251,17 +251,19 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
     useCompose.getState().updateClip(clip.id, { size: 1, sizeY: 0, x: 0.5, y: 0.5 })
 
   /**
-   * Ручки держим внутри окна просмотра.
+   * Ручки стоят вплотную к углам рамки, но внутри неё.
    *
-   * У клипа во весь кадр рамка совпадает с краями окна, и ручки наполовину
-   * уходили за него: чтобы взяться за размер, клип приходилось сначала
-   * отодвигать. Поэтому место ручки считаем в кадре и прижимаем к его краю.
+   * Посаженные ровно на границу, они наполовину уходили за край окна у клипа
+   * во весь кадр: чтобы взяться за размер, клип приходилось сначала
+   * отодвигать. Поэтому у краёв ручка прижимается внутрь, а на серединах
+   * сторон остаётся по центру.
    */
-  const INSET = 0.014
-  const place = (share: number, from: number, span: number) => {
-    const at = Math.min(1 - INSET, Math.max(INSET, from + share * span))
-    return ((at - from) / (span || 1)) * 100
-  }
+  const along = (share: number) =>
+    share === 0
+      ? { pos: '0%', shift: '2px' }
+      : share === 1
+        ? { pos: '100%', shift: 'calc(-100% - 2px)' }
+        : { pos: '50%', shift: '-50%' }
 
   const handle = (
     key: string,
@@ -272,11 +274,11 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
     <div
       key={key}
       title={hint}
-      className="absolute h-3 w-3 rounded-[2px] border border-base bg-accent-soft"
+      className="absolute h-3 w-3 border border-base bg-accent-soft"
       style={{
-        left: `${place(at.x, clip.x - wide / 2, wide)}%`,
-        top: `${place(at.y, clip.y - tall / 2, tall)}%`,
-        transform: 'translate(-50%, -50%)',
+        left: along(at.x).pos,
+        top: along(at.y).pos,
+        transform: `translate(${along(at.x).shift}, ${along(at.y).shift})`,
         cursor: at.cursor,
       }}
       onDoubleClick={(event) => {
@@ -297,7 +299,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
   return (
     <div
       ref={box}
-      className="absolute cursor-move rounded-[3px] border border-dashed border-accent-soft/90 bg-accent/5"
+      className="absolute cursor-move border border-dashed border-accent-soft/90 bg-accent/5"
       style={{
         left: `${(clip.x - wide / 2) * 100}%`,
         top: `${(clip.y - tall / 2) * 100}%`,

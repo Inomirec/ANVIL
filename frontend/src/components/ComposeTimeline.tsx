@@ -110,8 +110,13 @@ export function ComposeTimeline({
   adding,
   player,
 }: {
-  /** Файл притащили из медиатеки: путь, секунда и дорожка, куда его положили. */
-  onDropFile: (path: string, at: number, trackId: string) => void
+  /** Файл притащили из медиатеки: путь, секунда, дорожка и место броска. */
+  onDropFile: (
+    path: string,
+    at: number,
+    trackId: string,
+    from: { x: number; y: number },
+  ) => void
   /** Файл сейчас читается — показываем, что программа занята, а не висит. */
   adding: boolean
   /** Управление просмотром: кнопки стоят здесь, рядом с остальными. */
@@ -436,6 +441,32 @@ export function ComposeTimeline({
    * Точка под курсором остаётся на месте: иначе на приближении нужный кусок
    * уезжает за край, и его приходится искать прокруткой.
    */
+  /**
+   * Держит иглу на месте при смене масштаба.
+   *
+   * Приближали к точке под курсором, и на сильном увеличении игла легко
+   * уезжала за край: человек крутит колесо, чтобы разглядеть место у иглы, а
+   * оно-то и пропадает. Теперь при любом приближении игла остаётся там же,
+   * где была на экране, — а если её не видно, встаёт посередине.
+   */
+  const keepPlayhead = (next: number) => {
+    const view = scroller.current
+    if (!view) return
+    const state = useCompose.getState()
+    const wasAt = state.playhead * state.scale - view.scrollLeft
+    const inside = wasAt >= 0 && wasAt <= view.clientWidth
+    const keep = inside ? wasAt : view.clientWidth / 2
+    setScale(next)
+    // Ждём перерисовку: ширина полотна меняется вместе с масштабом, и до неё
+    // прокрутка упрётся в старый предел. Ждём обычным таймером, а не кадром
+    // отрисовки: в свёрнутом окне кадры не приходят вовсе, и прокрутка тогда
+    // не срабатывала бы.
+    setTimeout(() => {
+      const now = useCompose.getState().scale
+      view.scrollLeft = Math.max(0, state.playhead * now - keep)
+    }, 0)
+  }
+
   const onWheel = (event: React.WheelEvent) => {
     event.preventDefault()
     // С Ctrl колесо листает дорожки: когда их много, тянуть полосу прокрутки
@@ -444,15 +475,8 @@ export function ComposeTimeline({
       if (vscroll.current) vscroll.current.scrollTop += event.deltaY
       return
     }
-    const box = canvas.current?.getBoundingClientRect()
     const state = useCompose.getState()
-    const under = box ? (event.clientX - box.left) / state.scale : 0
-    const next = Math.min(400, Math.max(4, state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15)))
-    setScale(next)
-    if (scroller.current && box) {
-      const inside = event.clientX - scroller.current.getBoundingClientRect().left
-      scroller.current.scrollLeft = Math.max(0, under * next - inside)
-    }
+    keepPlayhead(Math.min(400, Math.max(4, state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15))))
   }
 
   const from = renderIn ?? 0
@@ -626,10 +650,16 @@ export function ComposeTimeline({
           >
             {compact ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
           </IconButton>
-          <IconButton title="Отдалить (колесо мыши)" onClick={() => setScale(scale / 1.4)}>
+          <IconButton
+            title="Отдалить (колесо мыши)"
+            onClick={() => keepPlayhead(Math.max(4, scale / 1.4))}
+          >
             <ZoomOut size={14} />
           </IconButton>
-          <IconButton title="Приблизить (колесо мыши)" onClick={() => setScale(scale * 1.4)}>
+          <IconButton
+            title="Приблизить (колесо мыши)"
+            onClick={() => keepPlayhead(Math.min(400, scale * 1.4))}
+          >
             <ZoomIn size={14} />
           </IconButton>
         </div>
@@ -716,6 +746,7 @@ export function ComposeTimeline({
                   path,
                   snap(at, magnets(tracks, [], playhead), (SNAP_PIXELS * 2) / scale),
                   track.id,
+                  { x: event.clientX, y: event.clientY },
                 )
               }}
             >
@@ -967,9 +998,12 @@ function TrackHeads({
                   }`}
                 />
                 {withLevel && sound && (
+                  // Число стоит под ползунком, а не рядом: в узкой колонке
+                  // подпись съедала половину его длины, и попасть в нужное
+                  // значение было нечем.
                   <div
-                    className={`flex items-center gap-1.5 ${
-                      narrow ? 'w-[92px] shrink-0' : ''
+                    className={`flex gap-1.5 ${
+                      narrow ? 'w-[92px] shrink-0 items-center' : 'flex-col'
                     }`}
                   >
                     <input
@@ -998,8 +1032,12 @@ function TrackHeads({
                       }
                       className="min-w-0 flex-1"
                     />
-                    <span className="w-[46px] shrink-0 text-right font-mono text-[9.5px] tabular-nums text-ink-faint">
-                      {sound ? volumeLabel(track.level) : `${Math.round(track.level * 100)}%`}
+                    <span
+                      className={`shrink-0 font-mono text-[9.5px] leading-none tabular-nums text-ink-faint ${
+                        narrow ? 'w-[46px] text-right' : 'w-full text-center'
+                      }`}
+                    >
+                      {volumeLabel(track.level)}
                     </span>
                   </div>
                 )}
