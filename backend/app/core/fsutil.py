@@ -182,6 +182,22 @@ def default_output_dir(source: Path, kind: str | None = None) -> Path:
     return source.parent / folder
 
 
+def downloads_dir() -> Path:
+    """Папка «Загрузки» — куда складывать готовое, если человек не выбрал сам.
+
+    Раньше умолчанием была подпапка рядом с первым файлом монтажа. Для сборки
+    это удобно, а для монтажа — нет: файлы в нём из разных папок, и «рядом с
+    первым» означает то одно место, то другое. Готовое уходило туда, откуда
+    случайно взялся первый клип, и найти его потом было негде.
+    """
+    home = Path.home()
+    for name in ("Downloads", "Загрузки"):
+        folder = home / name
+        if folder.is_dir():
+            return folder
+    return home
+
+
 def human_size(size: int) -> str:
     value = float(size)
     for unit in ("Б", "КБ", "МБ", "ГБ", "ТБ"):

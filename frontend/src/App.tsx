@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Clapperboard, Download, Film, FolderTree, Info, Settings as SettingsIcon, WifiOff, X } from 'lucide-react'
 import { api } from './lib/api'
 import { useEvents } from './hooks/useEvents'
@@ -38,6 +38,10 @@ export default function App() {
   const chooseWorkspace = useStore((state) => state.chooseWorkspace)
 
   const [tab, setTab] = useState<Tab>('library')
+  // Обработчики на window видят снимок из прошлого рендера — текущую вкладку
+  // берём из ссылки, иначе бросок всегда считал бы открытой медиатеку.
+  const tabRef = useRef(tab)
+  tabRef.current = tab
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [workspacePicker, setWorkspacePicker] = useState(false)
   const [trim, setTrim] = useState<TrimState>({ in: null, out: null })
@@ -54,10 +58,25 @@ export default function App() {
 
   // Файлы, перетащенные из проводника. Путь приходит от окна программы:
   // сама страница его не видит, браузеры путей не отдают.
+  //
+  // Куда именно упал файл, окно не сообщает — точку берём из обычного
+  // броска, который страница видит сама: он приходит в то же мгновение.
+  const dropAt = useRef({ x: 0, y: 0 })
   useEffect(() => {
     const onDrop = (event: Event) => {
       const paths = (event as CustomEvent<string[]>).detail
       if (!Array.isArray(paths) || !paths.length) return
+      // Работали в монтаже — там и остаёмся: файл ложится на дорожку под
+      // курсором. Уводить человека в медиатеку, чтобы он возвращался обратно
+      // руками, незачем.
+      if (tabRef.current === 'compose') {
+        window.dispatchEvent(
+          new CustomEvent('sgh:drop-compose', {
+            detail: { paths, at: dropAt.current },
+          }),
+        )
+        return
+      }
       setTab('library')
       void openExternal(paths[0])
       if (paths.length > 1) {
@@ -69,6 +88,7 @@ export default function App() {
     // файл вместо страницы.
     const allow = (event: DragEvent) => {
       if (!event.dataTransfer?.types.includes('Files')) return
+      dropAt.current = { x: event.clientX, y: event.clientY }
       event.preventDefault()
       event.dataTransfer.dropEffect = 'copy'
     }

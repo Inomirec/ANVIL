@@ -96,6 +96,27 @@ async def list_library(
     }
 
 
+@router.get("/kind")
+async def path_kind(path: str) -> dict[str, str]:
+    """Папка это или файл.
+
+    Нужно там, где путь приходит извне — например файл перетащили в окно.
+    Папку надо открывать списком, а не пытаться показать её плеером.
+    """
+    # Рабочей папкой путь ещё не стал — его только что перетащили в окно,
+    # поэтому обычную проверку не зовём: ответ говорит лишь о том, что это,
+    # и ничего не открывает.
+    try:
+        target = Path(path).expanduser().resolve()
+    except OSError as exc:
+        raise HTTPException(404, f"Некорректный путь: {path}") from exc
+    if target.is_dir():
+        return {"kind": "folder", "path": str(target)}
+    if target.exists():
+        return {"kind": "file", "path": str(target)}
+    return {"kind": "missing", "path": str(target)}
+
+
 @router.get("/info")
 async def file_info(path: str) -> dict[str, Any]:
     """Технические характеристики одного файла."""
@@ -103,6 +124,11 @@ async def file_info(path: str) -> dict[str, Any]:
         target = fsutil.safe_path(path)
     except (PermissionError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
+
+    # Папка сюда попадать не должна: у неё нет ни расширения, ни дорожек, и
+    # редактор показывал по ней плашку «формат „.“ не показывается».
+    if target.is_dir():
+        raise HTTPException(400, "Это папка, а не файл — откройте её в медиатеке")
 
     kind = fsutil.media_kind(target)
     payload: dict[str, Any] = {

@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import { parentDir, timecode } from '../lib/format'
+import { timecode } from '../lib/format'
 import {
   DEFAULT_IMAGE_SECONDS,
   FRAME_QUALITY,
@@ -448,13 +448,11 @@ export function ComposeTab() {
     )
   const placing = shown.length === 1 ? shown[0] : undefined
 
-  // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер —
-  // папка первого клипа плюс подпапка из настроек. Показываем её целиком:
-  // «рядом с первым файлом» ничего не говорит, когда папок были десятки.
-  const firstClip = tracks.flatMap((track) => track.clips)[0]
-  const defaultOut = firstClip
-    ? `${parentDir(firstClip.source)}\\${settings?.export?.output_folder || 'Обработанное'}`
-    : null
+  // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер.
+  // Раньше это была папка первого клипа — и она менялась сама, стоило
+  // собрать монтаж из другого материала: готовое уходило туда, откуда
+  // случайно взялся первый файл. Теперь умолчание одно и то же — «Загрузки».
+  const defaultOut = settings?.downloadsDir ?? null
   // Ищем по списку дорожек, а не через getState(): иначе панель справа не
   // узнает, что клип подвинули или растянули, — снимок хранилища не
   // подписывает компонент на изменения.
@@ -853,7 +851,7 @@ export function ComposeTab() {
               className="min-w-0 flex-1 truncate text-[10.5px] text-ink-faint"
               title={outputDir ?? defaultOut ?? undefined}
             >
-              {outputDir ?? defaultOut ?? 'Положите файл на таймлайн'}
+              {outputDir ?? defaultOut ?? 'папку выберет программа'}
             </p>
             {outputDir && (
               <button

@@ -326,13 +326,12 @@ def submit_compose_frame(request: ComposeSnapshotRequest, project: ComposeProjec
     человек видит его в окне просмотра. Размер берём полный, проектный:
     в окне картинка мельче, а забирают её обычно чтобы использовать.
     """
-    first = next((clip.source for track in project.tracks for clip in track.clips), None)
+    # Та же папка, что и у сборки: снимок кадра — это тоже готовый файл, и
+    # искать его человек будет там же.
     directory = (
         Path(request.output_dir).expanduser()
         if request.output_dir
-        else fsutil.default_output_dir(Path(first), "image")
-        if first
-        else Path(config.load().resolved_workspace())
+        else fsutil.downloads_dir()
     )
 
     async def runner(ctx: JobContext) -> None:
@@ -394,15 +393,13 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
     begin = max(request.start or 0.0, 0.0)
     finish = min(request.end, project.duration) if request.end else project.duration
     total = max(finish - begin, 0.0)
-    first = next(
-        (clip.source for track in project.tracks for clip in track.clips), None
-    )
+    # Куда сохранять — решает человек, и решает один раз. Прежнее умолчание
+    # «рядом с первым файлом» меняло папку само, стоило собрать монтаж из
+    # другого материала, и готовое уходило неизвестно куда.
     directory = (
         Path(request.output_dir).expanduser()
         if request.output_dir
-        else fsutil.default_output_dir(Path(first), "video")
-        if first
-        else Path(config.load().resolved_workspace())
+        else fsutil.downloads_dir()
     )
 
     # Настройки сборки приходят от монтажа, а не из общего списка пресетов:

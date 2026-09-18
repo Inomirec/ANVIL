@@ -201,6 +201,8 @@ export interface AppSettings {
   language: 'ru' | 'en'
   resolvedWorkspace: string
   defaultWorkspace?: string
+  /** Папка «Загрузки» — туда ложится готовое, пока не выбрали свою. */
+  downloadsDir?: string
   download: {
     directory: string | null
     filename_template: string

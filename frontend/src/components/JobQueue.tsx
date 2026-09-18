@@ -22,6 +22,14 @@ import { Button, IconButton, Modal } from './ui'
 
 //: Сколько строк очереди показываем разом.
 const ROW_LIMIT = 200
+//: Под сколько строк раскрывается панель. Дальше список листают.
+const ROWS_SHOWN = 4
+//: Высота свёрнутой строки очереди и отступы списка, в пикселях.
+const HEAD_HEIGHT = 42
+const LIST_PADDING = 16
+const ROW_GAP = 4
+//: Куда упирается раскрытая панель, когда строк много.
+const FULL_HEIGHT = 290
 
 export function JobQueue() {
   const jobs = useStore((state) => state.jobs)
@@ -78,11 +86,37 @@ export function JobQueue() {
     }
   }
 
+  // Раскрытая очередь занимает столько, сколько нужно её строкам, но не
+  // больше четырёх: на один сжатый файл разворачивать пол-окна незачем, а
+  // дальше четвёртой строки список всё равно листают. Высоту строки меряем,
+  // а не считаем: у строки с ошибкой есть объяснение, у раскрытой — журнал.
+  const list = useRef<HTMLUListElement>(null)
+  const [listHeight, setListHeight] = useState(0)
+  useEffect(() => {
+    const node = list.current
+    if (!node || !open) return
+    const measure = () => {
+      const rows = Array.from(node.children) as HTMLElement[]
+      const take = rows.slice(0, ROWS_SHOWN)
+      const gaps = Math.max(0, take.length - 1) * ROW_GAP
+      setListHeight(take.reduce((sum, row) => sum + row.offsetHeight, 0) + gaps)
+    }
+    measure()
+    const watch = new ResizeObserver(measure)
+    watch.observe(node)
+    return () => watch.disconnect()
+  }, [open, shown.length, expanded])
+
+  // Пока ничего не измерено (первая отрисовка, пустая очередь) — прежняя
+  // высота: пустая панель с надписью должна выглядеть как раньше.
+  const height = !open
+    ? HEAD_HEIGHT
+    : Math.min(FULL_HEIGHT, listHeight ? listHeight + HEAD_HEIGHT + LIST_PADDING : FULL_HEIGHT)
+
   return (
     <div
-      className={`flex shrink-0 flex-col border-t border-line-soft bg-surface transition-[height] duration-200 ${
-        open ? 'h-[290px]' : 'h-[42px]'
-      }`}
+      className="flex shrink-0 flex-col border-t border-line-soft bg-surface transition-[height] duration-200"
+      style={{ height }}
     >
       <div className="flex h-[42px] shrink-0 items-center gap-3 px-4">
         {/* Разворот и очистка — разные действия, поэтому строка не может быть
@@ -174,7 +208,7 @@ export function JobQueue() {
                 Очередь пуста. Обработанные файлы появятся здесь.
               </p>
             )}
-            <ul className="space-y-1">
+            <ul ref={list} className="space-y-1">
               {shown.map((job) => (
                 <JobRow key={job.id} job={job} expanded={expanded === job.id} onCompare={setCompare} />
               ))}

@@ -45,6 +45,7 @@ import {
   type ComposeClip,
   type ComposeTrack,
 } from '../composeStore'
+import { useStore } from '../store'
 import { IconButton } from './ui'
 
 /** Радиус прилипания и ширина уголка для растягивания, в пикселях. */
@@ -135,6 +136,7 @@ export function ComposeTimeline({
   const playhead = useCompose((state) => state.playhead)
   const selected = useCompose((state) => state.selected)
   const scale = useCompose((state) => state.scale)
+  const toast = useStore((state) => state.toast)
   const renderIn = useCompose((state) => state.renderIn)
   const renderOut = useCompose((state) => state.renderOut)
   const setPlayhead = useCompose((state) => state.setPlayhead)
@@ -206,6 +208,43 @@ export function ComposeTimeline({
     },
     [rowHeight],
   )
+
+  /**
+   * Файл, перетащенный из проводника прямо на таймлайн.
+   *
+   * Путь к нему знает только окно программы, поэтому он приходит отдельным
+   * событием, а не вместе с броском. Точка броска у события своя — по ней и
+   * находим дорожку со временем; если бросили мимо дорожек, кладём на первую
+   * подходящую в конец монтажа, чтобы файл не пропал без следа.
+   */
+  useEffect(() => {
+    const onExternal = (event: Event) => {
+      const detail = (event as CustomEvent<{ paths: string[]; at: { x: number; y: number } }>)
+        .detail
+      const path = detail?.paths?.[0]
+      if (!path) return
+      const state = useCompose.getState()
+      const row = rowAt(detail.at.y)
+      const track = state.tracks[row] ?? state.tracks.find((item) => item.kind === 'video')
+      if (!track) return
+      const inside = row >= 0 && row < state.tracks.length
+      const at = inside
+        ? snap(
+            secondsAt(detail.at.x),
+            magnets(state.tracks, [], state.playhead),
+            (SNAP_PIXELS * 2) / state.scale,
+          )
+        : state.tracks
+            .flatMap((item) => item.clips)
+            .reduce((end, clip) => Math.max(end, clip.start + clip.duration), 0)
+      onDropFile(path, Math.max(0, at), track.id, detail.at)
+      if (detail.paths.length > 1) {
+        toast(`Положен первый файл из ${detail.paths.length} — остальные перетащите по одному`, 'info')
+      }
+    }
+    window.addEventListener('sgh:drop-compose', onExternal)
+    return () => window.removeEventListener('sgh:drop-compose', onExternal)
+  }, [onDropFile, rowAt, secondsAt, toast])
 
   // Обработчики висят на окне, поэтому берут всё нужное из хранилища сами:
   // иначе они запомнили бы снимок из прошлого рендера, и клип прыгал бы к
@@ -1538,6 +1577,11 @@ function ClipBox({
   const short = height < TRACK_HEIGHT
   // У звука линия показывает громкость, у картинки — насколько она видна.
   const level = sound ? volumeShare(clip.volume) : clip.opacity
+  // На сжатой дорожке клип высотой с полтора десятка пикселей, и всё, за
+  // что его можно потянуть, лежит друг на друге: целясь в середину, попадаешь
+  // то в затухание, то в громкость. Поэтому у сжатого клипа остаётся только
+  // самое нужное — подвинуть и растянуть. Само затухание никуда не девается,
+  // его по-прежнему видно треугольником: разверните дорожки, чтобы поправить.
   const box = Math.max(clip.duration * scale, 6)
   // Мелкому клипу лента кадров и волна не нужны — там нечего разглядывать,
   // а запрос стоит времени.
@@ -1548,9 +1592,7 @@ function ClipBox({
 
   const fadeInWidth = (clip.fadeIn / clip.duration) * box
   const fadeOutWidth = (clip.fadeOut / clip.duration) * box
-  // На сжатой дорожке уголок затухания в обычном размере закрыл бы клип
-  // целиком, и двигать его стало бы нечем.
-  const corner = Math.min(FADE_CORNER, Math.max(6, Math.round((height - 12) / 2.5)))
+  const corner = short ? 0 : FADE_CORNER
 
   return (
     <div
@@ -1566,8 +1608,8 @@ function ClipBox({
         const fromRight = area.right - event.clientX
         const fromTop = event.clientY - area.top
         // Верхние углы отданы затуханию, бока ниже них — длине клипа.
-        if (fromTop <= corner && fromLeft <= corner) return onGrab(event, 'fadeIn')
-        if (fromTop <= corner && fromRight <= corner) return onGrab(event, 'fadeOut')
+        if (corner > 0 && fromTop <= corner && fromLeft <= corner) return onGrab(event, 'fadeIn')
+        if (corner > 0 && fromTop <= corner && fromRight <= corner) return onGrab(event, 'fadeOut')
         onGrab(
           event,
           fromLeft <= GRIP_PIXELS ? 'left' : fromRight <= GRIP_PIXELS ? 'right' : 'move',
@@ -1611,6 +1653,18 @@ function ClipBox({
       {/* Шторка приглушена, пока её не трогали: пока громкость обычная, она
           ничего не сообщает, а внимание забирает. Стоит увести её вниз — она
           проступает вместе с подписью. */}
+      {short ? (
+        // На сжатой дорожке шторку не тянут, но уровень всё равно показываем:
+        // иначе приглушённый клип ничем не отличается от обычного.
+        level < 1 && (
+          <div
+            className={`pointer-events-none absolute inset-x-0 h-[2px] ${
+              sound ? 'bg-ok/70' : 'bg-accent-soft/70'
+            }`}
+            style={{ top: `${(1 - level) * 100}%` }}
+          />
+        )
+      ) : (
       <div
         className="group/level absolute inset-x-0 z-10 cursor-ns-resize"
         style={{ top: `${(1 - level) * 100}%`, height: 9, marginTop: -4 }}
@@ -1644,6 +1698,7 @@ function ClipBox({
           </span>
         )}
       </div>
+      )}
 
       <div
         className={`relative flex h-full flex-col justify-between ${
@@ -1679,29 +1734,35 @@ function ClipBox({
         )}
       </div>
 
-      {/* Уголки затухания — вверху, уголки длины — по бокам. */}
-      <div
-        className="absolute left-0 top-0 cursor-nwse-resize"
-        style={{ width: corner, height: corner }}
-        title="Потяните вправо — плавное появление"
-        onMouseDown={(event) => {
-          event.stopPropagation()
-          onGrab(event, 'fadeIn')
-        }}
-      >
-        <div className="m-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
-      </div>
-      <div
-        className="absolute right-0 top-0 cursor-nesw-resize"
-        style={{ width: corner, height: corner }}
-        title="Потяните влево — плавный уход"
-        onMouseDown={(event) => {
-          event.stopPropagation()
-          onGrab(event, 'fadeOut')
-        }}
-      >
-        <div className="ml-auto mr-1 mt-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
-      </div>
+      {/* Уголки затухания — вверху, уголки длины — по бокам. На сжатой
+          дорожке уголков нет вовсе: клип в полтора десятка пикселей они
+          закрывали целиком, и взяться за него было нечем. */}
+      {!short && (
+        <>
+          <div
+            className="absolute left-0 top-0 cursor-nwse-resize"
+            style={{ width: corner, height: corner }}
+            title="Потяните вправо — плавное появление"
+            onMouseDown={(event) => {
+              event.stopPropagation()
+              onGrab(event, 'fadeIn')
+            }}
+          >
+            <div className="m-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
+          </div>
+          <div
+            className="absolute right-0 top-0 cursor-nesw-resize"
+            style={{ width: corner, height: corner }}
+            title="Потяните влево — плавный уход"
+            onMouseDown={(event) => {
+              event.stopPropagation()
+              onGrab(event, 'fadeOut')
+            }}
+          >
+            <div className="ml-auto mr-1 mt-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
+          </div>
+        </>
+      )}
       {/* Края длины начинаются ниже уголков, иначе они спорят за одни пиксели. */}
       <div
         className="absolute bottom-0 left-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"

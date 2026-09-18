@@ -236,6 +236,19 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async openExternal(path) {
+    // Перетащить могут и папку — тогда её надо открыть списком, а не пытаться
+    // показать плеером: раньше редактор брался за неё как за файл и писал
+    // «формат „.“ не показывается».
+    const kind = await api.pathKind(path).catch(() => null)
+    if (kind?.kind === 'folder') {
+      try {
+        await get().chooseWorkspace(kind.path)
+      } catch (error) {
+        get().toast((error as Error).message, 'error')
+      }
+      return
+    }
+
     // Файл может лежать где угодно, а программа работает только внутри
     // рабочих папок. Поэтому сначала пробуем открыть как есть, и лишь если
     // не пустило — добавляем его папку в рабочие.

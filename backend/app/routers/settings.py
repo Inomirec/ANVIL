@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from .. import config
-from ..core import binaries
+from ..core import binaries, fsutil
 from ..core.events import bus
 from ..models import PathRequest, SettingsPatch
 from ..paths import data_dir, default_workspace
@@ -28,6 +28,8 @@ async def get_settings() -> dict[str, Any]:
     data = settings.model_dump(mode="json")
     data["resolvedWorkspace"] = settings.resolved_workspace()
     data["defaultWorkspace"] = str(default_workspace())
+    # Куда программа складывает готовое, пока человек не выбрал папку сам.
+    data["downloadsDir"] = str(fsutil.downloads_dir())
     return data
 
 

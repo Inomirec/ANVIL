@@ -81,6 +81,12 @@ export const api = {
   openLink: (name: string) => post<{ ok: boolean; url: string }>('/api/settings/open-link', { path: name }),
   clearCookies: () => post<{ ok: boolean }>('/api/settings/cookies/clear'),
 
+  /** Папка это или файл — для путей, пришедших извне (перетащили в окно). */
+  pathKind: (path: string) =>
+    request<{ kind: 'file' | 'folder' | 'missing'; path: string }>(
+      `/api/library/kind?path=${encodeURIComponent(path)}`,
+    ),
+
   addWorkspace: (path: string) => post<AppSettings>('/api/settings/workspaces/add', { path }),
   removeWorkspace: (path: string) => post<AppSettings>('/api/settings/workspaces/remove', { path }),
   browse: (path?: string | null) =>

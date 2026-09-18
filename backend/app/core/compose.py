@@ -127,6 +127,26 @@ def _even(value: int) -> int:
     return max(2, value - value % 2)
 
 
+def _even_pixels(expression: str) -> str:
+    """То же округление до чётного, но для выражения внутри команды ffmpeg.
+
+    Часть значений известна только самому ffmpeg — например ширина картинки
+    после подгонки размера, — поэтому считать их заранее нечем.
+    """
+    return f"2*round(({expression})/2)"
+
+
+def _even_near(value: float) -> int:
+    """То же, но к ближайшему чётному, а не всегда вниз.
+
+    Округление вниз само по себе сдвигало клип: середина стоит там, где её
+    поставили, а ширина отнималась только с одной стороны — и край уезжал
+    вправо на полпикселя. На сетке из одинаковых картинок это видно сразу:
+    ряд выглядит неровным.
+    """
+    return max(2, int(round(value / 2)) * 2)
+
+
 def zoom_filter(clip: ComposeClip, width: int, height: int) -> str:
     """Приближение внутри кадра: увеличиваем и обрезаем по краям."""
     if clip.zoom <= 1.0:
@@ -155,7 +175,7 @@ def clip_box(clip: ComposeClip, width: int, height: int) -> tuple[int, int]:
     ролика такое «место» вылезало за кадр в несколько раз, и размер прыгал.
     """
     tall = clip.size_y if clip.size_y > 0 else clip.size
-    return _even(max(2, int(width * clip.size))), _even(max(2, int(height * tall)))
+    return _even_near(width * clip.size), _even_near(height * tall)
 
 
 def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
@@ -383,9 +403,23 @@ def build_segment(
         # Переставленный клип ставим серединой туда, куда его поместили:
         # x и y — доли кадра, 0.5 это центр. Считаем от середины, а не от
         # свободного места, иначе клип крупнее кадра было бы некуда двигать.
+        #
+        # Место округляем до чётного пикселя — и край, и отступ картинки
+        # внутри него. Цвет в готовом видео хранится на вдвое меньшей сетке,
+        # поэтому ffmpeg всё равно сдвинет наложение на чётную позицию, но
+        # сделает это молча и всегда вниз: у картинок с разной шириной
+        # отступы получались разной чётности, и разложенные по сетке кадры
+        # вставали вразнобой — тот самый съезд на пиксель. Считаем чётность
+        # сами, тогда одинаковые клетки получают одинаковые позиции.
         place = ""
         if is_placed(clip):
-            place = f":x=W*{clip.x:.5f}-w/2:y=H*{clip.y:.5f}-h/2"
+            box_w, box_h = clip_box(clip, width, height)
+            left = _even_pixels(f"W*{clip.x:.5f}-{box_w / 2:.3f}")
+            top = _even_pixels(f"H*{clip.y:.5f}-{box_h / 2:.3f}")
+            place = (
+                f":x={left}+{_even_pixels(f'({box_w}-w)/2')}"
+                f":y={top}+{_even_pixels(f'({box_h}-h)/2')}"
+            )
         chain.append(f"{layer}{label}overlay=eof_action=pass:shortest=0{place}{nxt}")
         layer = nxt
 
