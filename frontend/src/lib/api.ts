@@ -86,6 +86,11 @@ export const api = {
   },
   openLink: (name: string) => post<{ ok: boolean; url: string }>('/api/settings/open-link', { path: name }),
   clearCookies: () => post<{ ok: boolean }>('/api/settings/cookies/clear'),
+  /** Спрашивает у YouTube, принимает ли он подключённые куки. */
+  checkCookies: () =>
+    post<{ state: 'ok' | 'rejected' | 'none' | 'broken' | 'network' | 'unknown'; message: string }>(
+      '/api/settings/cookies/check',
+    ),
 
   /** Папка это или файл — для путей, пришедших извне (перетащили в окно). */
   pathKind: (path: string) =>

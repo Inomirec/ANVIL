@@ -9,10 +9,12 @@ X/Twitter и Instagram с несколькими картинками он ра�
 from __future__ import annotations
 
 import asyncio
+import http.cookiejar
 import json
 import os
 import re
 import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -410,18 +412,20 @@ def explain_failure(text: str) -> str:
             return (
                 "YouTube не признал вход: куки программе переданы, но по ним он "
                 "видит гостя, а не вошедшего человека.\n\n"
-                "Чаще всего дело в том, где именно куки выгружены. YouTube "
-                "смотрит на свою собственную метку входа, и она появляется, "
-                "только если куки сняты прямо со страницы youtube.com, где "
-                "выполнен вход, — куки Google с других страниц ему не годятся.\n\n"
+                "Скорее всего они просто устарели. Сайт отзывает вход когда "
+                "захочет, и срок, записанный в самом файле, об этом ничего не "
+                "говорит: там может значиться ещё год.\n\n"
                 "Что делать:\n"
                 "  1. Откройте youtube.com и убедитесь, что вошли в аккаунт "
                 "(вверху справа ваш значок, а не кнопка «Войти»).\n"
-                "  2. Прямо на этой странице выгрузите куки расширением.\n"
-                "  3. Загрузите файл заново в настройках программы.\n\n"
-                "Если это не помогло, выгрузите куки из приватного окна: "
-                "обычная вкладка иногда обновляет вход, и выгруженный файл "
-                "устаревает сразу после сохранения.\n\n"
+                "  2. Прямо на этой странице выгрузите куки расширением — "
+                "именно на ней, а не на google.com: YouTube смотрит на свою "
+                "собственную метку входа.\n"
+                "  3. Загрузите файл заново в настройках программы и нажмите "
+                "там «Проверить» — программа спросит у YouTube сама.\n\n"
+                "Если не помогло, выгрузите куки из приватного окна: обычная "
+                "вкладка иногда обновляет вход, и файл устаревает сразу после "
+                "сохранения.\n\n"
                 + text
             )
         return (
@@ -455,6 +459,119 @@ def explain_failure(text: str) -> str:
         )
 
     return text
+
+
+#: Страница, по которой видно, признан ли вход. YouTube сам пишет в неё
+#: «LOGGED_IN»: у вошедшего true, у гостя false.
+_LOGIN_PROBE_URL = "https://www.youtube.com/"
+_LOGIN_MARK = re.compile(r'"LOGGED_IN"\s*:\s*(true|false)')
+
+#: Представляемся обычным браузером: без этого YouTube отдаёт урезанную
+#: страницу, где метки входа может не быть вовсе.
+_PROBE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0 Safari/537.36"
+    ),
+    "Accept-Language": "ru,en;q=0.9",
+}
+
+
+def _ask_youtube(cookies_path: str) -> dict[str, str]:
+    """Спрашивает у YouTube, вошли ли мы. Зовётся только из отдельного потока."""
+    jar = http.cookiejar.MozillaCookieJar()
+    try:
+        # Срок, записанный в файле, намеренно игнорируем: он ничего не решает,
+        # отзывает вход сам сайт. Пусть ответит он, а не арифметика.
+        jar.load(cookies_path, ignore_discard=True, ignore_expires=True)
+    except (OSError, http.cookiejar.LoadError):
+        return {
+            "state": "broken",
+            "message": "Файл не читается как куки. Выгрузите его заново расширением.",
+        }
+
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    try:
+        with opener.open(
+            urllib.request.Request(_LOGIN_PROBE_URL, headers=_PROBE_HEADERS), timeout=30
+        ) as answer:
+            page = answer.read(2_000_000).decode("utf-8", "replace")
+    except Exception as exc:  # сеть бывает какой угодно
+        return {
+            "state": "network",
+            "message": f"Не удалось достучаться до YouTube: {exc}",
+        }
+
+    found = _LOGIN_MARK.search(page)
+    if not found:
+        return {
+            "state": "unknown",
+            "message": "YouTube ответил, но понять по ответу, вошли ли мы, не вышло.",
+        }
+    if found.group(1) == "true":
+        return {"state": "ok", "message": "YouTube видит вас вошедшим — куки рабочие"}
+    return {
+        "state": "rejected",
+        "message": (
+            "YouTube видит гостя. Чаще всего это значит, что куки устарели: "
+            "сайт отзывает вход когда захочет, и срок, записанный в файле, "
+            "об этом ничего не говорит. Выгрузите куки заново со страницы "
+            "youtube.com, где вы вошли в аккаунт."
+        ),
+    }
+
+
+async def _cookies_from_firefox() -> str | None:
+    """Выкладывает куки Firefox во временный файл — проверять удобнее файл."""
+    target = Path(tempfile.gettempdir()) / "sgh-cookies-check.txt"
+    args = [
+        binaries.require("yt-dlp"),
+        "--cookies-from-browser", "firefox",
+        "--cookies", str(target),
+        "--simulate", "--no-warnings", "--skip-download",
+        "--playlist-items", "0",
+        "https://www.youtube.com/feed/history",
+    ]
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=binaries.CREATE_NO_WINDOW,
+            env=binaries.subprocess_env(),
+        )
+        await asyncio.wait_for(process.wait(), timeout=60)
+    except (asyncio.TimeoutError, OSError):
+        return None
+    return str(target) if target.is_file() else None
+
+
+async def check_cookies() -> dict[str, str]:
+    """Проверяет, принимает ли YouTube подключённые куки.
+
+    Куки живут не по своему сроку, а пока их не отозвал сайт: в файле они
+    могут значиться годными ещё год, а вход уже недействителен. Разбор файла
+    об этом не скажет — знает только сам YouTube, поэтому и спрашиваем его.
+
+    Запрос синхронный, поэтому уходит в отдельный поток: прямо в обработчике
+    он подвесил бы весь сервер, пока YouTube думает.
+    """
+    settings = config.load().download
+    path = settings.cookies_file if settings.cookies_file else None
+    if not path and settings.cookies_from_browser:
+        path = await _cookies_from_firefox()
+        if not path:
+            return {
+                "state": "broken",
+                "message": (
+                    "Не вышло прочитать куки Firefox. Проверьте, что он "
+                    "установлен и в нём выполнен вход."
+                ),
+            }
+    if not path or not Path(path).is_file():
+        return {"state": "none", "message": "Куки не подключены"}
+
+    return await asyncio.to_thread(_ask_youtube, path)
 
 
 def _handle_progress(ctx: JobContext, payload: str) -> None:

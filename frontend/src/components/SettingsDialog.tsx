@@ -436,6 +436,22 @@ function CookiesField() {
   const file = settings.download.cookies_file
   // «Годится» — это не «файл есть»: YouTube смотрит на свою метку входа.
   const youtubeReady = settings.cookiesYoutube === 'ok'
+  // Что ответил сам YouTube на проверку. Разбор файла говорит лишь о том, что
+  // в нём лежит; действителен ли вход, знает только сайт.
+  const [checked, setChecked] = useState<{ state: string; message: string } | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  async function check() {
+    setChecking(true)
+    setChecked(null)
+    try {
+      setChecked(await api.checkCookies())
+    } catch (error) {
+      setChecked({ state: 'unknown', message: (error as Error).message })
+    } finally {
+      setChecking(false)
+    }
+  }
   const browser = settings.download.cookies_from_browser
   const mode: 'off' | 'firefox' | 'file' = file ? 'file' : browser ? 'firefox' : 'off'
 
@@ -516,6 +532,14 @@ function CookiesField() {
             </span>
             <button
               type="button"
+              onClick={() => void check()}
+              disabled={busy || checking}
+              className="shrink-0 text-ink-faint hover:text-ink disabled:opacity-40"
+            >
+              {checking ? 'Спрашиваю…' : 'Проверить'}
+            </button>
+            <button
+              type="button"
               onClick={() => inputRef.current?.click()}
               disabled={busy}
               className="shrink-0 text-ink-faint hover:text-ink disabled:opacity-40"
@@ -523,9 +547,21 @@ function CookiesField() {
               Заменить
             </button>
           </div>
+          {/* Ответ самого YouTube. Куки стареют молча: в файле они значатся
+              годными ещё год, а вход уже отозван — понять это можно только
+              спросив у сайта. */}
+          {checked && (
+            <p
+              className={`mt-1.5 text-[11px] leading-snug ${
+                checked.state === 'ok' ? 'text-ok' : 'text-warn'
+              }`}
+            >
+              {checked.message}
+            </p>
+          )}
           {/* Сказать про это надо здесь и сразу: иначе человек узнаёт о беде
               только когда ролик не скачался, и думает на программу. */}
-          {!youtubeReady && (
+          {!youtubeReady && !checked && (
             <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">
               В файле нет метки входа в YouTube — по таким кукам он видит гостя.
               Она появляется, только если куки выгружены прямо со страницы

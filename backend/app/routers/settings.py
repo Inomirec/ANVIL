@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from .. import config
-from ..core import binaries, fsutil
+from ..core import binaries, download, fsutil
 from ..core.events import bus
 from ..models import PathRequest, SettingsPatch
 from ..paths import data_dir, default_workspace
@@ -308,6 +308,16 @@ async def upload_cookies(file: UploadFile = File(...)) -> dict[str, Any]:
         "size": len(raw),
         "youtube": _youtube_state(text),
     }
+
+
+@router.post("/cookies/check")
+async def check_cookies() -> dict[str, str]:
+    """Спрашивает у YouTube, принимает ли он подключённые куки.
+
+    Разбор файла говорит только о том, что в нём лежит; действителен ли вход,
+    знает один YouTube. Поэтому проверка настоящая — коротким запросом.
+    """
+    return await download.check_cookies()
 
 
 @router.post("/cookies/clear")
