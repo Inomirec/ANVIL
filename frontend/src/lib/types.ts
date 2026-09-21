@@ -203,6 +203,8 @@ export interface AppSettings {
   defaultWorkspace?: string
   /** Папка «Загрузки» — туда ложится готовое, пока не выбрали свою. */
   downloadsDir?: string
+  /** Годится ли подключённый файл кук для YouTube. */
+  cookiesYoutube?: 'ok' | 'no-login' | 'absent' | null
   download: {
     directory: string | null
     filename_template: string

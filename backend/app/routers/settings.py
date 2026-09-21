@@ -30,6 +30,9 @@ async def get_settings() -> dict[str, Any]:
     data["defaultWorkspace"] = str(default_workspace())
     # Куда программа складывает готовое, пока человек не выбрал папку сам.
     data["downloadsDir"] = str(fsutil.downloads_dir())
+    # Годится ли подключённый файл кук для YouTube. Сказать об этом надо
+    # заранее: иначе человек узнаёт о беде, только когда ролик не скачался.
+    data["cookiesYoutube"] = _cached_youtube_state(settings.download.cookies_file)
     return data
 
 
@@ -226,6 +229,53 @@ def _looks_like_cookies(text: str) -> bool:
     return False
 
 
+#: Разбор файла кук по его времени изменения: сам файл бывает в сотни
+#: килобайт, а настройки читают часто.
+_youtube_cache: tuple[str, float, str] | None = None
+
+
+def _cached_youtube_state(path: str | None) -> str | None:
+    global _youtube_cache
+    if not path:
+        return None
+    target = Path(path)
+    try:
+        stamp = target.stat().st_mtime
+    except OSError:
+        return None
+    if _youtube_cache and _youtube_cache[0] == path and _youtube_cache[1] == stamp:
+        return _youtube_cache[2]
+    try:
+        state = _youtube_state(target.read_text("utf-8", "replace"))
+    except OSError:
+        return None
+    _youtube_cache = (path, stamp, state)
+    return state
+
+
+def _youtube_state(text: str) -> str:
+    """Годится ли файл кук для YouTube.
+
+    YouTube опознаёт вошедшего не по общим кукам Google, а по своей куке
+    ``LOGIN_INFO`` на домене youtube.com. Без неё плеер отвечает
+    «LOGIN_REQUIRED», и человек видит просьбу подтвердить, что он не робот, —
+    хотя файл кук вроде бы подключён. Проверяем сразу при загрузке: иначе
+    причина всплывает через несколько минут и выглядит как поломка программы.
+    """
+    свои = False
+    for line in text.splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) < 7 or line.startswith("#"):
+            continue
+        domain = parts[0].lstrip(".").lower()
+        if not domain.endswith("youtube.com"):
+            continue
+        свои = True
+        if parts[5] == "LOGIN_INFO":
+            return "ok"
+    return "no-login" if свои else "absent"
+
+
 @router.post("/cookies")
 async def upload_cookies(file: UploadFile = File(...)) -> dict[str, Any]:
     """Принимает файл с куками, выгруженный расширением браузера."""
@@ -252,7 +302,12 @@ async def upload_cookies(file: UploadFile = File(...)) -> dict[str, Any]:
     # чтобы не гадать, какой из них сработал.
     settings.download.cookies_from_browser = None
     config.save(settings)
-    return {"ok": True, "path": str(target), "size": len(raw)}
+    return {
+        "ok": True,
+        "path": str(target),
+        "size": len(raw),
+        "youtube": _youtube_state(text),
+    }
 
 
 @router.post("/cookies/clear")

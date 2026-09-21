@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, CheckCircle2, Gauge, RefreshCw, XCircle } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle2, Gauge, RefreshCw, XCircle } from 'lucide-react'
 import { api } from '../lib/api'
 import { plural } from '../lib/format'
 import type { ToolInfo } from '../lib/types'
@@ -434,6 +434,8 @@ function CookiesField() {
 
   if (!settings) return null
   const file = settings.download.cookies_file
+  // «Годится» — это не «файл есть»: YouTube смотрит на свою метку входа.
+  const youtubeReady = settings.cookiesYoutube === 'ok'
   const browser = settings.download.cookies_from_browser
   const mode: 'off' | 'firefox' | 'file' = file ? 'file' : browser ? 'firefox' : 'off'
 
@@ -461,7 +463,14 @@ function CookiesField() {
     try {
       const result = await api.uploadCookies(chosen)
       await refreshSettings()
-      toast(`Файл принят (${Math.round(result.size / 1024)} КБ)`, 'ok')
+      if (result.youtube === 'ok') {
+        toast(`Файл принят (${Math.round(result.size / 1024)} КБ)`, 'ok')
+      } else {
+        toast(
+          'Файл принят, но YouTube по нему видит гостя: выгрузите куки прямо со страницы youtube.com, где выполнен вход',
+          'error',
+        )
+      }
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {
@@ -491,18 +500,40 @@ function CookiesField() {
       />
 
       {mode === 'file' && (
-        <div className="mt-2 flex items-center gap-2 rounded-lg bg-ok/10 px-3 py-2 text-[12px] text-ink-dim ring-1 ring-ok/25">
-          <CheckCircle2 size={14} className="shrink-0 text-ok" />
-          <span className="min-w-0 flex-1">Файл загружен и используется</span>
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            disabled={busy}
-            className="shrink-0 text-ink-faint hover:text-ink disabled:opacity-40"
+        <>
+          <div
+            className={`mt-2 flex items-center gap-2 rounded-lg px-3 py-2 text-[12px] text-ink-dim ring-1 ${
+              youtubeReady ? 'bg-ok/10 ring-ok/25' : 'bg-warn/10 ring-warn/30'
+            }`}
           >
-            Заменить
-          </button>
-        </div>
+            {youtubeReady ? (
+              <CheckCircle2 size={14} className="shrink-0 text-ok" />
+            ) : (
+              <AlertTriangle size={14} className="shrink-0 text-warn" />
+            )}
+            <span className="min-w-0 flex-1">
+              {youtubeReady ? 'Файл загружен и используется' : 'Файл загружен, но YouTube его не примет'}
+            </span>
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              disabled={busy}
+              className="shrink-0 text-ink-faint hover:text-ink disabled:opacity-40"
+            >
+              Заменить
+            </button>
+          </div>
+          {/* Сказать про это надо здесь и сразу: иначе человек узнаёт о беде
+              только когда ролик не скачался, и думает на программу. */}
+          {!youtubeReady && (
+            <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">
+              В файле нет метки входа в YouTube — по таким кукам он видит гостя.
+              Она появляется, только если куки выгружены прямо со страницы
+              youtube.com, где выполнен вход: откройте её, проверьте, что вверху
+              справа ваш значок, и выгрузите куки заново.
+            </p>
+          )}
+        </>
       )}
 
       {mode === 'firefox' && (

@@ -75,7 +75,13 @@ export const api = {
     return fetch('/api/settings/cookies', { method: 'POST', body: form }).then(async (response) => {
       const data = await response.json().catch(() => null)
       if (!response.ok) throw new Error((data && data.detail) || `Ошибка ${response.status}`)
-      return data as { ok: boolean; path: string; size: number }
+      return data as {
+        ok: boolean
+        path: string
+        size: number
+        // Годится ли файл для YouTube: он смотрит на свою метку входа.
+        youtube?: 'ok' | 'no-login' | 'absent'
+      }
     })
   },
   openLink: (name: string) => post<{ ok: boolean; url: string }>('/api/settings/open-link', { path: name }),
