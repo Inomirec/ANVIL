@@ -20,11 +20,12 @@ import {
   Undo2,
   VolumeX,
   X,
+  Scan,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import { timecode } from '../lib/format'
+import { plural, timecode } from '../lib/format'
 import type { FilmstripInfo } from '../lib/types'
 import {
   clipEdges,
@@ -437,6 +438,16 @@ export function ComposeTimeline({
         } else if (key === 'a' || key === 'ф') {
           event.preventDefault()
           useCompose.getState().selectAll()
+        } else if (key === 'c' || key === 'с') {
+          // Копируем сами клипы со всеми их настройками. Системный буфер
+          // сюда не годится: в нём был бы текст, а не кусок монтажа.
+          event.preventDefault()
+          const state = useCompose.getState()
+          const taken = state.copyClips(state.selected)
+          if (taken) toast(`Скопировано: ${taken} ${plural(taken, ['клип', 'клипа', 'клипов'])}`, 'info')
+        } else if (key === 'v' || key === 'м') {
+          event.preventDefault()
+          useCompose.getState().pasteClips()
         }
         return
       }
@@ -472,7 +483,7 @@ export function ComposeTimeline({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [splitAtPlayhead, removeClips, markIn, markOut, groupClips, ungroupClips, player])
+  }, [splitAtPlayhead, removeClips, markIn, markOut, groupClips, ungroupClips, player, toast])
 
   /**
    * Колесо приближает и отдаляет — как в монтажных программах.
@@ -488,6 +499,23 @@ export function ComposeTimeline({
    * оно-то и пропадает. Теперь при любом приближении игла остаётся там же,
    * где была на экране, — а если её не видно, встаёт посередине.
    */
+  /**
+   * Насколько далеко можно отодвинуться.
+   *
+   * Предел был один на все монтажи — четыре пикселя в секунду, — и в окно
+   * влезало около двух с половиной минут. Дальше отодвинуться было нельзя, и
+   * длинный монтаж целиком не показывался вовсе. Теперь предел считается по
+   * самому монтажу: отодвинуть можно ровно настолько, чтобы он поместился в
+   * окно целиком, с небольшим запасом справа.
+   */
+  const minScale = useCallback(() => {
+    const view = scroller.current
+    const full = useCompose.getState().duration()
+    if (!view || full <= 0) return 4
+    const fit = (view.clientWidth - 24) / full
+    return Math.max(0.05, Math.min(4, fit))
+  }, [])
+
   const keepPlayhead = (next: number) => {
     const view = scroller.current
     if (!view) return
@@ -515,7 +543,9 @@ export function ComposeTimeline({
       return
     }
     const state = useCompose.getState()
-    keepPlayhead(Math.min(400, Math.max(4, state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15))))
+    keepPlayhead(
+      Math.min(400, Math.max(minScale(), state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15))),
+    )
   }
 
   const from = renderIn ?? 0
@@ -691,9 +721,24 @@ export function ComposeTimeline({
           </IconButton>
           <IconButton
             title="Отдалить (колесо мыши)"
-            onClick={() => keepPlayhead(Math.max(4, scale / 1.4))}
+            onClick={() => keepPlayhead(Math.max(minScale(), scale / 1.4))}
           >
             <ZoomOut size={14} />
+          </IconButton>
+          <IconButton
+            title="Показать монтаж целиком"
+            onClick={() => {
+              // До этого же места доходит и колесо, только за полтора десятка
+              // щелчков. Длинный монтаж хочется увидеть разом, а не искать
+              // его край.
+              const fit = minScale()
+              setScale(fit)
+              setTimeout(() => {
+                if (scroller.current) scroller.current.scrollLeft = 0
+              }, 0)
+            }}
+          >
+            <Scan size={14} />
           </IconButton>
           <IconButton
             title="Приблизить (колесо мыши)"
@@ -1261,6 +1306,8 @@ function ClipMenu({
         () => state.removeClips(state.selected.length ? state.selected : [clipId]),
       )}
       <div className="my-1 h-px bg-line-soft" />
+      {item('Копировать', 'Ctrl+C', () => state.copyClips(state.selected.length ? state.selected : [clipId]))}
+      {item('Вставить от иглы', 'Ctrl+V', () => state.pasteClips(), !state.hasCopy())}
       {item('Сгруппировать', 'G', () => state.groupClips(state.selected), !many)}
       {item('Убрать из группы', 'U', () => state.ungroupClips(state.selected), !clip.groupId)}
       <div className="my-1 h-px bg-line-soft" />

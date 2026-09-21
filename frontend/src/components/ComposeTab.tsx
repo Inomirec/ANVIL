@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import { timecode } from '../lib/format'
+import { parentDir, timecode } from '../lib/format'
 import {
   DEFAULT_IMAGE_SECONDS,
   FRAME_QUALITY,
@@ -201,6 +201,10 @@ export function ComposeTab() {
   // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
   // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
   const [outputName, setOutputName] = useState('')
+  // Подсветка пустого поля имени: сказать «назовите файл» мало, надо ещё
+  // показать, где его называют.
+  const [nameMissing, setNameMissing] = useState(false)
+  const nameField = useRef<HTMLInputElement>(null)
   const [outputDir, setOutputDir] = useState<string | null>(
     () => localStorage.getItem('sgh.composeOut') || null,
   )
@@ -316,7 +320,16 @@ export function ComposeTab() {
   ) {
     setAdding(from)
     try {
-      const info = await api.fileInfo(path)
+      // Файл может лежать где угодно, а программа работает только внутри
+      // рабочих папок. Раньше такой файл просто отбивался ошибкой, и человек
+      // шёл добавлять папку в медиатеку руками — при том что он уже сказал,
+      // чего хочет, перетащив файл сюда. Добавляем папку сами.
+      let info = await api.fileInfo(path).catch(() => null)
+      if (!info) {
+        await api.addWorkspace(parentDir(path))
+        await useStore.getState().refreshSettings()
+        info = await api.fileInfo(path)
+      }
       if (info.kind === 'other') {
         toast('Такой файл в монтаж не положить', 'error')
         return
@@ -369,6 +382,15 @@ export function ComposeTab() {
   }
 
   async function build() {
+    // Имя за человека не придумываем. Прежде пустое поле молча превращалось
+    // в «Монтаж», и на диске копились файлы, про которые непонятно, что в
+    // них: человек-то думал, что имя у него своё.
+    if (!outputName.trim()) {
+      setNameMissing(true)
+      nameField.current?.focus()
+      toast('Назовите файл — без имени собирать нечего', 'error')
+      return
+    }
     setBusy(true)
     try {
       const state = useCompose.getState()
@@ -382,7 +404,7 @@ export function ComposeTab() {
           tracks: state.tracks,
         },
         output_dir: outputDir,
-        output_name: outputName.trim() || 'Монтаж',
+        output_name: outputName.trim(),
         render,
         start: renderIn,
         end: renderOut,
@@ -410,7 +432,7 @@ export function ComposeTab() {
         },
         at: view.playhead,
         outputDir: outputDir,
-        outputName: outputName || 'Монтаж',
+        outputName: outputName.trim() || 'Кадр',
       })
       toast('Кадр сохранён — в полном размере кадра проекта, без сжатия', 'ok')
       setQueueOpen(true)
@@ -627,7 +649,12 @@ export function ComposeTab() {
               </div>
             )}
 
-            <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden">
+            {/* Размер кадра считается от этого места: «containerType: size»
+                позволяет внутри мерить его ширину и высоту прямо в CSS. */}
+            <div
+              className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden"
+              style={{ containerType: 'size' }}
+            >
             {!clips ? (
               <Empty
                 icon={<Film size={44} />}
@@ -640,13 +667,13 @@ export function ComposeTab() {
                 className="relative overflow-hidden bg-black shadow-xl ring-1 ring-line"
                 style={{
                   aspectRatio: `${width} / ${height}`,
-                  // Кадр вписывается в свободное место и не растягивает окно:
-                  // с одной только высотой широкий проект выдавливал правую
-                  // панель за край экрана.
-                  maxWidth: '100%',
-                  maxHeight: '100%',
-                  height: '100%',
-                  width: 'auto',
+                  // Кадр вписывается в свободное место целиком, сохраняя свою
+                  // форму. Пары «высота 100% и ширина по форме» не хватало:
+                  // когда места по ширине меньше, чем просит форма, ограничение
+                  // срезало ширину, а высота оставалась прежней — и кадр 16:9
+                  // показывался почти квадратным. Считаем ширину сами, по
+                  // меньшей из двух сторон свободного места.
+                  width: `min(100cqw, calc(100cqh * ${width} / ${height}))`,
                 }}
               >
               {/* Всё содержимое кадра увеличивается целиком — и картинка, и
@@ -831,10 +858,16 @@ export function ComposeTab() {
           {/* Имя и папка — одной строкой: это про один и тот же файл. */}
           <div className="flex items-center gap-2">
             <input
-              className="field min-w-0 flex-1"
+              ref={nameField}
+              className={`field min-w-0 flex-1 ${
+                nameMissing ? 'border-danger ring-1 ring-danger/50 placeholder:text-danger/70' : ''
+              }`}
               value={outputName}
-              onChange={(event) => setOutputName(event.target.value)}
-              placeholder="Название будущего файла"
+              onChange={(event) => {
+                setOutputName(event.target.value)
+                setNameMissing(false)
+              }}
+              placeholder={nameMissing ? 'Здесь нужно имя файла' : 'Название будущего файла'}
               title="Имя готового файла"
             />
             <button

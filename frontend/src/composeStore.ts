@@ -287,6 +287,8 @@ interface State extends Saved {
   playhead: number
   /** Выбранные клипы. Несколько — когда обвели рамкой. */
   selected: string[]
+  /** Что человек выбрал сам, до того как выделение разошлось по группам. */
+  picked: string[]
   /** Пикселей в секунде: масштаб таймлайна. */
   scale: number
   /** Сжатые дорожки: когда их много, а места мало. */
@@ -341,6 +343,12 @@ interface State extends Saved {
   trimOverlaps: (id: string) => void
   groupClips: (ids: string[]) => void
   ungroupClips: (ids: string[]) => void
+  /** Запомнить выбранные клипы, чтобы вставить их копию. */
+  copyClips: (ids: string[]) => number
+  /** Положить запомненные клипы, начиная от иглы. */
+  pasteClips: () => void
+  /** Есть ли что вставлять. */
+  hasCopy: () => boolean
   clearAll: () => void
 
   /** Монтаж целиком — для сохранения в файл. */
@@ -455,6 +463,15 @@ function save(state: State): void {
  * по пикселю. Поэтому программа сама отмечает начало действия — нажатие мыши,
  * разрез, удаление, — и одно нажатие Ctrl+Z возвращает всё действие целиком.
  */
+/**
+ * Скопированные клипы: сам клип и дорожка, с которой его сняли.
+ *
+ * Живёт рядом с историей отмены, а не в состоянии окна: перерисовывать
+ * таймлайн из-за копирования незачем, да и переживать перезагрузку страницы
+ * буферу обмена не положено.
+ */
+let clipboard: { clip: ComposeClip; trackId: string }[] = []
+
 const HISTORY_LIMIT = 60
 const history: Saved[] = []
 
@@ -614,6 +631,7 @@ export const useCompose = create<State>((set, get) => ({
   ...loadSaved(),
   playhead: 0,
   selected: [],
+  picked: [],
   scale: 60,
   compact: (() => {
     try {
@@ -669,7 +687,9 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   setScale(scale) {
-    set({ scale: Math.min(400, Math.max(4, scale)) })
+    // Нижний предел здесь только страховочный: настоящий считает таймлайн —
+    // он знает и длину монтажа, и ширину окна, а хранилище нет.
+    set({ scale: Math.min(400, Math.max(0.05, scale)) })
   },
 
   // Как человеку удобно смотреть — не часть монтажа, поэтому в файл проекта
@@ -717,7 +737,10 @@ export const useCompose = create<State>((set, get) => ({
     // Группа — одно целое: взяв один клип, берём и его соседей. Иначе
     // выделенным выглядит только ролик, а его звуковая дорожка — нет, хотя
     // двигаются, режутся и удаляются они вместе.
-    set({ selected: withGroups(get().tracks, ids) })
+    //
+    // Заодно помним, что человек выбрал сам: без этого после разрыва группы
+    // не понять, какой клип брали в руки, а какой приехал за компанию.
+    set({ picked: ids, selected: withGroups(get().tracks, ids) })
   },
 
   // --- метки отрезка сборки ---------------------------------------------
@@ -1199,17 +1222,94 @@ export const useCompose = create<State>((set, get) => ({
     save(get())
   },
 
+  /**
+   * Запоминает выбранные клипы.
+   *
+   * Буфер свой, а не системный: в нём лежат клипы со всеми настройками —
+   * громкостью, затуханиями, местом в кадре, — и превращать их в текст ради
+   * обмена с другими программами незачем. Время считаем от самого левого из
+   * выбранных, чтобы при вставке они легли от иглы тем же узором.
+   */
+  copyClips(ids) {
+    const all = get().tracks.flatMap((track) => track.clips)
+    const family = withGroups(get().tracks, ids)
+    const taken = all.filter((clip) => family.includes(clip.id))
+    if (!taken.length) {
+      clipboard = []
+      return 0
+    }
+    const edge = Math.min(...taken.map((clip) => clip.start))
+    clipboard = taken.map((clip) => {
+      const track = get().tracks.find((item) => item.clips.some((one) => one.id === clip.id))
+      return { clip: { ...clip, start: clip.start - edge }, trackId: track?.id ?? '' }
+    })
+    return clipboard.length
+  },
+
+  pasteClips() {
+    if (!clipboard.length) return
+    get().mark()
+    const at = get().playhead
+    // Группы восстанавливаем заново: копии должны ходить вместе между собой,
+    // а не цепляться к тем клипам, с которых их сняли.
+    const groups = new Map<string, string>()
+    const made: string[] = []
+    set((state) => {
+      const put = new Map<string, ComposeClip[]>()
+      for (const item of clipboard) {
+        const known = state.tracks.find((track) => track.id === item.trackId)
+        // Дорожки могло не стать — кладём на первую подходящую по виду.
+        const track =
+          known ?? state.tracks.find((one) => one.kind === (item.clip.kind === 'audio' ? 'audio' : 'video'))
+        if (!track) continue
+        let groupId = item.clip.groupId
+        if (groupId) {
+          if (!groups.has(groupId)) groups.set(groupId, nextId())
+          groupId = groups.get(groupId)
+        }
+        const copy: ComposeClip = {
+          ...item.clip,
+          id: nextId(),
+          start: Math.max(0, at + item.clip.start),
+          groupId,
+        }
+        made.push(copy.id)
+        put.set(track.id, [...(put.get(track.id) ?? []), copy])
+      }
+      return {
+        tracks: settle(
+          state.tracks.map((track) =>
+            put.has(track.id) ? { ...track, clips: [...track.clips, ...put.get(track.id)!] } : track,
+          ),
+        ),
+        selected: made,
+      }
+    })
+    save(get())
+  },
+
+  hasCopy() {
+    return clipboard.length > 0
+  },
+
   /** Выпускает клипы из группы — дальше они ходят сами по себе. */
   ungroupClips(ids) {
     get().mark()
-    set((state) => ({
-      tracks: state.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) =>
-          ids.includes(clip.id) ? { ...clip, groupId: undefined } : clip,
-        ),
-      })),
-    }))
+    set((state) => {
+      // Выделение сужаем до того клипа, который человек брал в руки. Пока
+      // группа была, выбранными числились оба её клипа — и Delete сразу
+      // после разрыва уносил и второй, хотя связи между ними уже нет.
+      const alone = state.picked.filter((id) => ids.includes(id))
+      return {
+        tracks: state.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) =>
+            ids.includes(clip.id) ? { ...clip, groupId: undefined } : clip,
+          ),
+        })),
+        selected: alone.length ? alone : state.selected,
+      }
+    })
     save(get())
   },
 

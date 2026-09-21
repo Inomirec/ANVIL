@@ -47,6 +47,21 @@ function share(db: number): number {
   return Math.min(1, (db - FLOOR) / -FLOOR)
 }
 
+/**
+ * Где нарисовать подпись деления.
+ *
+ * Раньше крайние подписи зажимались внутрь шкалы, и «0» вставал не у самого
+ * потолка: над ним оставалась полоса, по которой непонятно было, кончилась
+ * шкала или продолжается. Теперь отметка стоит ровно на своём месте, а
+ * съезжает сама подпись — у потолка вниз, у пола вверх.
+ */
+function markPlace(db: number): { top: string; transform: string } {
+  const at = 1 - share(db)
+  if (share(db) >= 1) return { top: '0%', transform: 'translateY(0)' }
+  if (at >= 0.97) return { top: '100%', transform: 'translateY(-100%)' }
+  return { top: `${at * 100}%`, transform: 'translateY(-50%)' }
+}
+
 export interface MeterLevels {
   left: number
   right: number
@@ -253,10 +268,7 @@ function Ruler() {
         <div
           key={db}
           className="absolute inset-x-0 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-ink-faint"
-          style={{
-            top: `${Math.min(97, Math.max(3, (1 - share(db)) * 100))}%`,
-            transform: 'translateY(-50%)',
-          }}
+          style={markPlace(db)}
         >
           {db}
         </div>
@@ -273,12 +285,7 @@ function Marks() {
         <div
           key={db}
           className="absolute inset-x-0 flex items-center"
-          style={{
-            // Крайние подписи прижимаем внутрь: у потолка «0» наполовину
-            // уходило за край шкалы и читалось как обрезок.
-            top: `${Math.min(97, Math.max(3, (1 - share(db)) * 100))}%`,
-            transform: 'translateY(-50%)',
-          }}
+          style={markPlace(db)}
         >
           <span className="w-full bg-black/45 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-white/70">
             {db}
