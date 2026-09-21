@@ -530,12 +530,25 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
                     audio_format=request.audio_format, section=section,
                 )
             except RuntimeError as exc:
-                if request.mode != "auto" or download.is_network_failure(str(exc)):
+                if (
+                    request.mode != "auto"
+                    or download.is_network_failure(str(exc))
+                    # На видеохостинге картинок-галерей не бывает: gallery-dl
+                    # ответит «Unsupported URL», и человек прочитает про «пост
+                    # с картинками» вместо настоящей причины.
+                    or download.looks_like_video(url)
+                ):
                     raise
                 ctx.log(f"yt-dlp: {exc}. Пробую gallery-dl…")
-                files = await download.run_gallery_dl(
-                    ctx, url, target, selection=request.selection
-                )
+                try:
+                    files = await download.run_gallery_dl(
+                        ctx, url, target, selection=request.selection
+                    )
+                except RuntimeError:
+                    # Не вышло ни так, ни эдак — рассказываем про первый
+                    # загрузчик: ссылку человек давал на видео, и отказ
+                    # запасного пути ничего ему не объясняет.
+                    raise exc from None
 
         if not files:
             raise RuntimeError("Скачивание завершилось, но новых файлов не появилось")

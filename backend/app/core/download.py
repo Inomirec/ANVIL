@@ -39,6 +39,16 @@ _GALLERY_HOSTS = {
 }
 
 
+#: Сайты, где бывает только видео. Запасной обход через gallery-dl для них
+#: бессмысленен: он ответит «Unsupported URL», и его отказ закроет собой
+#: настоящую причину, по которой не смог yt-dlp.
+_VIDEO_HOSTS = {
+    "youtube.com", "youtu.be", "youtube-nocookie.com", "rutube.ru",
+    "vimeo.com", "dailymotion.com", "twitch.tv", "coub.com", "ok.ru",
+    "vkvideo.ru", "my.mail.ru", "sibnet.ru", "nuum.ru",
+}
+
+
 def host_of(url: str) -> str:
     try:
         return (urlparse(url).hostname or "").lower().removeprefix("www.")
@@ -49,6 +59,12 @@ def host_of(url: str) -> str:
 def looks_like_gallery(url: str) -> bool:
     host = host_of(url)
     return any(host == item or host.endswith("." + item) for item in _GALLERY_HOSTS)
+
+
+def looks_like_video(url: str) -> bool:
+    """Сайт, на котором картинок-галерей не бывает вовсе."""
+    host = host_of(url)
+    return any(host == item or host.endswith("." + item) for item in _VIDEO_HOSTS)
 
 
 def _to_float(value: str) -> float | None:
@@ -384,6 +400,20 @@ def explain_failure(text: str) -> str:
             "другую стратегию обхода: часть роликов проходит не при всякой.\n\n"
             "На другие сайты это не влияет: VK, Rutube и остальные качаются "
             "как обычно.\n\n"
+            + text
+        )
+
+    if "not a bot" in low or "confirm you" in low:
+        return (
+            "YouTube просит подтвердить, что скачивает человек, а не программа.\n"
+            "Пока он этого не увидит, ролик не отдаст.\n\n"
+            "Что делать:\n"
+            "  1. Откройте YouTube в Firefox и войдите в свой аккаунт.\n"
+            "  2. В настройках программы включите «Брать куки из браузера» "
+            "→ Firefox.\n"
+            "  3. Повторите загрузку.\n\n"
+            "Куки берутся только из Firefox: Chrome и его родня с некоторых пор "
+            "шифруют своё хранилище так, что снаружи его не прочитать.\n\n"
             + text
         )
 

@@ -673,7 +673,12 @@ export function ComposeTab() {
             ) : (
               <div
                 ref={frameBox}
-                className="relative overflow-hidden bg-black shadow-xl ring-1 ring-line"
+                // Чёрный фон и рамка принадлежат самому кадру, а не месту под
+                // него: при отдалении вокруг уменьшенного кадра оставались
+                // чёрные поля, и у видео с тёмным началом край было не
+                // отличить от пустоты. Здесь цвет интерфейса — сразу видно,
+                // где кончается кадр.
+                className="relative overflow-hidden bg-surface-2"
                 style={{
                   aspectRatio: `${width} / ${height}`,
                   // Кадр вписывается в свободное место целиком, сохраняя свою
@@ -689,7 +694,7 @@ export function ComposeTab() {
                   сетка, и рамка клипа. Точка увеличения та, где было колесо,
                   поэтому нужное место остаётся под курсором. */}
               <div
-                className="absolute inset-0"
+                className="absolute inset-0 bg-black shadow-xl ring-1 ring-line"
                 style={{
                   transform: `translate(${pan.x}px, ${pan.y}px) scale(${view})`,
                 }}
