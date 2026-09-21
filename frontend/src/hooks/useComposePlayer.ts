@@ -90,7 +90,6 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
       // Громкость монтажа и выравнивание идут и в просмотр: иначе на слух
       // он отличался бы от готового файла.
       masterVolume: state.masterVolume,
-      loudnorm: state.loudnorm,
       tracks: state.tracks,
     }
   }, [])
@@ -251,7 +250,16 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
       }
     }
     void audio.current?.ctx.resume()
-    if (audio.current) audio.current.gain.gain.value = volume
+    // Громкость слушателя живёт на узле графа: так шкала уровня показывает
+    // сам монтаж, а не то, насколько тихо человек сделал себе в наушниках.
+    // Если графа нет (браузер не дал), ставим её прямо элементу — иначе
+    // ползунок не делал бы ничего вовсе.
+    if (audio.current) {
+      audio.current.gain.gain.value = volume
+      element.volume = 1
+    } else {
+      element.volume = volume
+    }
 
     const buffer = new Float32Array(1024)
     const read = (node: AnalyserNode): number => {
@@ -294,7 +302,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const off = useCompose.subscribe((state, prev) => {
-      if (state.loudnorm === prev.loudnorm && state.masterVolume === prev.masterVolume) return
+      if (state.masterVolume === prev.masterVolume) return
       if (!playingRef.current) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
@@ -316,8 +324,9 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   // Громкость прослушивания меняется на ходу и запоминается.
   useEffect(() => {
     if (audio.current) audio.current.gain.gain.value = volume
+    else if (video.current) video.current.volume = volume
     localStorage.setItem('sgh.composeVolume', String(volume))
-  }, [volume])
+  }, [volume, video])
 
   useEffect(() => {
     alive.current = true

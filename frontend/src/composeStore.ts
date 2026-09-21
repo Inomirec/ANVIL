@@ -280,7 +280,6 @@ interface Saved {
   /** Громкость всего монтажа — фейдер мастер-шины. Уходит в готовый файл. */
   masterVolume: number
   /** Выровнять громкость готового файла, как при обычной обработке. */
-  loudnorm: boolean
 }
 
 interface State extends Saved {
@@ -289,6 +288,9 @@ interface State extends Saved {
   selected: string[]
   /** Что человек выбрал сам, до того как выделение разошлось по группам. */
   picked: string[]
+  /** Под каким именем открыт проект — чтобы сохранять поверх него. */
+  projectName: string
+  setProjectName: (name: string) => void
   /** Пикселей в секунде: масштаб таймлайна. */
   scale: number
   /** Сжатые дорожки: когда их много, а места мало. */
@@ -317,7 +319,6 @@ interface State extends Saved {
   select: (ids: string[]) => void
 
   setMasterVolume: (value: number) => void
-  setLoudnorm: (value: boolean) => void
   markIn: () => void
   markOut: () => void
   clearMarks: () => void
@@ -333,6 +334,8 @@ interface State extends Saved {
   removeClips: (ids: string[]) => void
   addTrack: (kind: 'video' | 'audio') => void
   removeTrack: (id: string) => void
+  /** Переставляет дорожку выше или ниже соседней того же вида. */
+  moveTrack: (id: string, to: number) => void
   renameTrack: (id: string, name: string) => void
   setTrackLevel: (id: string, level: number) => void
   /** Переносит клипы на соседние дорожки: ``delta`` — на сколько вниз. */
@@ -377,7 +380,6 @@ function emptyProject(): Saved {
     renderIn: null,
     renderOut: null,
     masterVolume: 1,
-    loudnorm: false,
   }
 }
 
@@ -438,11 +440,11 @@ function loadSaved(): Saved {
 function toSaved(state: State): Saved {
   const {
     width, height, fps, quality, shape, turned, custom, tracks,
-    renderIn, renderOut, masterVolume, loudnorm,
+    renderIn, renderOut, masterVolume,
   } = state
   return {
     width, height, fps, quality, shape, turned, custom, tracks,
-    renderIn, renderOut, masterVolume, loudnorm,
+    renderIn, renderOut, masterVolume,
   }
 }
 
@@ -632,6 +634,7 @@ export const useCompose = create<State>((set, get) => ({
   playhead: 0,
   selected: [],
   picked: [],
+  projectName: '',
   scale: 60,
   compact: (() => {
     try {
@@ -727,6 +730,10 @@ export const useCompose = create<State>((set, get) => ({
     return history.length > 0
   },
 
+  setProjectName(name) {
+    set({ projectName: name })
+  },
+
   selectAll() {
     set((state) => ({
       selected: state.tracks.flatMap((track) => track.clips).map((clip) => clip.id),
@@ -746,11 +753,6 @@ export const useCompose = create<State>((set, get) => ({
   // --- метки отрезка сборки ---------------------------------------------
   setMasterVolume(value) {
     set({ masterVolume: Math.min(MAX_GAIN, Math.max(0, value)) })
-    save(get())
-  },
-
-  setLoudnorm(value) {
-    set({ loudnorm: value })
     save(get())
   },
 
@@ -1068,6 +1070,34 @@ export const useCompose = create<State>((set, get) => ({
         tracks: state.tracks.filter((track) => track.id !== id),
         selected: state.selected.filter((clip) => !gone.includes(clip)),
       }
+    })
+    save(get())
+  },
+
+  /**
+   * Переставляет дорожку на новое место.
+   *
+   * Видеодорожки всегда выше звуковых: слои считаются сверху вниз, и звук,
+   * оказавшийся между картинками, ломал бы этот порядок. Поэтому дорожка
+   * ходит только внутри своего вида — за границу её не пускаем, а прижимаем
+   * к краю соседнего блока.
+   */
+  moveTrack(id, to) {
+    get().mark()
+    set((state) => {
+      const from = state.tracks.findIndex((track) => track.id === id)
+      if (from < 0) return state
+      const kind = state.tracks[from].kind
+      const same = state.tracks
+        .map((track, index) => ({ track, index }))
+        .filter((item) => item.track.kind === kind)
+        .map((item) => item.index)
+      const limited = Math.min(Math.max(to, same[0]), same[same.length - 1])
+      if (limited === from) return state
+      const tracks = [...state.tracks]
+      const [moved] = tracks.splice(from, 1)
+      tracks.splice(limited, 0, moved)
+      return { tracks }
     })
     save(get())
   },

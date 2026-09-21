@@ -326,6 +326,18 @@ const JobRow = memo(function JobRow({
           </p>
         </div>
 
+        {/* Сколько весит то, что получилось. При сжатии вес виден по чипу
+            «до и после», а у собранного начисто монтажа сравнивать не с чем,
+            и узнать вес было негде — разве что выйдя из программы. */}
+        {!compression && job.status === 'done' && job.meta?.sizeAfter ? (
+          <span
+            className="chip shrink-0 bg-surface-3 text-ink-dim"
+            title="Сколько весит готовый файл"
+          >
+            {humanSize(job.meta.sizeAfter)}
+          </span>
+        ) : null}
+
         {compression && job.status === 'done' && (
           <span
             className={`chip shrink-0 ${grew ? 'bg-warn/15 text-warn' : 'bg-ok/15 text-ok'}`}

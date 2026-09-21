@@ -376,7 +376,7 @@ def submit_compose_frame(request: ComposeSnapshotRequest, project: ComposeProjec
 
     return manager.submit(
         kind="image",
-        title="Кадр монтажа",
+        title=f"{fsutil.sanitize_name(request.output_name, fallback='Кадр')}.png",
         runner=runner,
         pool="image",
         meta={"preset": "стоп-кадр · PNG", "kind": "image"},
@@ -453,13 +453,22 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         finally:
             fsutil.release_path(output)
 
+    # В строке очереди пишем имя будущего файла: «Монтаж · 4 клипов» ничего не
+    # говорит, когда монтажей за вечер собрано несколько, а по имени человек
+    # сразу узнаёт свой.
     clips = sum(len(track.clips) for track in project.tracks)
+    stem = fsutil.sanitize_name(request.output_name, fallback="Монтаж")
     return manager.submit(
         kind="encode",
-        title=f"Монтаж · {clips} {'клип' if clips == 1 else 'клипов'}",
+        title=f"{stem}.{suffix}",
         runner=runner,
         pool="encode",
-        meta={"preset": label, "kind": "video", "compose": True},
+        meta={
+            "preset": label,
+            "kind": "video",
+            "compose": True,
+            "clips": clips,
+        },
     )
 
 

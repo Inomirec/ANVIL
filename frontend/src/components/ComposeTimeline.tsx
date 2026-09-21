@@ -148,6 +148,7 @@ export function ComposeTimeline({
   const addColor = useCompose((state) => state.addColor)
   const addTrack = useCompose((state) => state.addTrack)
   const removeTrack = useCompose((state) => state.removeTrack)
+  const moveTrack = useCompose((state) => state.moveTrack)
   const renameTrack = useCompose((state) => state.renameTrack)
   const setTrackLevel = useCompose((state) => state.setTrackLevel)
   const updateClip = useCompose((state) => state.updateClip)
@@ -548,15 +549,6 @@ export function ComposeTimeline({
     )
   }
 
-  const from = renderIn ?? 0
-  const to = renderOut ?? duration
-  // Звук в сборку не попадёт, если звучать нечему: клипы со звуком есть, но
-  // все они либо заглушены, либо выкручены в ноль.
-  const sounding = tracks.flatMap((track) => track.clips).filter(
-    (clip) => clip.kind === 'audio' || (clip.kind === 'video' && clip.hasAudio && !clip.groupId),
-  )
-  const silent = sounding.length > 0 && sounding.every((clip) => clip.muted || clip.volume <= 0)
-
   return (
     <div className="flex h-full flex-col">
       {/* Панель инструментов */}
@@ -613,15 +605,6 @@ export function ComposeTimeline({
           {selected.length > 1 && (
             <span className="ml-1 shrink-0 text-[11px] text-accent-soft">
               выбрано: {selected.length}
-            </span>
-          )}
-          {/* Ноль громкости у всех клипов означает «звука не будет вовсе» —
-              то же правило, что и в медиатеке. Сказать об этом надо заранее, а
-              не когда человек откроет готовый файл. */}
-          {silent && (
-            <span className="ml-1 flex shrink-0 items-center gap-1.5 text-[11px] text-warn">
-              <VolumeX size={12} />
-              в файле не будет звука
             </span>
           )}
           {/* Чтение файла занимает мгновение, но без этого окно выглядит
@@ -683,20 +666,10 @@ export function ComposeTimeline({
           </div>
         </div>
 
-        {/* Справа: что уйдёт в файл и как выглядит сам таймлайн */}
+        {/* Справа: как выглядит сам таймлайн. Где стоит игла и что уйдёт в
+            файл, видно на самом таймлайне — метками и её чертой, поэтому
+            словами это здесь не повторяем: место на панели дороже. */}
         <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
-          <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-dim">
-            {timecode(playhead, true)}
-          </span>
-          {renderIn !== null || renderOut !== null ? (
-            <span className="shrink-0 text-[11px] text-accent-soft">
-              соберётся {timecode(from, true)} → {timecode(to, true)}
-            </span>
-          ) : (
-            <span className="shrink-0 text-[11px] text-ink-faint">
-              из {timecode(duration, true)}
-            </span>
-          )}
 
           <IconButton title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
             <FlagTriangleRight size={14} />
@@ -746,6 +719,15 @@ export function ComposeTimeline({
           >
             <ZoomIn size={14} />
           </IconButton>
+          {/* Где стоит игла — у самого края панели. Текст можно выделить и
+              скопировать: остальное окно выделять запрещено, чтобы не мешать
+              перетаскиванию, и время вместе с ним не копировалось. */}
+          <span
+            className="shrink-0 cursor-text select-text font-mono text-[11px] tabular-nums text-ink-dim"
+            title="Где стоит игла: минуты, секунды и десятые"
+          >
+            {timecode(playhead, true)}
+          </span>
         </div>
       </div>
 
@@ -756,6 +738,7 @@ export function ComposeTimeline({
           tracks={tracks}
           width={headWidth}
           onWidth={setHeadWidth}
+          onMoveTrack={moveTrack}
           rowHeight={rowHeight}
           onRename={renameTrack}
           onLevel={setTrackLevel}
@@ -1002,6 +985,7 @@ function TrackHeads({
   onRename,
   onLevel,
   onMenu,
+  onMoveTrack,
 }: {
   tracks: ComposeTrack[]
   width: number
@@ -1010,8 +994,14 @@ function TrackHeads({
   onRename: (id: string, name: string) => void
   onLevel: (id: string, level: number) => void
   onMenu: (event: React.MouseEvent, id: string) => void
+  onMoveTrack: (id: string, to: number) => void
 }) {
   const grab = useRef<{ from: number; width: number } | null>(null)
+  // Дорожку переставляют, потянув её за колонку с названием. Строки одной
+  // высоты, поэтому место под курсором считается делением.
+  const carry = useRef<{ id: string; kind: 'video' | 'audio'; top: number } | null>(null)
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [dropRow, setDropRow] = useState<number | null>(null)
 
   useEffect(() => {
     const move = (event: MouseEvent) => {
@@ -1029,6 +1019,30 @@ function TrackHeads({
       window.removeEventListener('mouseup', drop)
     }
   }, [onWidth])
+
+  // Перетаскивание самой дорожки — отдельно от растягивания колонки.
+  useEffect(() => {
+    if (!dragging) return
+    const move = (event: MouseEvent) => {
+      const held = carry.current
+      if (!held) return
+      const row = Math.floor((event.clientY - held.top) / rowHeight)
+      setDropRow(Math.min(tracks.length - 1, Math.max(0, row)))
+    }
+    const drop = () => {
+      const held = carry.current
+      if (held && dropRow !== null) onMoveTrack(held.id, dropRow)
+      carry.current = null
+      setDragging(null)
+      setDropRow(null)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', drop)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', drop)
+    }
+  }, [dragging, dropRow, rowHeight, tracks.length, onMoveTrack])
 
   const roomy = width >= NAME_FROM
   // В сжатых дорожках ползунок встаёт рядом с названием, поэтому места ему
@@ -1050,15 +1064,40 @@ function TrackHeads({
         return (
           <div
             key={track.id}
-            className="relative flex items-center gap-1.5 overflow-hidden border-b border-line-soft pr-1.5"
+            className={`relative flex items-center gap-1.5 overflow-hidden border-b border-line-soft pr-1.5 ${
+              dragging === track.id ? 'opacity-50' : ''
+            } ${
+              dropRow === tracks.indexOf(track) && dragging && dragging !== track.id
+                ? 'ring-1 ring-inset ring-accent'
+                : ''
+            }`}
             style={{ height: rowHeight }}
             onContextMenu={(event) => onMenu(event, track.id)}
           >
-            {/* Цветная полоса с номером — то, что остаётся при любой ширине. */}
+            {/* Цветная полоса с номером — то, что остаётся при любой ширине.
+                За неё же дорожку и переставляют: потянул вверх или вниз —
+                она встала на новое место. Видео и звук не смешиваются: слои
+                считаются сверху вниз, и звук между картинками сбил бы
+                порядок. */}
             <span
-              className="flex h-full w-[18px] shrink-0 items-center justify-center font-mono text-[10px] font-semibold text-black/70"
+              className="flex h-full w-[18px] shrink-0 cursor-grab items-center justify-center font-mono text-[10px] font-semibold text-black/70 active:cursor-grabbing"
               style={{ background: colour }}
-              title={track.kind === 'audio' ? 'Звуковая дорожка' : 'Видеодорожка'}
+              title={`${
+                track.kind === 'audio' ? 'Звуковая дорожка' : 'Видеодорожка'
+              } — потяните вверх или вниз, чтобы переставить`}
+              onMouseDown={(event) => {
+                if (event.button !== 0) return
+                event.preventDefault()
+                const column = event.currentTarget.closest('div[style]')?.parentElement
+                const box = column?.getBoundingClientRect()
+                carry.current = {
+                  id: track.id,
+                  kind: track.kind,
+                  top: (box?.top ?? 0) + RULER_HEIGHT,
+                }
+                setDragging(track.id)
+                setDropRow(tracks.indexOf(track))
+              }}
             >
               {trackNumber(tracks, track.id)}
             </span>
@@ -1643,7 +1682,10 @@ function ClipBox({
 
   return (
     <div
-      className={`group absolute top-1.5 overflow-hidden rounded-lg border ${
+      // Углы у клипа прямые: скруглённые съедают края, и при плотной
+      // раскладке — особенно на сжатых дорожках — непонятно, где кончается
+      // один клип и начинается соседний.
+      className={`group absolute top-1.5 overflow-hidden border ${
         active ? 'border-accent ring-1 ring-accent/50' : 'border-line-soft'
       }`}
       style={{ left: clip.start * scale, width: box, height: height - 12 }}

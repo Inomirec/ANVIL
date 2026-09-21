@@ -80,7 +80,9 @@ function BusyMark({ from, text }: { from: { x: number; y: number }; text: string
  * несколько файлов, оно приближало каждый в его собственных границах, и
  * получался не наезд, а перекос.
  */
-const VIEWS = [1, 1.5, 2, 3, 4]
+// Экран просмотра умеет и отдаляться: клип, вылезший за край кадра, иначе не
+// ухватить за уголок — он оказывается за пределами окна.
+const VIEWS = [0.5, 0.75, 1, 1.5, 2, 3, 4]
 
 /**
  * Поле размера кадра.
@@ -177,8 +179,6 @@ export function ComposeTab() {
   const compact = useCompose((state) => state.compact)
   const masterVolume = useCompose((state) => state.masterVolume)
   const setMasterVolume = useCompose((state) => state.setMasterVolume)
-  const loudnorm = useCompose((state) => state.loudnorm)
-  const setLoudnorm = useCompose((state) => state.setLoudnorm)
 
   const toast = useStore((state) => state.toast)
   const setQueueOpen = useStore((state) => state.setQueueOpen)
@@ -326,12 +326,20 @@ export function ComposeTab() {
       // чего хочет, перетащив файл сюда. Добавляем папку сами.
       let info = await api.fileInfo(path).catch(() => null)
       if (!info) {
-        await api.addWorkspace(parentDir(path))
-        await useStore.getState().refreshSettings()
+        const folder = parentDir(path)
+        await api.addWorkspace(folder)
         info = await api.fileInfo(path)
+        // Медиатеку переводим на эту же папку: файл оттуда человек только что
+        // взял, значит и остальные, скорее всего, возьмёт оттуда же. Делаем
+        // это после того, как клип лёг на дорожку, — обход большой папки
+        // занимает время, и ждать его незачем.
+        void (async () => {
+          await useStore.getState().refreshSettings()
+          useStore.getState().openFolder(folder)
+        })()
       }
       if (info.kind === 'other') {
-        toast('Такой файл в монтаж не положить', 'error')
+        toast('Такой файл на таймлайн не положить', 'error')
         return
       }
       const length = info.media?.duration ?? 0
@@ -400,7 +408,6 @@ export function ComposeTab() {
           height: state.height,
           fps: state.fps,
           masterVolume: state.masterVolume,
-          loudnorm: state.loudnorm,
           tracks: state.tracks,
         },
         output_dir: outputDir,
@@ -508,17 +515,19 @@ export function ComposeTab() {
               if (!clips) return
               event.preventDefault()
               const box = frameBox.current?.getBoundingClientRect()
+              // Отдалять можно до половины: клип, вылезший за край кадра,
+              // иначе не ухватить за уголок — он оказывается за пределами окна.
               const next = Math.min(
                 6,
-                Math.max(1, Number((view * (event.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(3))),
+                Math.max(0.5, Number((view * (event.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(3))),
               )
               if (box) {
                 const toX = event.clientX - (box.left + box.width / 2)
                 const toY = event.clientY - (box.top + box.height / 2)
                 const keep = next / view
                 setPan({
-                  x: next === 1 ? 0 : toX - (toX - pan.x) * keep,
-                  y: next === 1 ? 0 : toY - (toY - pan.y) * keep,
+                  x: toX - (toX - pan.x) * keep,
+                  y: toY - (toY - pan.y) * keep,
                 })
               }
               setView(next)
@@ -560,7 +569,7 @@ export function ComposeTab() {
                     }}
                     title="Увеличение экрана просмотра — на готовый файл не влияет. Колесо приближает, зажатое колесо таскает кадр. Нажмите, чтобы вернуть обычный размер."
                     className={`inline-flex h-8 items-center rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
-                      view > 1
+                      view !== 1
                         ? 'bg-accent/20 text-accent-soft hover:bg-accent/30'
                         : 'text-ink-faint hover:text-ink'
                     }`}
@@ -728,7 +737,6 @@ export function ComposeTab() {
             master={masterVolume}
             onMaster={setMasterVolume}
             active={player.playing}
-            loudnorm={loudnorm}
             width={meterWidth}
             onWidth={(value) => {
               setMeterWidth(value)
@@ -827,14 +835,6 @@ export function ComposeTab() {
             )}
           </div>
 
-          <div className="space-y-3 border-t border-line-soft pt-4">
-            <Toggle
-              checked={loudnorm}
-              onChange={setLoudnorm}
-              label="Выровнять звук"
-              hint="Приводит громкость всего файла к общему уровню, как на радио. Пока включено, фейдер громкости заперт."
-            />
-          </div>
         </div>
 
         {/* Всё про готовый файл собрано в одном месте, над кнопкой сборки:
@@ -903,11 +903,11 @@ export function ComposeTab() {
         </div>
 
         <div className="flex items-stretch gap-2 border-t border-line-soft px-4 py-3">
-          {/* Монтаж запоминается сам, но только последний: чтобы вести
+          {/* Работа запоминается сама, но только последняя: чтобы вести
               несколько, их сохраняют под именами. */}
           <Button
             className="w-[42px] shrink-0 px-0"
-            title="Мои монтажи: сохранить нынешний или открыть прежний"
+            title="Мои проекты: сохранить нынешний или открыть прежний"
             onClick={() => setProjectsOpen(true)}
           >
             <Save size={15} />

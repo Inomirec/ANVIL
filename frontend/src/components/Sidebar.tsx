@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
@@ -23,6 +23,9 @@ import { fileName, humanSize } from '../lib/format'
 import type { LibraryFile } from '../lib/types'
 import { useStore, type FilterKind } from '../store'
 import { Button, IconButton, Modal, Segmented, Spinner } from './ui'
+
+//: По сколько файлов добавляем в список за раз.
+const PAGE = 120
 
 const LAYOUT_KEY = 'sgh.libraryLayout'
 
@@ -81,6 +84,13 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
     setLayout(next)
     localStorage.setItem(LAYOUT_KEY, next)
   }
+
+  // Сколько строк нарисовано сейчас. В папке на тысячи файлов список рисовался
+  // целиком — тысячи строк с миниатюрами, и каждая просит у программы свою
+  // картинку. Окно вставало на десяток секунд, и всё это время ни бросить
+  // файл, ни нажать кнопку было нельзя. Теперь показываем первые, а остальные
+  // добавляем по мере прокрутки.
+  const [shownCount, setShownCount] = useState(PAGE)
 
   // Порядок задаёт человек, а не файловая система: в папке на сотни файлов
   // иначе не найти нужный.
@@ -148,6 +158,12 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
       toast(`Не удалось удалить «${name}»: ${(error as Error).message}`, 'error')
     }
   }
+
+  const shown = sorted.slice(0, shownCount)
+  // Сменили папку, фильтр или поиск — начинаем список сначала.
+  useEffect(() => {
+    setShownCount(PAGE)
+  }, [files, sort, layout])
 
   return (
     <aside className="flex w-[336px] shrink-0 flex-col overflow-hidden border-r border-line-soft bg-surface">
@@ -302,7 +318,15 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
       </div>
 
       {/* Папки и файлы */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto p-2"
+        onScroll={(event) => {
+          // Осталось меньше экрана до низа — подкладываем следующую порцию.
+          const view = event.currentTarget
+          if (view.scrollTop + view.clientHeight * 2 < view.scrollHeight) return
+          setShownCount((was) => (was >= sorted.length ? was : was + PAGE))
+        }}
+      >
         {files.length === 0 && folders.length === 0 && !loading && (
           <p className="px-3 py-8 text-center text-[12px] leading-relaxed text-ink-faint">
             {search ? 'Ничего не нашлось.' : 'В этой папке пока нет медиафайлов. Скачайте что-нибудь на вкладке «Загрузка» или выберите другую папку.'}
@@ -347,7 +371,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
 
         {layout === 'grid' ? (
           <ul className="grid grid-cols-2 gap-2">
-            {sorted.map((file) => (
+            {shown.map((file) => (
               <FileTile
                 key={file.path}
                 file={file}
@@ -364,7 +388,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
           </ul>
         ) : (
           <ul className="space-y-0.5">
-            {sorted.map((file) => (
+            {shown.map((file) => (
               <FileRow
                 key={file.path}
                 file={file}

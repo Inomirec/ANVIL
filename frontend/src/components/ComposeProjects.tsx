@@ -6,10 +6,10 @@ import { useStore } from '../store'
 import { Button, Modal, Spinner } from './ui'
 
 /**
- * Сохранённые монтажи.
+ * Сохранённые проекты.
  *
- * Монтаж и так запоминается сам, но помнит программа только последний: стоит
- * начать второй — первый пропал. Поэтому монтажи можно сохранять под именем и
+ * Работа и так запоминается сама, но программа помнит только последнюю: стоит
+ * начать вторую — первая пропала. Поэтому проекты можно сохранять под именем и
  * открывать обратно.
  *
  * Папку человек не выбирает: файлы лежат внутри программы, рядом с
@@ -26,15 +26,21 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
   const toast = useStore((state) => state.toast)
   const snapshot = useCompose((state) => state.snapshot)
   const loadProject = useCompose((state) => state.loadProject)
+  // Имя открытого проекта: под ним же его чаще всего и пересохраняют.
+  const openedAs = useCompose((state) => state.projectName)
+  const setOpenedAs = useCompose((state) => state.setProjectName)
 
   const [list, setList] = useState<Saved[] | null>(null)
   const [folder, setFolder] = useState('')
-  const [name, setName] = useState('Монтаж')
+  const [name, setName] = useState(openedAs || 'Проект')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (open) void refresh()
-  }, [open])
+    if (open) {
+      setName(openedAs || 'Проект')
+      void refresh()
+    }
+  }, [open, openedAs])
 
   async function refresh() {
     try {
@@ -47,16 +53,21 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
     }
   }
 
-  async function saveAs(underName: string) {
+  async function saveAs(underName: string, silentOverwrite = false) {
     const clean = underName.trim()
     if (!clean) return
-    // Перезапись — потеря чужой работы, поэтому спрашиваем.
+    // Перезапись — потеря чужой работы, поэтому спрашиваем. Кроме случая,
+    // когда человек сам нажал «Записать поверх» у нужной строки: там он уже
+    // выбрал, что именно заменить.
     const exists = list?.some((item) => item.name === clean)
-    if (exists && !window.confirm(`Монтаж «${clean}» уже есть. Записать поверх?`)) return
+    if (exists && !silentOverwrite && !window.confirm(`Проект «${clean}» уже есть. Записать поверх?`)) {
+      return
+    }
     setBusy(true)
     try {
       await api.composeProjectSave(clean, snapshot())
-      toast(`Монтаж сохранён как «${clean}»`, 'ok')
+      setOpenedAs(clean)
+      toast(`Проект сохранён как «${clean}»`, 'ok')
       await refresh()
     } catch (error) {
       toast((error as Error).message, 'error')
@@ -70,7 +81,8 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
     try {
       const data = await api.composeProjectOpen(underName)
       loadProject(data.project)
-      toast(`Открыт монтаж «${underName}»`, 'ok')
+      setOpenedAs(underName)
+      toast(`Открыт проект «${underName}»`, 'ok')
       onClose()
     } catch (error) {
       toast((error as Error).message, 'error')
@@ -80,9 +92,10 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
   }
 
   async function remove(underName: string) {
-    if (!window.confirm(`Убрать монтаж «${underName}»? Файл уйдёт в корзину.`)) return
+    if (!window.confirm(`Убрать проект «${underName}»? Файл уйдёт в корзину.`)) return
     try {
       await api.composeProjectRemove(underName)
+      if (openedAs === underName) setOpenedAs('')
       await refresh()
     } catch (error) {
       toast((error as Error).message, 'error')
@@ -90,17 +103,17 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Мои монтажи">
+    <Modal open={open} onClose={onClose} title="Мои проекты">
       <div className="space-y-4">
         <div className="flex items-end gap-2">
           <label className="flex-1">
-            <span className="label">Сохранить нынешний монтаж как</span>
+            <span className="label">Сохранить нынешний проект как</span>
             <input
               className="field"
               value={name}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => event.key === 'Enter' && void saveAs(name)}
-              placeholder="Монтаж"
+              placeholder="Проект"
             />
           </label>
           <Button onClick={() => void saveAs(name)} disabled={busy || !name.trim()}>
@@ -117,7 +130,7 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
             </div>
           ) : !list.length ? (
             <p className="py-4 text-center text-[12px] text-ink-faint">
-              Пока ничего не сохранено. Соберите монтаж и запишите его под именем — потом
+              Пока ничего не сохранено. Соберите проект и запишите его под именем — потом
               можно будет вернуться и продолжить.
             </p>
           ) : (
@@ -125,7 +138,9 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
               {list.map((item) => (
                 <li
                   key={item.name}
-                  className="flex items-center gap-2 rounded-lg border border-line-soft px-2.5 py-2"
+                  className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 ${
+                    item.name === openedAs ? 'border-accent/60' : 'border-line-soft'
+                  }`}
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13px]">{item.name}</p>
@@ -133,6 +148,18 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
                       {item.clips} {clipWord(item.clips)} · {when(item.savedAt)}
                     </p>
                   </div>
+                  {/* Записать поверх — самое частое действие: человек открыл
+                      проект, поправил и хочет сохранить его туда же, не
+                      набирая имя заново. */}
+                  <button
+                    type="button"
+                    title={`Записать нынешний проект поверх «${item.name}»`}
+                    onClick={() => void saveAs(item.name, true)}
+                    disabled={busy}
+                    className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-40"
+                  >
+                    <Save size={14} />
+                  </button>
                   <Button
                     tone="ghost"
                     onClick={() => void openSaved(item.name)}
@@ -157,7 +184,7 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
 
         {folder && (
           <p className="truncate text-[11px] text-ink-faint" title={folder}>
-            Файлы монтажей лежат здесь: {folder}
+            Файлы проектов лежат здесь: {folder}
           </p>
         )}
       </div>
@@ -174,7 +201,7 @@ function clipWord(count: number): string {
   return 'клипов'
 }
 
-/** «Сегодня в 14:02» понятнее полной даты: монтажи открывают недавние. */
+/** «Сегодня в 14:02» понятнее полной даты: открывают обычно недавние. */
 function when(stamp: number): string {
   const at = new Date(stamp * 1000)
   const time = at.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })

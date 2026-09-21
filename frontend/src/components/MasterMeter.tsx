@@ -74,7 +74,6 @@ export function MasterMeter({
   active,
   width,
   onWidth,
-  loudnorm,
 }: {
   /** Текущий уровень по каналам, дБ. */
   levels: MeterLevels
@@ -87,7 +86,6 @@ export function MasterMeter({
   width: number
   onWidth: (value: number) => void
   /** Включено ли выравнивание громкости — его видно прямо на шкале. */
-  loudnorm: boolean
 }) {
   const [peaks, setPeaks] = useState<MeterLevels>({ left: FLOOR, right: FLOOR })
   const peakAt = useRef<{ left: number; right: number }>({ left: 0, right: 0 })
@@ -137,9 +135,6 @@ export function MasterMeter({
   /**
    * Фейдер громкости монтажа.
    *
-   * При включённом выравнивании он заперт: выравнивание всё равно приведёт
-   * готовый файл к своему уровню, и накрученная до него громкость просто
-   * пропадёт. Две настройки, спорящие друг с другом, хуже одной.
    */
   const fader = (
     <div className="relative flex">
@@ -148,8 +143,7 @@ export function MasterMeter({
         min={MIN_DB}
         max={MAX_DB}
         step={0.5}
-        value={loudnorm ? 0 : gainToDb(master)}
-        disabled={loudnorm}
+        value={gainToDb(master)}
         onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
         // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
         // а понять потом, каким он был, — нет. Второе нажатие перехватываем
@@ -161,18 +155,13 @@ export function MasterMeter({
           onMaster(1)
         }}
         onDoubleClick={() => onMaster(1)}
-        title={
-          loudnorm
-            ? 'Громкость монтажа заперта: её задаёт выравнивание звука'
-            : `Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
-Двойное нажатие вернёт 0 дБ`
-        }
+        title={`Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
+Двойное нажатие вернёт 0 дБ`}
         className="master-fader"
       />
       {/* Подпись громкости — внутри шины, как и деления шкалы: вынесенная
           вниз, она была шире колонки и раздвигала всё окно. */}
-      {!loudnorm && (
-        <span
+      <span
           className={`pointer-events-none absolute left-0 w-full bg-black/55 text-center font-mono text-[7.5px] leading-[9px] tabular-nums ${
             master > 1 ? 'text-warn' : 'text-white/75'
           }`}
@@ -181,9 +170,8 @@ export function MasterMeter({
             transform: 'translateY(-50%)',
           }}
         >
-          {shortLabel(master)}
-        </span>
-      )}
+        {shortLabel(master)}
+      </span>
     </div>
   )
 
