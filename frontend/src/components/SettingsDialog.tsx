@@ -539,7 +539,11 @@ function CookiesField() {
               <AlertTriangle size={14} className="shrink-0 text-warn" />
             )}
             <span className="min-w-0 flex-1">
-              {youtubeReady ? 'Файл загружен и используется' : 'Файл загружен, но YouTube его не примет'}
+              {settings.cookiesYoutube === 'missing'
+                ? 'Файл не найден — выберите его заново'
+                : youtubeReady
+                  ? 'Файл загружен и используется'
+                  : 'Файл загружен, но YouTube его не примет'}
             </span>
             <button
               type="button"
@@ -572,7 +576,7 @@ function CookiesField() {
           )}
           {/* Сказать про это надо здесь и сразу: иначе человек узнаёт о беде
               только когда ролик не скачался, и думает на программу. */}
-          {!youtubeReady && !checked && (
+          {!youtubeReady && !checked && settings.cookiesYoutube !== 'missing' && (
             <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">
               В файле нет метки входа в YouTube — по таким кукам он видит гостя.
               Она появляется, только если куки выгружены прямо со страницы

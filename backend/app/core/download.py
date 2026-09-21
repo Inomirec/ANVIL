@@ -9,12 +9,16 @@ X/Twitter и Instagram с несколькими картинками он ра�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.cookiejar
 import json
 import os
 import re
+import shutil
 import tempfile
+import time
 import urllib.request
+from uuid import uuid4
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -115,16 +119,45 @@ def is_network_failure(text: str) -> str | None:
     return None
 
 
+#: Сколько держим рабочие копии файла кук, прежде чем убрать за собой.
+_COOKIE_COPY_AGE = 3600
+
+
+def _sweep_cookie_copies() -> None:
+    """Убирает рабочие копии кук, оставшиеся от прошлых загрузок."""
+    folder = Path(tempfile.gettempdir())
+    edge = time.time() - _COOKIE_COPY_AGE
+    for stale in folder.glob("sgh-cookies-*.txt"):
+        with contextlib.suppress(OSError):
+            if stale.stat().st_mtime < edge:
+                stale.unlink()
+
+
 def _cookie_args(settings: Any) -> list[str]:
     """Откуда брать куки: из файла или прямо из браузера.
 
     Файл надёжнее: Chrome и его родня с некоторых пор шифруют своё хранилище
     так, что снаружи его не прочитать, а файл, выгруженный расширением,
     понимают все загрузчики одинаково.
+
+    **Свой файл загрузчику не отдаём.** yt-dlp переписывает файл, который ему
+    дали, тем, что вернул сайт: после одной загрузки от выгруженных кук
+    оставались гостевые, и вход пропадал сам собой. Человек при этом видел,
+    что «свежие куки опять устарели», хотя портила их сама программа.
+    Проверено: файл с меткой входа после единственного запуска превращался в
+    пять гостевых кук без неё. Поэтому каждый раз делаем рабочую копию —
+    пусть портится она.
     """
     path = getattr(settings, "cookies_file", None)
     if path and Path(path).is_file():
-        return ["--cookies", str(path)]
+        _sweep_cookie_copies()
+        copy = Path(tempfile.gettempdir()) / f"sgh-cookies-{os.getpid()}-{uuid4().hex}.txt"
+        try:
+            shutil.copyfile(path, copy)
+        except OSError:
+            # Копия не удалась — лучше отдать оригинал, чем остаться без кук.
+            return ["--cookies", str(path)]
+        return ["--cookies", str(copy)]
     if settings.cookies_from_browser:
         return ["--cookies-from-browser", settings.cookies_from_browser]
     return []
@@ -152,6 +185,14 @@ def _common_args(url: str | None = None) -> list[str]:
         referer = referer_for(url)
         if referer:
             args += ["--referer", referer]
+        # Возрастные ролики YouTube отдаёт не всякому своему плееру: обычные
+        # отвечают «UNPLAYABLE», и загрузка падала на «Sorry, this content is
+        # age-restricted» даже при исправном входе. Единственный, кто их
+        # отдаёт, — мобильный. Ставим его запасным: на обычных роликах ничего
+        # не меняется (проверено, те же 720p AV1), а возрастные начинают
+        # скачиваться — правда, только в 360p, больше YouTube ему не даёт.
+        if looks_like_video(url) and "youtu" in host_of(url):
+            args += ["--extractor-args", "youtube:player_client=default,mweb"]
     return args
 
 
@@ -436,6 +477,28 @@ def explain_failure(text: str) -> str:
             "  2. Выгрузите куки расширением прямо с этой страницы и загрузите "
             "файл в настройках программы — раздел «Доступ к сайтам».\n"
             "  3. Повторите загрузку.\n\n"
+            + text
+        )
+
+    if "age-restricted" in low or "age restricted" in low:
+        settings = config.load().download
+        подключены = bool(settings.cookies_file) or bool(settings.cookies_from_browser)
+        если_нет = (
+            "Что делать: подключите куки в настройках программы — раздел "
+            "«Доступ к сайтам». Без входа возрастное не скачивается вовсе.\n\n"
+        )
+        если_есть = (
+            "Вход у программы есть, но YouTube отдаёт такие ролики только "
+            "одному своему плееру, и тот ограничен качеством: обычно это "
+            "360p. Выше взять неоткуда — это ограничение самого YouTube, а не "
+            "программы.\n\n"
+            "Если и 360p не вышло, проверьте вход: настройки → «Доступ к "
+            "сайтам» → «Проверить». Возрастное отдают только тем, кто вошёл, "
+            "и у кого в аккаунте подтверждён возраст.\n\n"
+        )
+        return (
+            "Ролик с возрастным ограничением.\n\n"
+            + (если_есть if подключены else если_нет)
             + text
         )
 

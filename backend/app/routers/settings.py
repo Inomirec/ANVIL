@@ -242,7 +242,10 @@ def _cached_youtube_state(path: str | None) -> str | None:
     try:
         stamp = target.stat().st_mtime
     except OSError:
-        return None
+        # Путь в настройках есть, а файла нет: он мог уехать вместе с папкой
+        # или быть удалён снаружи. Молчать об этом нельзя — куки при этом не
+        # работают вовсе, а настройки выглядят так, будто всё на месте.
+        return "missing"
     if _youtube_cache and _youtube_cache[0] == path and _youtube_cache[1] == stamp:
         return _youtube_cache[2]
     try:
