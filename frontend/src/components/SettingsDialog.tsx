@@ -319,18 +319,6 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                   </p>
                 )}
               </div>
-              <div>
-                <span className="label">Папка для результатов</span>
-                <input
-                  className="field font-mono text-[12px]"
-                  value={settings.export.output_folder}
-                  onChange={(event) => void patch({ export: { output_folder: event.target.value } })}
-                />
-                <p className="mt-1 text-[11px] text-ink-faint">
-                  Создаётся рядом с исходником. Оригиналы никогда не перезаписываются, кроме
-                  случая, когда это включено вручную для картинок.
-                </p>
-              </div>
             </Section>
           </div>
 
@@ -351,6 +339,24 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 disabled={!settings.download.proxy_enabled}
                 onChange={(event) => void patch({ download: { proxy: event.target.value || null } })}
               />
+            </Section>
+
+            {/* Папка результатов переехала сюда из «Обработки»: левая колонка
+                была длиннее правой, и до этой настройки приходилось листать,
+                хотя справа оставалось пустое место. */}
+            <Section title="Результаты">
+              <div>
+                <span className="label">Папка для результатов</span>
+                <input
+                  className="field font-mono text-[12px]"
+                  value={settings.export.output_folder}
+                  onChange={(event) => void patch({ export: { output_folder: event.target.value } })}
+                />
+                <p className="mt-1 text-[11px] text-ink-faint">
+                  Создаётся рядом с исходником. Оригиналы никогда не перезаписываются, кроме
+                  случая, когда это включено вручную для картинок.
+                </p>
+              </div>
             </Section>
 
           </div>
@@ -432,12 +438,9 @@ function CookiesField() {
   const [busy, setBusy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  if (!settings) return null
-  const file = settings.download.cookies_file
-  // «Годится» — это не «файл есть»: YouTube смотрит на свою метку входа.
-  const youtubeReady = settings.cookiesYoutube === 'ok'
   // Что ответил сам YouTube на проверку. Разбор файла говорит лишь о том, что
-  // в нём лежит; действителен ли вход, знает только сайт.
+  // в нём лежит; действителен ли вход, знает только сайт. Состояние объявлено
+  // до выхода по пустым настройкам: хуки нельзя прятать за условием.
   const [checked, setChecked] = useState<{ state: string; message: string } | null>(null)
   const [checking, setChecking] = useState(false)
 
@@ -452,10 +455,19 @@ function CookiesField() {
       setChecking(false)
     }
   }
+
+  if (!settings) return null
+  const file = settings.download.cookies_file
+  // «Годится» — это не «файл есть»: YouTube смотрит на свою метку входа, а
+  // его собственный ответ на проверку важнее любого разбора файла.
+  const youtubeReady = checked
+    ? checked.state === 'ok'
+    : settings.cookiesYoutube === 'ok'
   const browser = settings.download.cookies_from_browser
   const mode: 'off' | 'firefox' | 'file' = file ? 'file' : browser ? 'firefox' : 'off'
 
   async function choose(next: 'off' | 'firefox' | 'file') {
+    setChecked(null)
     if (next === 'file') {
       inputRef.current?.click()
       return
@@ -476,17 +488,16 @@ function CookiesField() {
 
   async function upload(chosen: File) {
     setBusy(true)
+    // Ответ на прежний файл к новому отношения не имеет: он висел и после
+    // замены кук, и выходило, что программа ругается на то, чего уже нет.
+    setChecked(null)
     try {
       const result = await api.uploadCookies(chosen)
       await refreshSettings()
-      if (result.youtube === 'ok') {
-        toast(`Файл принят (${Math.round(result.size / 1024)} КБ)`, 'ok')
-      } else {
-        toast(
-          'Файл принят, но YouTube по нему видит гостя: выгрузите куки прямо со страницы youtube.com, где выполнен вход',
-          'error',
-        )
-      }
+      toast(`Файл принят (${Math.round(result.size / 1024)} КБ)`, 'ok')
+      // Меняют куки ровно затем, чтобы вход заработал, — значит и спросить
+      // YouTube надо сразу, не дожидаясь неудачной загрузки.
+      void check()
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {

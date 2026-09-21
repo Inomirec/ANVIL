@@ -496,6 +496,16 @@ def _ask_youtube(cookies_path: str) -> dict[str, str]:
             urllib.request.Request(_LOGIN_PROBE_URL, headers=_PROBE_HEADERS), timeout=30
         ) as answer:
             page = answer.read(2_000_000).decode("utf-8", "replace")
+    except UnicodeEncodeError:
+        # В куках бывают только обычные латинские символы; всё прочее значит,
+        # что файл не тот или испорчен при сохранении.
+        return {
+            "state": "broken",
+            "message": (
+                "В файле есть символы, которых в куках не бывает. "
+                "Похоже, сохранилось что-то другое — выгрузите куки заново."
+            ),
+        }
     except Exception as exc:  # сеть бывает какой угодно
         return {
             "state": "network",
