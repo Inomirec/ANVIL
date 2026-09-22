@@ -291,10 +291,14 @@ def text_filter(clip: ComposeClip, width: int, height: int) -> str:
         parts.append(f"line_spacing={round(size * clip.line_spacing)}")
 
     # Обводка и тень: без них светлый текст пропадает на светлом кадре.
-    if clip.stroke > 0:
+    if clip.stroke_on and clip.stroke > 0:
         parts.append(f"borderw={max(1, round(height * clip.stroke))}")
         parts.append(f"bordercolor={_colour(clip.stroke_color)}")
-    if clip.shadow_alpha > 0 and (abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6):
+    if (
+        clip.shadow_on
+        and clip.shadow_alpha > 0
+        and (abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6)
+    ):
         parts.append(f"shadowx={round(height * clip.shadow_x)}")
         parts.append(f"shadowy={round(height * clip.shadow_y)}")
         parts.append(f"shadowcolor={_colour(clip.shadow_color, clip.shadow_alpha)}")

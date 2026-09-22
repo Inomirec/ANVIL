@@ -429,7 +429,10 @@ export function ComposeTimeline({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const tag = (event.target as HTMLElement | null)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      // Надпись в кадре правят прямо там, в редактируемом поле: пока в нём
+      // печатают, пробел, Delete и буквы — это текст, а не команды таймлайна.
+      const editable = (event.target as HTMLElement | null)?.isContentEditable
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || editable) return
       const key = event.key.toLowerCase()
 
       // Ctrl+Z и Ctrl+A — то же, что и везде. Без своей обработки Ctrl+A
@@ -1357,8 +1360,6 @@ function ClipMenu({
         () => state.removeClips(state.selected.length ? state.selected : [clipId]),
       )}
       <div className="my-1 h-px bg-line-soft" />
-      {clip.kind === 'text' &&
-        item('Настроить надпись', '2 щелчка', () => state.editText(clipId))}
       {item('Копировать', 'Ctrl+C', () => state.copyClips(state.selected.length ? state.selected : [clipId]))}
       {item('Вставить от иглы', 'Ctrl+V', () => state.pasteClips(), !state.hasCopy())}
       {item('Сгруппировать', 'G', () => state.groupClips(state.selected), !many)}
@@ -1704,11 +1705,6 @@ function ClipBox({
       }`}
       style={{ left: clip.start * scale, width: box, height: height - 12 }}
       onContextMenu={onMenu}
-      onDoubleClick={(event) => {
-        if (clip.kind !== 'text') return
-        event.stopPropagation()
-        useCompose.getState().editText(clip.id)
-      }}
       onMouseDown={(event) => {
         if (event.button !== 0) return
         const area = event.currentTarget.getBoundingClientRect()
@@ -1725,8 +1721,13 @@ function ClipBox({
       }}
     >
       {solid ? (
-        // У заливки нет ни кадров, ни файла — показываем её собственный цвет.
+        // У заливки нет ни кадров, ни файла — показываем её собственный цвет,
+        // без затемнения сверху: по цвету её и находят среди других.
         <div className="absolute inset-0" style={{ background: clip.color }} />
+      ) : clip.kind === 'text' ? (
+        // Надпись — свой цвет, которого нет ни у дорожек, ни у заливки: иначе
+        // тёмная надпись и тёмная заливка сливались, и было не понять, где что.
+        <div className="absolute inset-0 bg-[#6b3fd1]/70" />
       ) : sound ? (
         <>
           <div className="absolute inset-0 bg-ok/12" />
@@ -1740,7 +1741,9 @@ function ClipBox({
           style={{ backgroundImage: `url(${thumb})` }}
         />
       )}
-      <div className="absolute inset-0 bg-gradient-to-b from-surface-3/55 to-surface-3/80" />
+      {!solid && clip.kind !== 'text' && (
+        <div className="absolute inset-0 bg-gradient-to-b from-surface-3/55 to-surface-3/80" />
+      )}
 
       {/* Затухания: затемнённые треугольники по краям, как в монтажках. */}
       {clip.fadeIn > 0 && (
@@ -1813,22 +1816,12 @@ function ClipBox({
           short ? 'px-1.5 py-0.5' : 'p-1.5'
         }`}
       >
-        <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink">
+        {/* Подпись с тенью: заливка бывает любого цвета, в том числе светлого,
+            и без тени белые буквы на ней пропадали. */}
+        <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink [text-shadow:0_1px_2px_rgba(0,0,0,0.75)]">
           {clip.kind === 'text' && (
-            // Настроек у надписи много, а панели свойств во вкладке нет —
-            // открываем их прямо отсюда, с самого клипа.
-            <button
-              type="button"
-              onMouseDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation()
-                useCompose.getState().editText(clip.id)
-              }}
-              title="Настроить надпись: шрифт, размер, цвет, обводка"
-              className="shrink-0 text-accent-soft hover:text-ink"
-            >
-              <Type size={11} />
-            </button>
+            // Знак надписи: по нему её отличают от заливки и картинок.
+            <Type size={11} className="shrink-0 text-white" />
           )}
           {sound && (
             <button

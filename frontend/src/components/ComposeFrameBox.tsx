@@ -44,7 +44,7 @@ export const GRIDS: { value: GridKind; label: string; lines: number[] }[] = [
  * добавляются к ним, поэтому сетка — не только разметка для глаза, но и
  * помощь руке.
  */
-function guidesOf(kind: GridKind): number[] {
+export function guidesOf(kind: GridKind): number[] {
   const grid = GRIDS.find((item) => item.value === kind)
   return [...new Set([0, 0.5, 1, ...(grid?.lines ?? [])])]
 }
@@ -53,7 +53,7 @@ function guidesOf(kind: GridKind): number[] {
 const SNAP = 0.012
 
 /** Двигает значение к ближайшей направляющей, если она рядом. */
-function stick(anchors: number[], shift: number, guides: number[]): number {
+export function stick(anchors: number[], shift: number, guides: number[]): number {
   let best = 0
   let closest = SNAP
   for (const anchor of anchors) {

@@ -333,10 +333,15 @@ class ComposeClip(ComposeModel):
     #: Цвет букв и насколько они видны.
     text_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
     #: Обводка вокруг букв: её толщина в долях высоты кадра и цвет. Без неё
-    #: светлый текст теряется на светлом кадре.
+    #: светлый текст теряется на светлом кадре. Включатель отдельно от
+    #: толщины: выключенная обводка помнит свои настройки и возвращается
+    #: такой же, какой была.
+    stroke_on: bool = False
     stroke: float = Field(default=0.0, ge=0.0, le=0.2)
     stroke_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
     #: Тень: сдвиг в долях высоты кадра (может быть отрицательным) и цвет.
+    #: Включатель, как и у обводки, отдельно от настроек.
+    shadow_on: bool = False
     shadow_x: float = Field(default=0.0, ge=-0.5, le=0.5)
     shadow_y: float = Field(default=0.0, ge=-0.5, le=0.5)
     shadow_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")

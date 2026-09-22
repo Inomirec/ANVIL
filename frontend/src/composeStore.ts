@@ -87,10 +87,12 @@ export interface ComposeClip {
   /** Высота букв в долях высоты кадра: не зависит от разрешения проекта. */
   fontSize?: number
   textColor?: string
-  /** Обводка: толщина в долях высоты кадра и цвет. */
+  /** Обводка: включена ли, толщина в долях высоты кадра и цвет. */
+  strokeOn?: boolean
   stroke?: number
   strokeColor?: string
-  /** Тень: сдвиг в долях высоты кадра, цвет и насколько она видна. */
+  /** Тень: включена ли, сдвиг в долях высоты кадра, цвет и видимость. */
+  shadowOn?: boolean
   shadowX?: number
   shadowY?: number
   shadowColor?: string
@@ -105,7 +107,12 @@ export interface ComposeClip {
   align?: 'left' | 'center' | 'right'
 }
 
-/** Каким рождается текстовый клип: белые буквы с тонкой чёрной обводкой. */
+/**
+ * Каким рождается текстовый клип: белые буквы, без обводки, тени и подложки.
+ *
+ * Сами настройки эффектов у них уже заданы: галочка включает эффект сразу в
+ * пригодном виде, и крутить ползунки с нуля, чтобы что-то увидеть, не надо.
+ */
 export const TEXT_DEFAULTS = {
   text: 'Текст',
   font: 'Arial',
@@ -113,10 +120,12 @@ export const TEXT_DEFAULTS = {
   italic: false,
   fontSize: 0.07,
   textColor: '#ffffff',
-  stroke: 0.006,
+  strokeOn: false,
+  stroke: 0.004,
   strokeColor: '#000000',
-  shadowX: 0,
-  shadowY: 0,
+  shadowOn: false,
+  shadowX: 0.004,
+  shadowY: 0.004,
   shadowColor: '#000000',
   shadowAlpha: 0.6,
   lineSpacing: 0.25,
@@ -342,9 +351,6 @@ interface State extends Saved {
   /** Под каким именем открыт проект — чтобы сохранять поверх него. */
   projectName: string
   setProjectName: (name: string) => void
-  /** Какую надпись сейчас правят: её настройки открыты поверх окна. */
-  editingText: string | null
-  editText: (id: string | null) => void
   /** Пикселей в секунде: масштаб таймлайна. */
   scale: number
   /** Сжатые дорожки: когда их много, а места мало. */
@@ -475,7 +481,17 @@ function normalize(input: unknown): Saved {
         // Надписям добираем настройки: проект мог быть записан версией, где
         // текста ещё не было, а без них сборка не знала бы ни шрифта, ни
         // цвета. Клипам других видов эти поля не мешают.
-        ...(clip.kind === 'text' ? { ...TEXT_DEFAULTS, ...clip } : {}),
+        ...(clip.kind === 'text'
+          ? {
+              ...TEXT_DEFAULTS,
+              ...clip,
+              // Включателей у первых надписей не было: эффект считался
+              // включённым, если у него была толщина или сдвиг.
+              strokeOn: clip.strokeOn ?? (clip.stroke ?? 0) > 0,
+              shadowOn:
+                clip.shadowOn ?? (Math.abs(clip.shadowX ?? 0) + Math.abs(clip.shadowY ?? 0) > 0),
+            }
+          : {}),
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
@@ -695,7 +711,6 @@ export const useCompose = create<State>((set, get) => ({
   selected: [],
   picked: [],
   projectName: '',
-  editingText: null,
   scale: 60,
   compact: (() => {
     try {
@@ -795,9 +810,6 @@ export const useCompose = create<State>((set, get) => ({
     set({ projectName: name })
   },
 
-  editText(id) {
-    set({ editingText: id })
-  },
 
   selectAll() {
     set((state) => ({
@@ -907,9 +919,11 @@ export const useCompose = create<State>((set, get) => ({
         size: 1,
         sizeY: 0,
         ratio: 0,
-        // Надпись по умолчанию внизу кадра — там, где её ждут у субтитров.
+        // Надпись рождается посередине кадра: субтитры — лишь один из
+        // случаев, а заголовки и подписи ставят куда угодно. Отсюда её
+        // видно сразу, куда бы её потом ни понесли.
         x: 0.5,
-        y: 0.82,
+        y: 0.5,
         ...TEXT_DEFAULTS,
       },
       target?.id,

@@ -35,6 +35,7 @@ import {
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
 import { ComposeTextPanel } from './ComposeTextPanel'
+import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderSettings,
   DEFAULT_RENDER,
@@ -178,8 +179,6 @@ export function ComposeTab() {
   const renderIn = useCompose((state) => state.renderIn)
   const renderOut = useCompose((state) => state.renderOut)
   const compact = useCompose((state) => state.compact)
-  const editingText = useCompose((state) => state.editingText)
-  const editText = useCompose((state) => state.editText)
   const masterVolume = useCompose((state) => state.masterVolume)
   const setMasterVolume = useCompose((state) => state.setMasterVolume)
 
@@ -257,6 +256,21 @@ export function ComposeTab() {
   )
   const clips = tracks.reduce((count, track) => count + track.clips.length, 0)
 
+  // Какую надпись сейчас правят прямо в кадре — её эффект кадра пропустит.
+  // Правило то же, что у рамки ниже: выделена ровно одна видимая надпись.
+  const liveTextId = (() => {
+    const visible = tracks
+      .flatMap((track) => track.clips)
+      .filter(
+        (clip) =>
+          selected.includes(clip.id) &&
+          clip.kind !== 'audio' &&
+          clip.start <= playhead &&
+          clip.start + clip.duration > playhead,
+      )
+    return visible.length === 1 && visible[0].kind === 'text' ? visible[0].id : null
+  })()
+
   // Кадр под иглой. Просчёт занимает около десятой доли секунды, но запросы
   // всё равно гасим: игла ходит непрерывно, и без этого мы бы отправляли по
   // запросу на каждый пиксель её пути.
@@ -273,6 +287,25 @@ export function ComposeTab() {
       pending.current = control
       slow = setTimeout(() => setSlowFrame(true), 400)
       const view = useCompose.getState()
+      // Надпись, которую правят в кадре, рисует само окно — живьём, на каждую
+      // букву. Программе её рисовать незачем: получилось бы две.
+      const shownTracks = liveTextId
+        ? view.tracks.map((track) => ({
+            ...track,
+            clips: track.clips.filter((clip) => clip.id !== liveTextId),
+          }))
+        : view.tracks
+      // Кроме правящейся надписи в кадре ничего нет — собирать нечего: просто
+      // чёрный кадр под ней, без сообщения «пусто» за буквами.
+      if (!shownTracks.some((track) => track.clips.length)) {
+        if (slow) clearTimeout(slow)
+        setFrameUrl((old) => {
+          if (old) URL.revokeObjectURL(old)
+          return null
+        })
+        setFrameError(null)
+        return
+      }
       api
         .composeFrame(
           {
@@ -280,7 +313,7 @@ export function ComposeTab() {
               width: view.width,
               height: view.height,
               fps: view.fps,
-              tracks: view.tracks,
+              tracks: shownTracks,
             },
             at: playhead,
             preview_width: 960,
@@ -307,7 +340,7 @@ export function ComposeTab() {
       clearTimeout(timer)
       if (slow) clearTimeout(slow)
     }
-  }, [playhead, clips, tracks, player.playing])
+  }, [playhead, clips, tracks, player.playing, liveTextId])
 
   // Картинку держим ровно до следующей: иначе браузер копит их в памяти.
   useEffect(() => () => {
@@ -479,6 +512,31 @@ export function ComposeTab() {
         clip.start + clip.duration > playhead,
     )
   const placing = shown.length === 1 ? shown[0] : undefined
+  // Надпись, выделенная на таймлайне: справа вместо настроек кадра — её
+  // настройки. Звук в счёт не идёт, как и у рамки.
+  const pickedVisual = tracks
+    .flatMap((track) => track.clips)
+    .filter((clip) => selected.includes(clip.id) && clip.kind !== 'audio')
+  const textClip =
+    pickedVisual.length === 1 && pickedVisual[0].kind === 'text' ? pickedVisual[0] : undefined
+  // Надпись, которую прямо сейчас видно и можно править в кадре. Её рисует
+  // окно, поэтому из собранного программой кадра она убирается — иначе на
+  // экране было бы две одинаковые надписи.
+  const liveText = placing?.kind === 'text' ? placing : undefined
+
+  // Выделили надпись, а игла стоит вне её — переводим иглу на надпись. Иначе
+  // справа открылись бы её настройки, а в кадре её нет: ни написать, ни
+  // увидеть, что меняют. Только при смене выделения: двигать иглу дальше
+  // человек волен сам.
+  const textClipId = textClip?.id
+  useEffect(() => {
+    if (!textClipId) return
+    const state = useCompose.getState()
+    const clip = state.tracks.flatMap((track) => track.clips).find((item) => item.id === textClipId)
+    if (!clip) return
+    if (state.playhead >= clip.start && state.playhead < clip.start + clip.duration) return
+    state.setPlayhead(clip.start + Math.min(0.1, clip.duration / 2))
+  }, [textClipId])
 
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер.
   // Раньше это была папка первого клипа — и она менялась сама, стоило
@@ -691,6 +749,10 @@ export function ComposeTab() {
                   // показывался почти квадратным. Считаем ширину сами, по
                   // меньшей из двух сторон свободного места.
                   width: `min(100cqw, calc(100cqh * ${width} / ${height}))`,
+                  // Надпись в кадре задана долями его высоты: объявляем кадр
+                  // контейнером, и её размер считается прямо в CSS, как в
+                  // готовом файле, — без замеров на каждое изменение окна.
+                  containerType: 'size',
                 }}
               >
               {/* Всё содержимое кадра увеличивается целиком — и картинка, и
@@ -724,8 +786,11 @@ export function ComposeTab() {
                     иначе она мешала бы просто смотреть. */}
                 <ComposeGrid kind={grid} />
 
-                {!player.playing && placing && (
+                {!player.playing && placing && placing.kind !== 'text' && (
                   <ComposeFrameBox clip={placing} grid={grid} />
+                )}
+                {!player.playing && liveText && (
+                  <ComposeTextOverlay clip={liveText} grid={grid} />
                 )}
 
               </div>
@@ -769,6 +834,13 @@ export function ComposeTab() {
       {/* Правая панель */}
       <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
+          {/* Пока выделена надпись, здесь её настройки, а не кадра: так их
+              не надо искать, и экран просмотра остаётся открытым — цвет и
+              тень подбирают, глядя на кадр. */}
+          {textClip ? (
+            <ComposeTextPanel clip={textClip} />
+          ) : (
+          <>
           {/* Кадр проекта. Без заголовка и без лишних чисел: что выбрано,
               видно по самим кнопкам, а форму кадра показывает рамка в окне
               просмотра. Раздел «Клип» тоже убран — имя файла, громкость и
@@ -842,6 +914,8 @@ export function ComposeTab() {
               </div>
             )}
           </div>
+          </>
+          )}
 
         </div>
 
@@ -946,14 +1020,6 @@ export function ComposeTab() {
 
       <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
 
-      {/* Настройки надписи открываются поверх всего: правки видно сразу в
-          кадре под иглой, а закрыть окно можно, не теряя выделения. */}
-      <ComposeTextPanel
-        clip={
-          tracks.flatMap((track) => track.clips).find((clip) => clip.id === editingText) ?? null
-        }
-        onClose={() => editText(null)}
-      />
 
       <ComposeRenderSettings
         open={renderOpen}
