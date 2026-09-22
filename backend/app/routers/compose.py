@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from .. import paths
-from ..core import binaries, compose, fsutil, pipeline, trash
+from ..core import binaries, compose, fonts, fsutil, pipeline, trash
 from ..models import (
     ComposeBuildRequest,
     ComposeDraftRequest,
@@ -296,6 +296,17 @@ async def save_render_presets(body: dict) -> dict:
     body_text = json.dumps(presets_list[:50], ensure_ascii=False, indent=1)
     await asyncio.to_thread(_presets_file().write_text, body_text, "utf-8")
     return {"saved": len(presets_list[:50])}
+
+
+@router.get("/fonts")
+async def font_list() -> dict[str, object]:
+    """Шрифты, установленные в системе.
+
+    Читается это из реестра Windows, поэтому уходит в отдельный поток: список
+    длинный, и на слабой машине обход задержал бы все остальные запросы.
+    """
+    families = await asyncio.to_thread(fonts.families)
+    return {"fonts": [item.to_dict() for item in families]}
 
 
 @router.post("/snapshot")

@@ -244,7 +244,7 @@ class RenameRequest(BaseModel):
 
 # --- монтаж -------------------------------------------------------------
 
-ClipKind = Literal["video", "image", "audio", "color"]
+ClipKind = Literal["video", "image", "audio", "color", "text"]
 
 
 class ComposeModel(BaseModel):
@@ -316,6 +316,41 @@ class ComposeClip(ComposeModel):
     #: за край кадра частично.
     x: float = Field(default=0.5, ge=-1.0, le=2.0)
     y: float = Field(default=0.5, ge=-1.0, le=2.0)
+
+    # --- надпись (только у клипов вида ``text``) --------------------------
+    #: Что написать. Переводы строк сохраняются: так набирают субтитры в две
+    #: строки, и ломать их по ширине кадра за человека не надо.
+    text: str = ""
+    #: Имя семейства шрифта, как его знает Windows: «Arial», «Segoe UI».
+    #: Пустое — возьмём то, что найдётся: монтаж могли принести с другой
+    #: машины, где этого шрифта нет.
+    font: str = ""
+    bold: bool = False
+    italic: bool = False
+    #: Высота букв в долях высоты кадра. Так надпись не меняет размера, когда
+    #: проект переводят с 720p на 1080p.
+    font_size: float = Field(default=0.08, gt=0.0, le=1.0)
+    #: Цвет букв и насколько они видны.
+    text_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    #: Обводка вокруг букв: её толщина в долях высоты кадра и цвет. Без неё
+    #: светлый текст теряется на светлом кадре.
+    stroke: float = Field(default=0.0, ge=0.0, le=0.2)
+    stroke_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+    #: Тень: сдвиг в долях высоты кадра (может быть отрицательным) и цвет.
+    shadow_x: float = Field(default=0.0, ge=-0.5, le=0.5)
+    shadow_y: float = Field(default=0.0, ge=-0.5, le=0.5)
+    shadow_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+    #: Насколько видна тень: 0 — её нет вовсе.
+    shadow_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
+    #: Расстояние между строками в долях высоты букв.
+    line_spacing: float = Field(default=0.25, ge=-0.5, le=2.0)
+    #: Подложка под текстом: цвет, прозрачность и отступ от букв.
+    box: bool = False
+    box_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+    box_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    box_pad: float = Field(default=0.02, ge=0.0, le=0.5)
+    #: Выравнивание строк между собой, когда их несколько.
+    align: Literal["left", "center", "right"] = "center"
 
     @property
     def end(self) -> float:

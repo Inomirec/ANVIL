@@ -10,7 +10,7 @@ import { create } from 'zustand'
  * Время везде в секундах, положение клипа — от начала таймлайна.
  */
 
-export type ClipKind = 'video' | 'image' | 'audio' | 'color'
+export type ClipKind = 'video' | 'image' | 'audio' | 'color' | 'text'
 
 export interface ComposeClip {
   id: string
@@ -76,6 +76,55 @@ export interface ComposeClip {
    */
   x: number
   y: number
+
+  /* --- надпись: только у клипов вида text ------------------------------ */
+  /** Что написано. Переводы строк сохраняются: субтитры часто в две строки. */
+  text?: string
+  /** Семейство шрифта, как его зовут в Windows: «Arial», «Segoe UI». */
+  font?: string
+  bold?: boolean
+  italic?: boolean
+  /** Высота букв в долях высоты кадра: не зависит от разрешения проекта. */
+  fontSize?: number
+  textColor?: string
+  /** Обводка: толщина в долях высоты кадра и цвет. */
+  stroke?: number
+  strokeColor?: string
+  /** Тень: сдвиг в долях высоты кадра, цвет и насколько она видна. */
+  shadowX?: number
+  shadowY?: number
+  shadowColor?: string
+  shadowAlpha?: number
+  /** Расстояние между строками в долях высоты букв. */
+  lineSpacing?: number
+  /** Подложка под буквами — когда кадр пёстрый и обводки мало. */
+  box?: boolean
+  boxColor?: string
+  boxAlpha?: number
+  boxPad?: number
+  align?: 'left' | 'center' | 'right'
+}
+
+/** Каким рождается текстовый клип: белые буквы с тонкой чёрной обводкой. */
+export const TEXT_DEFAULTS = {
+  text: 'Текст',
+  font: 'Arial',
+  bold: false,
+  italic: false,
+  fontSize: 0.07,
+  textColor: '#ffffff',
+  stroke: 0.006,
+  strokeColor: '#000000',
+  shadowX: 0,
+  shadowY: 0,
+  shadowColor: '#000000',
+  shadowAlpha: 0.6,
+  lineSpacing: 0.25,
+  box: false,
+  boxColor: '#000000',
+  boxAlpha: 0.5,
+  boxPad: 0.02,
+  align: 'center' as const,
 }
 
 export interface ComposeTrack {
@@ -222,6 +271,8 @@ export function volumeLabel(gain: number): string {
 
 /** Сколько висит картинка, если не трогать её длину. */
 export const DEFAULT_IMAGE_SECONDS = 3
+//: Сколько по умолчанию висит надпись — обычная длина субтитра.
+export const DEFAULT_TEXT_SECONDS = 3
 /** Короче этого клип не тянется — иначе он исчезает под курсором. */
 export const MIN_CLIP_SECONDS = 0.2
 
@@ -291,6 +342,9 @@ interface State extends Saved {
   /** Под каким именем открыт проект — чтобы сохранять поверх него. */
   projectName: string
   setProjectName: (name: string) => void
+  /** Какую надпись сейчас правят: её настройки открыты поверх окна. */
+  editingText: string | null
+  editText: (id: string | null) => void
   /** Пикселей в секунде: масштаб таймлайна. */
   scale: number
   /** Сжатые дорожки: когда их много, а места мало. */
@@ -326,6 +380,8 @@ interface State extends Saved {
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
   /** Кладёт заливку под иглу — файла для этого не нужно. */
   addColor: (color: string, trackId?: string) => string
+  /** Кладёт надпись под иглу: свой инструмент, файла ей не нужно. */
+  addText: (trackId?: string) => string
   addPair: (video: Omit<ComposeClip, 'id'>, trackId?: string) => string
   updateClip: (id: string, patch: Partial<ComposeClip>) => void
   moveClips: (ids: string[], shift: number) => void
@@ -416,6 +472,10 @@ function normalize(input: unknown): Saved {
         color: clip.color ?? '#000000',
         sizeY: clip.sizeY ?? 0,
         ratio: clip.ratio ?? 0,
+        // Надписям добираем настройки: проект мог быть записан версией, где
+        // текста ещё не было, а без них сборка не знала бы ни шрифта, ни
+        // цвета. Клипам других видов эти поля не мешают.
+        ...(clip.kind === 'text' ? { ...TEXT_DEFAULTS, ...clip } : {}),
       })),
     }))
     if (!tracks.some((track) => track.kind === 'audio')) {
@@ -635,6 +695,7 @@ export const useCompose = create<State>((set, get) => ({
   selected: [],
   picked: [],
   projectName: '',
+  editingText: null,
   scale: 60,
   compact: (() => {
     try {
@@ -734,6 +795,10 @@ export const useCompose = create<State>((set, get) => ({
     set({ projectName: name })
   },
 
+  editText(id) {
+    set({ editingText: id })
+  },
+
   selectAll() {
     set((state) => ({
       selected: state.tracks.flatMap((track) => track.clips).map((clip) => clip.id),
@@ -815,6 +880,42 @@ export const useCompose = create<State>((set, get) => ({
    * Без дорожки встаёт на нижнюю видеодорожку: заливку чаще всего кладут под
    * остальное. Длина — как у картинки по умолчанию, дальше её тянут.
    */
+  addText(trackId) {
+    const state = get()
+    const video = state.tracks.filter((track) => track.kind === 'video')
+    const target =
+      state.tracks.find((track) => track.id === trackId && track.kind === 'video') ??
+      video[video.length - 1]
+    // Надпись ложится там же, где стоит игла, и живёт три секунды — обычная
+    // длина субтитра. Дальше её тянут за край, как всё остальное.
+    return get().addClip(
+      {
+        source: '',
+        name: TEXT_DEFAULTS.text,
+        kind: 'text',
+        start: Math.round(state.playhead * 100) / 100,
+        duration: DEFAULT_TEXT_SECONDS,
+        sourceIn: 0,
+        sourceDuration: 0,
+        hasAudio: false,
+        volume: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+        muted: true,
+        opacity: 1,
+        zoom: 1,
+        size: 1,
+        sizeY: 0,
+        ratio: 0,
+        // Надпись по умолчанию внизу кадра — там, где её ждут у субтитров.
+        x: 0.5,
+        y: 0.82,
+        ...TEXT_DEFAULTS,
+      },
+      target?.id,
+    )
+  },
+
   addColor(color, trackId) {
     const state = get()
     const video = state.tracks.filter((track) => track.kind === 'video')

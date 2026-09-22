@@ -168,6 +168,10 @@ export const api = {
     return response.blob()
   },
   composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
+  /** Шрифты, установленные в системе: для надписей в монтаже. */
+  fonts: () =>
+    request<{ fonts: { name: string; bold: boolean; italic: boolean }[] }>('/api/compose/fonts'),
+
   /** Снимок кадра монтажа — уходит в очередь, как «Сохранить кадр». */
   composeSnapshot: (payload: unknown) => post<Job>('/api/compose/snapshot', payload),
 

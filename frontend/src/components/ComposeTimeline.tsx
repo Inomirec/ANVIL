@@ -10,6 +10,7 @@ import {
   Loader2,
   Music2 as MusicTrack,
   PaintBucket,
+  Type,
   Music2,
   Pause,
   Play as PlayIcon,
@@ -146,6 +147,7 @@ export function ComposeTimeline({
   const splitAtPlayhead = useCompose((state) => state.splitAtPlayhead)
   const removeClips = useCompose((state) => state.removeClips)
   const addColor = useCompose((state) => state.addColor)
+  const addText = useCompose((state) => state.addText)
   const addTrack = useCompose((state) => state.addTrack)
   const removeTrack = useCompose((state) => state.removeTrack)
   const moveTrack = useCompose((state) => state.moveTrack)
@@ -601,6 +603,12 @@ export function ComposeTimeline({
           >
             <PaintBucket size={14} />
           </IconButton>
+          <IconButton
+            title="Положить надпись под иглу: субтитр, заголовок или подпись поверх кадра"
+            onClick={() => addText()}
+          >
+            <Type size={14} />
+          </IconButton>
 
           {selected.length > 1 && (
             <span className="ml-1 shrink-0 text-[11px] text-accent-soft">
@@ -958,6 +966,7 @@ export function ComposeTimeline({
           onRemove={() => removeTrack(trackMenu.id)}
           onAdd={addTrack}
           onFill={() => addColor('#101018', trackMenu.id)}
+          onText={() => addText(trackMenu.id)}
           tracks={tracks}
         />
       )}
@@ -1217,6 +1226,7 @@ function TrackMenu({
   onRemove,
   onAdd,
   onFill,
+  onText,
 }: {
   at: { x: number; y: number }
   trackId: string
@@ -1225,6 +1235,7 @@ function TrackMenu({
   onRemove: () => void
   onAdd: (kind: 'video' | 'audio') => void
   onFill: () => void
+  onText: () => void
 }) {
   useEffect(() => {
     const close = () => onClose()
@@ -1269,6 +1280,7 @@ function TrackMenu({
       onContextMenu={(event) => event.preventDefault()}
     >
       {item('Добавить заливку под иглой', onFill, track.kind !== 'video')}
+      {item('Добавить надпись под иглой', onText, track.kind !== 'video')}
       <div className="my-1 h-px bg-line-soft" />
       {item('Добавить видеодорожку', () => onAdd('video'), tracks.length >= MAX_TRACKS)}
       {item('Добавить звуковую дорожку', () => onAdd('audio'), tracks.length >= MAX_TRACKS)}
@@ -1345,6 +1357,8 @@ function ClipMenu({
         () => state.removeClips(state.selected.length ? state.selected : [clipId]),
       )}
       <div className="my-1 h-px bg-line-soft" />
+      {clip.kind === 'text' &&
+        item('Настроить надпись', '2 щелчка', () => state.editText(clipId))}
       {item('Копировать', 'Ctrl+C', () => state.copyClips(state.selected.length ? state.selected : [clipId]))}
       {item('Вставить от иглы', 'Ctrl+V', () => state.pasteClips(), !state.hasCopy())}
       {item('Сгруппировать', 'G', () => state.groupClips(state.selected), !many)}
@@ -1690,6 +1704,11 @@ function ClipBox({
       }`}
       style={{ left: clip.start * scale, width: box, height: height - 12 }}
       onContextMenu={onMenu}
+      onDoubleClick={(event) => {
+        if (clip.kind !== 'text') return
+        event.stopPropagation()
+        useCompose.getState().editText(clip.id)
+      }}
       onMouseDown={(event) => {
         if (event.button !== 0) return
         const area = event.currentTarget.getBoundingClientRect()
@@ -1795,6 +1814,22 @@ function ClipBox({
         }`}
       >
         <span className="flex items-center gap-1 truncate text-[10.5px] font-medium text-ink">
+          {clip.kind === 'text' && (
+            // Настроек у надписи много, а панели свойств во вкладке нет —
+            // открываем их прямо отсюда, с самого клипа.
+            <button
+              type="button"
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                useCompose.getState().editText(clip.id)
+              }}
+              title="Настроить надпись: шрифт, размер, цвет, обводка"
+              className="shrink-0 text-accent-soft hover:text-ink"
+            >
+              <Type size={11} />
+            </button>
+          )}
           {sound && (
             <button
               type="button"

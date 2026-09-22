@@ -23,10 +23,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import time
 from pathlib import Path
 
+from .. import paths
 from ..models import ComposeClip, ComposeProject
-from . import binaries, fsutil
+from . import binaries, fonts, fsutil
 from .probe import probe
 
 #: Черновой кодек: быстрее всего, что есть. Черновик живёт секунды и нужен
@@ -42,6 +46,9 @@ DRAFT_CODEC = [
 #: длительности не понимает. Поэтому все длительности ниже выводятся как
 #: обычные дроби (``.3f``), а совсем короткие отбрасываются.
 MIN_FADE = 0.01
+
+#: Обратный слэш. В путях меняем его на прямой, а двоеточие закрываем им же.
+BACKSLASH = chr(92)
 
 
 def apply_crossfades(project: ComposeProject) -> None:
@@ -158,6 +165,10 @@ def zoom_filter(clip: ComposeClip, width: int, height: int) -> str:
 
 def is_placed(clip: ComposeClip) -> bool:
     """Двигали ли клип по кадру или меняли его размер."""
+    if clip.kind == "text":
+        # У надписи двигается сам текст внутри слоя, а слой всегда во весь
+        # кадр: иначе буквы пришлось бы масштабировать вместе с ним.
+        return False
     return (
         abs(clip.size - 1.0) > 1e-6
         or clip.size_y > 0
@@ -190,6 +201,10 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
     Приближение у переставленного клипа отрезает края у **исходника**, до
     подгонки размера, — иначе картинку растянуло бы.
     """
+    if clip.kind == "text":
+        # Слой уже размером с кадр — подгонять нечего, остаётся написать.
+        return f"{text_filter(clip, width, height)},setsar=1,fps={fps}"
+
     if not is_placed(clip):
         return fit_filter(width, height, fps) + zoom_filter(clip, width, height)
 
@@ -205,6 +220,100 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
     parts.append("setsar=1")
     parts.append(f"fps={fps}")
     return ",".join(parts)
+
+
+#: Сколько держим файлы с надписями, прежде чем убрать за собой.
+_TEXT_AGE = 6 * 3600
+
+
+def _escaped(path: str) -> str:
+    """Путь внутри значения фильтра ffmpeg.
+
+    Двоеточие разделяет настройки фильтра, поэтому в «C:/Windows» его надо
+    закрыть — причём **дважды**: строку разбирают в два захода, и одиночный
+    обратный слэш съедается на первом. С одним ffmpeg отвечает «No option
+    name near '/Windows/...'». Слэши заодно разворачиваем в прямые: их
+    понимают обе стороны.
+    """
+    return path.replace(BACKSLASH, "/").replace(":", BACKSLASH * 2 + ":")
+
+
+def _colour(value: str, alpha: float = 1.0) -> str:
+    """Цвет для ffmpeg: решётку он не понимает, прозрачность пишется через @."""
+    clean = value.lstrip("#")
+    if alpha >= 1.0:
+        return f"0x{clean}"
+    return f"0x{clean}@{max(0.0, alpha):.3f}"
+
+
+def text_file(text: str) -> Path:
+    """Кладёт надпись в файл и отдаёт путь к нему.
+
+    Текст передаём файлом, а не прямо в команду: в надписи бывают двоеточия,
+    кавычки, проценты и переводы строк — всё то, что ffmpeg разбирает как
+    разметку, и экранировать это вручную значит однажды ошибиться. Имя файла
+    считаем по самому тексту, поэтому одна и та же надпись не плодит копий.
+    """
+    folder = paths.data_dir() / "text"
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    target = folder / f"{stamp}.txt"
+    if not target.exists():
+        target.write_text(text, encoding="utf-8")
+    # Заодно подчищаем надписи, которые больше никому не нужны.
+    edge = time.time() - _TEXT_AGE
+    for stale in folder.glob("*.txt"):
+        with contextlib.suppress(OSError):
+            if stale.stat().st_mtime < edge:
+                stale.unlink()
+    return target
+
+
+def text_filter(clip: ComposeClip, width: int, height: int) -> str:
+    """Фильтр, рисующий надпись клипа на прозрачном слое.
+
+    Размеры считаем от высоты кадра, а не в пикселях: тот же монтаж,
+    переведённый с 720p на 1080p, должен выглядеть так же, а не втрое мельче.
+    """
+    size = max(1, round(height * clip.font_size))
+    where = fonts.path_for(clip.font, clip.bold, clip.italic)
+    parts = [f"textfile={_escaped(str(text_file(clip.text)))}"]
+    if where:
+        parts.append(f"fontfile={_escaped(where)}")
+    parts.append(f"fontsize={size}")
+    parts.append(f"fontcolor={_colour(clip.text_color)}")
+
+    # Строки между собой равняются по середине: у субтитров в две строки
+    # разной длины это единственный вид, который не выглядит случайным.
+    if clip.align != "left":
+        parts.append(f"text_align={'C' if clip.align == 'center' else 'R'}")
+    if abs(clip.line_spacing) > 1e-6:
+        parts.append(f"line_spacing={round(size * clip.line_spacing)}")
+
+    # Обводка и тень: без них светлый текст пропадает на светлом кадре.
+    if clip.stroke > 0:
+        parts.append(f"borderw={max(1, round(height * clip.stroke))}")
+        parts.append(f"bordercolor={_colour(clip.stroke_color)}")
+    if clip.shadow_alpha > 0 and (abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6):
+        parts.append(f"shadowx={round(height * clip.shadow_x)}")
+        parts.append(f"shadowy={round(height * clip.shadow_y)}")
+        parts.append(f"shadowcolor={_colour(clip.shadow_color, clip.shadow_alpha)}")
+    if clip.box:
+        parts.append("box=1")
+        parts.append(f"boxcolor={_colour(clip.box_color, clip.box_alpha)}")
+        parts.append(f"boxborderw={max(0, round(height * clip.box_pad))}")
+
+    # Куда встанет надпись. x и y клипа — это её середина в долях кадра, так
+    # же как у картинок: человек двигает текст той же рамкой.
+    middle_x = f"w*{clip.x:.5f}"
+    if clip.align == "left":
+        parts.append(f"x={middle_x}")
+    elif clip.align == "right":
+        parts.append(f"x={middle_x}-text_w")
+    else:
+        parts.append(f"x={middle_x}-text_w/2")
+    parts.append(f"y=h*{clip.y:.5f}-text_h/2")
+    return "drawtext=" + ":".join(parts)
 
 
 def frame_alpha(clip: ComposeClip, moment: float) -> float:
@@ -363,7 +472,18 @@ def build_segment(
         if still and clip.kind == "audio":
             continue
 
-        if clip.kind == "color":
+        if clip.kind == "text":
+            # Надпись живёт на прозрачном слое размером с кадр: масштабировать
+            # готовые буквы нельзя — они замылятся, поэтому рисуем их сразу в
+            # том размере, в котором они попадут в файл.
+            inputs += [
+                "-f", "lavfi", "-t", f"{take:.3f}",
+                # Прозрачность задаём прямо во входе: добавленная позже, в
+                # цепочке фильтров, она уже ничего не значит — слой к тому
+                # времени непрозрачный, и надпись закрывает собой весь кадр.
+                "-i", f"color=c=black@0:s={width}x{height}:r={fps},format=yuva420p",
+            ]
+        elif clip.kind == "color":
             # Заливку рисует сам ffmpeg — файла у такого клипа нет. Сразу в
             # нужном размере: масштабировать сплошной цвет незачем.
             box = clip_box(clip, width, height) if is_placed(clip) else (width, height)
@@ -486,8 +606,8 @@ async def prepare(project: ComposeProject) -> ComposeProject:
     missing: list[str] = []
     for track in project.tracks:
         for clip in track.clips:
-            # У сплошного фона файла нет — и проверять нечего.
-            if clip.kind == "color":
+            # У сплошного фона и у надписи файла нет — и проверять нечего.
+            if clip.kind in {"color", "text"}:
                 clip.has_audio = False
                 continue
             try:

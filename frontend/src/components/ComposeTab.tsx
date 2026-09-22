@@ -34,6 +34,7 @@ import {
 } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
+import { ComposeTextPanel } from './ComposeTextPanel'
 import {
   ComposeRenderSettings,
   DEFAULT_RENDER,
@@ -177,6 +178,8 @@ export function ComposeTab() {
   const renderIn = useCompose((state) => state.renderIn)
   const renderOut = useCompose((state) => state.renderOut)
   const compact = useCompose((state) => state.compact)
+  const editingText = useCompose((state) => state.editingText)
+  const editText = useCompose((state) => state.editText)
   const masterVolume = useCompose((state) => state.masterVolume)
   const setMasterVolume = useCompose((state) => state.setMasterVolume)
 
@@ -942,6 +945,15 @@ export function ComposeTab() {
       </aside>
 
       <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
+
+      {/* Настройки надписи открываются поверх всего: правки видно сразу в
+          кадре под иглой, а закрыть окно можно, не теряя выделения. */}
+      <ComposeTextPanel
+        clip={
+          tracks.flatMap((track) => track.clips).find((clip) => clip.id === editingText) ?? null
+        }
+        onClose={() => editText(null)}
+      />
 
       <ComposeRenderSettings
         open={renderOpen}
