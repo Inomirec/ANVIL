@@ -97,14 +97,41 @@ export interface ComposeClip {
   shadowY?: number
   shadowColor?: string
   shadowAlpha?: number
-  /** Расстояние между строками в долях высоты букв. */
-  lineSpacing?: number
   /** Подложка под буквами — когда кадр пёстрый и обводки мало. */
   box?: boolean
   boxColor?: string
   boxAlpha?: number
   boxPad?: number
   align?: 'left' | 'center' | 'right'
+
+  /* --- заливка: только у клипов вида color ---------------------------- */
+  /** Скругление углов в долях высоты кадра. Рамка и тень — те же поля, что у надписи. */
+  radius?: number
+}
+
+/**
+ * Значения эффектов по умолчанию — в пикселях кадра проекта, как их видит
+ * человек. Внутри клипа они хранятся долями высоты кадра, поэтому переводятся
+ * по нынешней высоте проекта: «2 px тени» остаются двумя пикселями и в 720p,
+ * и в 1080p. Этими же числами ползунки возвращаются на место двойным нажатием.
+ */
+export const EFFECT_PIXELS = {
+  stroke: 2,
+  shadowX: 2,
+  shadowY: 2,
+  boxPad: 8,
+  radius: 0,
+}
+
+/** Эффекты по умолчанию в долях высоты кадра — для новой надписи и заливки. */
+export function effectDefaults(height: number) {
+  return {
+    stroke: EFFECT_PIXELS.stroke / height,
+    shadowX: EFFECT_PIXELS.shadowX / height,
+    shadowY: EFFECT_PIXELS.shadowY / height,
+    shadowAlpha: 0.75,
+    boxPad: EFFECT_PIXELS.boxPad / height,
+  }
 }
 
 /**
@@ -127,8 +154,7 @@ export const TEXT_DEFAULTS = {
   shadowX: 0.004,
   shadowY: 0.004,
   shadowColor: '#000000',
-  shadowAlpha: 0.6,
-  lineSpacing: 0.25,
+  shadowAlpha: 0.75,
   box: false,
   boxColor: '#000000',
   boxAlpha: 0.5,
@@ -478,6 +504,15 @@ function normalize(input: unknown): Saved {
         color: clip.color ?? '#000000',
         sizeY: clip.sizeY ?? 0,
         ratio: clip.ratio ?? 0,
+        radius: clip.radius ?? 0,
+        // Заливкам прежних версий добираем цвета рамки и тени: без них колонка
+        // показывала бы одно, а программа рисовала бы другое.
+        ...(clip.kind === 'color'
+          ? {
+              strokeColor: clip.strokeColor ?? '#ffffff',
+              shadowColor: clip.shadowColor ?? '#000000',
+            }
+          : {}),
         // Надписям добираем настройки: проект мог быть записан версией, где
         // текста ещё не было, а без них сборка не знала бы ни шрифта, ни
         // цвета. Клипам других видов эти поля не мешают.
@@ -925,6 +960,7 @@ export const useCompose = create<State>((set, get) => ({
         x: 0.5,
         y: 0.5,
         ...TEXT_DEFAULTS,
+        ...effectDefaults(state.height),
       },
       target?.id,
     )
@@ -958,6 +994,12 @@ export const useCompose = create<State>((set, get) => ({
         ratio: 0,
         x: 0.5,
         y: 0.5,
+        radius: 0,
+        strokeOn: false,
+        strokeColor: '#ffffff',
+        shadowOn: false,
+        shadowColor: '#000000',
+        ...effectDefaults(state.height),
       },
       target?.id,
     )

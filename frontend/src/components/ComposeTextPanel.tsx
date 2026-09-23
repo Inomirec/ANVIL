@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlignCenter,
   AlignLeft,
@@ -10,18 +10,25 @@ import {
   Star,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import { TEXT_DEFAULTS, useCompose, type ComposeClip } from '../composeStore'
+import {
+  EFFECT_PIXELS,
+  TEXT_DEFAULTS,
+  effectDefaults,
+  useCompose,
+  type ComposeClip,
+} from '../composeStore'
 
 /**
  * Настройки надписи — в правой колонке, пока надпись выделена.
  *
  * Отдельное окно закрывало собой экран просмотра, и подбирать цвет или тень,
- * не видя кадра, было нельзя. Здесь кадр всегда перед глазами, а сам текст
- * пишут прямо в нём, поэтому большого поля для текста в колонке нет.
+ * не видя кадра, было нельзя. Здесь кадр всегда перед глазами. Текст пишут и
+ * тут, в поле, и прямо в кадре — что удобнее: правка в одном месте тут же
+ * видна в другом.
  *
- * Места в колонке мало, поэтому всё, что можно показать значком, показано
- * значком, а эффекты спрятаны за галочками: пока галочка снята, эффекта нет
- * и его настроек не видно, но они помнятся и вернутся такими же.
+ * Места в колонке немного, поэтому всё, что можно показать значком, показано
+ * значком, а эффекты спрятаны за галочками: пока галочка снята, эффекта нет и
+ * его настроек не видно, но они помнятся и вернутся такими же.
  *
  * Размеры человек задаёт в пикселях кадра проекта — это привычная мера. Внутри
  * они хранятся долями высоты кадра, чтобы проект, собранный в другом
@@ -36,8 +43,19 @@ interface FontRow {
 
 const FAVORITES_KEY = 'sgh.fontFavorites'
 
-/** Готовые размеры букв, в пикселях кадра проекта. */
-const SIZE_PRESETS = [16, 20, 24, 32, 40, 48, 56, 64, 72, 96, 128, 160, 200]
+/** Готовые размеры букв, в пикселях кадра проекта. Вписать можно любой. */
+const SIZE_PRESETS = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72]
+
+/**
+ * Пределы размера букв. Сверху ограничиваем не из вредности: буквы в пару
+ * тысяч пикселей не помещаются в кадр целиком, от надписи остаётся кусок
+ * одной буквы, а окно тратит силы на то, чего не видно.
+ */
+const SIZE_MIN = 4
+const SIZE_MAX = 300
+
+/** Высота поля для текста, до которой оно растёт само; дальше — прокрутка. */
+const TEXT_MAX_HEIGHT = 168
 
 function readFavorites(): string[] {
   try {
@@ -118,10 +136,7 @@ function FontPicker({
         onClick={() => toggleFavorite(item.name)}
         className="shrink-0 p-1.5 text-ink-faint hover:text-warn"
       >
-        <Star
-          size={13}
-          className={favorites.includes(item.name) ? 'fill-warn text-warn' : ''}
-        />
+        <Star size={13} className={favorites.includes(item.name) ? 'fill-warn text-warn' : ''} />
       </button>
       <button
         type="button"
@@ -170,9 +185,7 @@ function FontPicker({
           <ul className="max-h-[300px] overflow-y-auto p-1">
             {!fonts && <li className="px-2 py-3 text-[12px] text-ink-faint">Читаю список шрифтов…</li>}
             {rows.starred.map(row)}
-            {rows.starred.length > 0 && rows.rest.length > 0 && (
-              <li className="my-1 h-px bg-line-soft" />
-            )}
+            {rows.starred.length > 0 && rows.rest.length > 0 && <li className="my-1 h-px bg-line-soft" />}
             {rows.rest.map(row)}
             {fonts && !rows.starred.length && !rows.rest.length && (
               <li className="px-2 py-3 text-[12px] text-ink-faint">Такого шрифта нет</li>
@@ -185,7 +198,7 @@ function FontPicker({
 }
 
 /** Квадратная кнопка-значок: включено — подсвечена. */
-function IconToggle({
+export function IconToggle({
   active,
   title,
   disabled,
@@ -205,9 +218,7 @@ function IconToggle({
       disabled={disabled}
       onClick={onClick}
       className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors disabled:opacity-30 ${
-        active
-          ? 'border-accent bg-accent/20 text-accent-soft'
-          : 'border-line-soft text-ink-dim hover:text-ink'
+        active ? 'border-accent bg-accent/20 text-accent-soft' : 'border-line-soft text-ink-dim hover:text-ink'
       }`}
     >
       {children}
@@ -216,7 +227,7 @@ function IconToggle({
 }
 
 /** Цвет квадратиком: нажали — открылся выбор цвета. */
-function ColorSquare({
+export function ColorSquare({
   value,
   title,
   onChange,
@@ -242,18 +253,22 @@ function ColorSquare({
 }
 
 /**
- * Ползунок с числом рядом. Ползунком подбирают на глаз, а в поле вписывают
- * точное значение — когда оно уже известно. Поле держит набранное строкой и
- * применяет по Enter или когда его оставили: иначе на первой же цифре число
- * подгонялось бы под пределы, и набрать его было бы нельзя.
+ * Ползунок с числом рядом. Ползунком подбирают на глаз, в поле вписывают
+ * точное значение. Двойное нажатие по ползунку возвращает его на место: задеть
+ * легко, а вспомнить, каким он был, — нет. Второе нажатие перехватываем ещё до
+ * того, как ползунок прыгнет под курсор, иначе «вернуть» возвращало что попало.
+ *
+ * Поле держит набранное строкой и применяет по Enter или когда его оставили:
+ * иначе на первой же цифре число подгонялось бы под пределы.
  */
-function SliderNumber({
+export function SliderNumber({
   label,
   value,
   min,
   max,
   step = 1,
   unit,
+  reset,
   onChange,
 }: {
   label: string
@@ -262,6 +277,8 @@ function SliderNumber({
   max: number
   step?: number
   unit: string
+  /** Куда вернуть по двойному нажатию. */
+  reset: number
   onChange: (value: number) => void
 }) {
   const [draft, setDraft] = useState<string | null>(null)
@@ -273,17 +290,23 @@ function SliderNumber({
   }
   return (
     <div className="flex items-center gap-2">
-      <span className="w-[76px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>
+      <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>
       <input
         type="range"
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={Math.min(max, Math.max(min, value))}
+        title={`Двойное нажатие вернёт ${reset} ${unit}`}
+        onMouseDown={(event) => {
+          if (event.detail < 2) return
+          event.preventDefault()
+          onChange(reset)
+        }}
         onChange={(event) => onChange(Number(event.target.value))}
         className="min-w-0 flex-1"
       />
-      <label className="flex w-[64px] shrink-0 items-center rounded-md border border-line-soft bg-surface-2 px-1.5">
+      <label className="flex w-[60px] shrink-0 items-center rounded-md border border-line-soft bg-surface-2 px-1.5">
         <input
           value={draft ?? String(Math.round(value * 10) / 10)}
           onChange={(event) => setDraft(event.target.value)}
@@ -300,7 +323,7 @@ function SliderNumber({
 }
 
 /** Галочка, за которой прячутся настройки эффекта. */
-function EffectSection({
+export function EffectSection({
   label,
   on,
   onToggle,
@@ -336,11 +359,11 @@ function SizeField({ pixels, onChange }: { pixels: number; onChange: (value: num
   const apply = () => {
     if (draft === null) return
     const number = Number(draft.replace(',', '.'))
-    if (Number.isFinite(number) && number > 0) onChange(Math.min(700, Math.max(4, number)))
+    if (Number.isFinite(number) && number > 0) onChange(Math.min(SIZE_MAX, Math.max(SIZE_MIN, number)))
     setDraft(null)
   }
   return (
-    <div ref={holder} className="relative flex w-[92px] shrink-0 items-center rounded-lg border border-line-soft bg-surface-2">
+    <div ref={holder} className="relative flex w-[84px] shrink-0 items-center rounded-lg border border-line-soft bg-surface-2">
       <input
         value={draft ?? String(pixels)}
         onChange={(event) => setDraft(event.target.value)}
@@ -348,7 +371,7 @@ function SizeField({ pixels, onChange }: { pixels: number; onChange: (value: num
         onKeyDown={(event) => {
           if (event.key === 'Enter') apply()
         }}
-        title="Размер букв, в пикселях кадра"
+        title={`Размер букв, в пикселях кадра: от ${SIZE_MIN} до ${SIZE_MAX}`}
         className="h-8 w-full min-w-0 bg-transparent pl-2 font-mono text-[12.5px] tabular-nums outline-none"
       />
       <button
@@ -360,7 +383,7 @@ function SizeField({ pixels, onChange }: { pixels: number; onChange: (value: num
         <ChevronDown size={13} />
       </button>
       {open && (
-        <ul className="absolute right-0 top-full z-40 mt-1 max-h-[260px] w-[92px] overflow-y-auto rounded-xl border border-line bg-surface-2 p-1 shadow-xl">
+        <ul className="absolute right-0 top-full z-40 mt-1 max-h-[260px] w-[84px] overflow-y-auto rounded-xl border border-line bg-surface-2 p-1 shadow-xl">
           {SIZE_PRESETS.map((size) => (
             <li key={size}>
               <button
@@ -380,6 +403,33 @@ function SizeField({ pixels, onChange }: { pixels: number; onChange: (value: num
         </ul>
       )}
     </div>
+  )
+}
+
+/**
+ * Поле для текста: маленькое, растёт вместе с текстом и упирается в предел —
+ * дальше обычная прокрутка, чтобы длинная надпись не заняла всю колонку.
+ */
+function TextBox({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const area = useRef<HTMLTextAreaElement>(null)
+  // Высоту подгоняем до отрисовки, иначе поле на миг мигало бы прежней.
+  useLayoutEffect(() => {
+    const node = area.current
+    if (!node) return
+    node.style.height = 'auto'
+    node.style.height = `${Math.min(node.scrollHeight + 2, TEXT_MAX_HEIGHT)}px`
+  }, [value])
+  return (
+    <textarea
+      ref={area}
+      rows={1}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onFocus={() => useCompose.getState().mark()}
+      placeholder="Что написать"
+      className="field block w-full resize-none overflow-y-auto leading-snug"
+      style={{ maxHeight: TEXT_MAX_HEIGHT }}
+    />
   )
 }
 
@@ -411,26 +461,22 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
   const px = (share: number) => Math.round(share * height * 10) / 10
   const fraction = (pixels: number) => pixels / height
   const family = fonts?.find((item) => item.name === v.font)
+  const stock = effectDefaults(height)
 
   return (
     <div className="space-y-3.5">
-      <div>
-        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-          Надпись
-        </h3>
-        <p className="mt-1 text-[11px] leading-snug text-ink-faint">
-          Текст пишется прямо на экране просмотра — нажмите на него.
-        </p>
-      </div>
+      <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Надпись</h3>
+
+      <TextBox
+        value={v.text}
+        onChange={(text) => put({ text, name: text.split('\n')[0] || 'Текст' })}
+      />
 
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <FontPicker value={v.font} fonts={fonts} onChange={(name) => put({ font: name })} />
         </div>
-        <SizeField
-          pixels={Math.round(v.fontSize * height)}
-          onChange={(value) => put({ fontSize: fraction(value) })}
-        />
+        <SizeField pixels={Math.round(v.fontSize * height)} onChange={(value) => put({ fontSize: fraction(value) })} />
       </div>
 
       {/* Цвет, начертание и выравнивание — одной строкой значков. */}
@@ -465,16 +511,25 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
         </IconToggle>
       </div>
 
-      <EffectSection label="Обводка" on={v.strokeOn} onToggle={(value) => put({ strokeOn: value })}>
+      <EffectSection
+        label="Обводка"
+        on={v.strokeOn}
+        onToggle={(value) =>
+          // Включили, а толщины нет (надпись из прежней версии) — даём
+          // обычную, чтобы эффект было видно сразу.
+          put(value && !(v.stroke > 0) ? { strokeOn: true, stroke: stock.stroke } : { strokeOn: value })
+        }
+      >
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <SliderNumber
               label="Толщина"
               value={px(v.stroke)}
               min={0.5}
-              max={20}
+              max={6}
               step={0.5}
               unit="px"
+              reset={EFFECT_PIXELS.stroke}
               onChange={(value) => put({ stroke: fraction(value) })}
             />
           </div>
@@ -482,23 +537,38 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
         </div>
       </EffectSection>
 
-      <EffectSection label="Тень" on={v.shadowOn} onToggle={(value) => put({ shadowOn: value })}>
+      <EffectSection
+        label="Тень"
+        on={v.shadowOn}
+        onToggle={(value) =>
+          // Тень на нулях не видна вовсе — включая её, ставим обычный сдвиг.
+          put(
+            value && !v.shadowX && !v.shadowY
+              ? { shadowOn: true, shadowX: stock.shadowX, shadowY: stock.shadowY, shadowAlpha: stock.shadowAlpha }
+              : { shadowOn: value },
+          )
+        }
+      >
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1 space-y-2">
             <SliderNumber
               label="Вправо"
               value={px(v.shadowX)}
-              min={-30}
-              max={30}
+              min={-10}
+              max={10}
+              step={0.5}
               unit="px"
+              reset={EFFECT_PIXELS.shadowX}
               onChange={(value) => put({ shadowX: fraction(value) })}
             />
             <SliderNumber
               label="Вниз"
               value={px(v.shadowY)}
-              min={-30}
-              max={30}
+              min={-10}
+              max={10}
+              step={0.5}
               unit="px"
+              reset={EFFECT_PIXELS.shadowY}
               onChange={(value) => put({ shadowY: fraction(value) })}
             />
             <SliderNumber
@@ -507,6 +577,7 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
               min={0}
               max={100}
               unit="%"
+              reset={75}
               onChange={(value) => put({ shadowAlpha: value / 100 })}
             />
           </div>
@@ -523,14 +594,16 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
               min={0}
               max={100}
               unit="%"
+              reset={50}
               onChange={(value) => put({ boxAlpha: value / 100 })}
             />
             <SliderNumber
               label="Отступ"
               value={px(v.boxPad)}
               min={0}
-              max={60}
+              max={20}
               unit="px"
+              reset={EFFECT_PIXELS.boxPad}
               onChange={(value) => put({ boxPad: fraction(value) })}
             />
           </div>

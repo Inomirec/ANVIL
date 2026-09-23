@@ -35,6 +35,7 @@ import {
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
 import { ComposeTextPanel } from './ComposeTextPanel'
+import { ComposeFillPanel } from './ComposeFillPanel'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderSettings,
@@ -519,6 +520,9 @@ export function ComposeTab() {
     .filter((clip) => selected.includes(clip.id) && clip.kind !== 'audio')
   const textClip =
     pickedVisual.length === 1 && pickedVisual[0].kind === 'text' ? pickedVisual[0] : undefined
+  // То же для заливки: её цвет, скругление, рамка и тень.
+  const fillClip =
+    pickedVisual.length === 1 && pickedVisual[0].kind === 'color' ? pickedVisual[0] : undefined
   // Надпись, которую прямо сейчас видно и можно править в кадре. Её рисует
   // окно, поэтому из собранного программой кадра она убирается — иначе на
   // экране было бы две одинаковые надписи.
@@ -535,7 +539,9 @@ export function ComposeTab() {
     const clip = state.tracks.flatMap((track) => track.clips).find((item) => item.id === textClipId)
     if (!clip) return
     if (state.playhead >= clip.start && state.playhead < clip.start + clip.duration) return
-    state.setPlayhead(clip.start + Math.min(0.1, clip.duration / 2))
+    // В середину, а не в начало: у начала надпись часто ещё проявляется, и
+    // видно её не целиком.
+    state.setPlayhead(clip.start + clip.duration / 2)
   }, [textClipId])
 
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер.
@@ -839,6 +845,8 @@ export function ComposeTab() {
               тень подбирают, глядя на кадр. */}
           {textClip ? (
             <ComposeTextPanel clip={textClip} />
+          ) : fillClip ? (
+            <ComposeFillPanel clip={fillClip} />
           ) : (
           <>
           {/* Кадр проекта. Без заголовка и без лишних чисел: что выбрано,

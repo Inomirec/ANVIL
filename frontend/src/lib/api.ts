@@ -168,6 +168,16 @@ export const api = {
     return response.blob()
   },
   composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
+  /** Какой файл шрифта возьмёт сборка и его шаг строк — для живой надписи. */
+  fontFace: (name: string, bold: boolean, italic: boolean) =>
+    request<{ key: string; url: string; lineHeight: number }>(
+      `/api/compose/fonts/face?${new URLSearchParams({
+        name,
+        bold: String(bold),
+        italic: String(italic),
+      })}`,
+    ),
+
   /** Шрифты, установленные в системе: для надписей в монтаже. */
   fonts: () =>
     request<{ fonts: { name: string; bold: boolean; italic: boolean }[] }>('/api/compose/fonts'),

@@ -1384,26 +1384,6 @@ function ClipMenu({
         clip.kind === 'audio' ? clip.volume === 1 : clip.opacity === 1,
       )}
 
-      {/* У заливки свой цвет — менять его больше негде. */}
-      {clip.kind === 'color' && (
-        <>
-          <div className="my-1 h-px bg-line-soft" />
-          <label className="flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim">
-            Цвет заливки
-            <input
-              type="color"
-              value={clip.color ?? '#000000'}
-              onMouseDown={(event) => event.stopPropagation()}
-              onChange={(event) => {
-                for (const id of pick(state, clipId)) {
-                  state.updateClip(id, { color: event.target.value })
-                }
-              }}
-              className="h-5 w-10 cursor-pointer rounded border border-line bg-transparent"
-            />
-          </label>
-        </>
-      )}
 
       {/* Размер и место в кадре задаются рамкой прямо в окне просмотра —
           выбранный клип можно взять и перетащить. Здесь остаётся только

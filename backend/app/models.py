@@ -347,8 +347,6 @@ class ComposeClip(ComposeModel):
     shadow_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
     #: Насколько видна тень: 0 — её нет вовсе.
     shadow_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
-    #: Расстояние между строками в долях высоты букв.
-    line_spacing: float = Field(default=0.25, ge=-0.5, le=2.0)
     #: Подложка под текстом: цвет, прозрачность и отступ от букв.
     box: bool = False
     box_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
@@ -356,6 +354,14 @@ class ComposeClip(ComposeModel):
     box_pad: float = Field(default=0.02, ge=0.0, le=0.5)
     #: Выравнивание строк между собой, когда их несколько.
     align: Literal["left", "center", "right"] = "center"
+
+    # --- заливка (только у клипов вида ``color``) ------------------------
+    #: Скругление углов в долях высоты кадра. Обводка и тень у заливки общие
+    #: с надписью — те же поля ``stroke*`` и ``shadow*``.
+    radius: float = Field(default=0.0, ge=0.0, le=1.0)
+    #: Готовая картинка заливки со скруглением, рамкой и тенью. Заполняет её
+    #: сервер перед сборкой (``compose.prepare_fills``), интерфейс её не шлёт.
+    fill_image: str = ""
 
     @property
     def end(self) -> float:

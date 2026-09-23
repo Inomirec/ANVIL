@@ -23,8 +23,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
+import math
 import time
 from pathlib import Path
 
@@ -49,6 +51,9 @@ MIN_FADE = 0.01
 
 #: Обратный слэш. В путях меняем его на прямой, а двоеточие закрываем им же.
 BACKSLASH = chr(92)
+#: Знаки конца строки: возврат каретки и перевод строки.
+CARRIAGE_RETURN = chr(13)
+LINE_FEED = chr(10)
 
 
 def apply_crossfades(project: ComposeProject) -> None:
@@ -169,6 +174,10 @@ def is_placed(clip: ComposeClip) -> bool:
         # У надписи двигается сам текст внутри слоя, а слой всегда во весь
         # кадр: иначе буквы пришлось бы масштабировать вместе с ним.
         return False
+    if is_decorated_fill(clip):
+        # Украшенная заливка — готовая картинка своего размера. Вписывать её
+        # в кадр с полями нельзя: рамка и тень оказались бы не на месте.
+        return True
     return (
         abs(clip.size - 1.0) > 1e-6
         or clip.size_y > 0
@@ -207,6 +216,9 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
 
     if not is_placed(clip):
         return fit_filter(width, height, fps) + zoom_filter(clip, width, height)
+
+    if clip.kind == "color" and clip.fill_image:
+        return f"format=rgba,setsar=1,fps={fps}"
 
     box_w, box_h = clip_box(clip, width, height)
     parts: list[str] = []
@@ -256,10 +268,16 @@ def text_file(text: str) -> Path:
     """
     folder = paths.data_dir() / "text"
     folder.mkdir(parents=True, exist_ok=True)
-    stamp = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
-    target = folder / f"{stamp}.txt"
+    # Перевод строки — только один знак. Записанный обычным способом, текст на
+    # Windows получал на каждый перевод пару знаков «возврат каретки + перевод
+    # строки», и ffmpeg засчитывал оба: между строками надписи в готовом
+    # файле вставала пустая строка. Пишем байты сами.
+    clean = text.replace(CARRIAGE_RETURN + LINE_FEED, LINE_FEED).replace(CARRIAGE_RETURN, LINE_FEED)
+    stamp = hashlib.sha1(clean.encode("utf-8")).hexdigest()[:16]
+    # Приставка в имени — чтобы не взять из кэша файл, записанный по-старому.
+    target = folder / f"lf-{stamp}.txt"
     if not target.exists():
-        target.write_text(text, encoding="utf-8")
+        target.write_bytes(clean.encode("utf-8"))
     # Заодно подчищаем надписи, которые больше никому не нужны.
     edge = time.time() - _TEXT_AGE
     for stale in folder.glob("*.txt"):
@@ -287,8 +305,9 @@ def text_filter(clip: ComposeClip, width: int, height: int) -> str:
     # разной длины это единственный вид, который не выглядит случайным.
     if clip.align != "left":
         parts.append(f"text_align={'C' if clip.align == 'center' else 'R'}")
-    if abs(clip.line_spacing) > 1e-6:
-        parts.append(f"line_spacing={round(size * clip.line_spacing)}")
+    # Строки идут на ту высоту, что записана в самом шрифте, — без добавок.
+    # Окно берёт её из того же файла (`fonts.line_height`), поэтому надпись в
+    # окне и в готовом файле разбита на строки одинаково.
 
     # Обводка и тень: без них светлый текст пропадает на светлом кадре.
     if clip.stroke_on and clip.stroke > 0:
@@ -318,6 +337,159 @@ def text_filter(clip: ComposeClip, width: int, height: int) -> str:
         parts.append(f"x={middle_x}-text_w/2")
     parts.append(f"y=h*{clip.y:.5f}-text_h/2")
     return "drawtext=" + ":".join(parts)
+
+
+def is_decorated_fill(clip: ComposeClip) -> bool:
+    """Заливка со скруглением, рамкой или тенью — её рисуем картинкой."""
+    if clip.kind != "color":
+        return False
+    shadow = clip.shadow_on and clip.shadow_alpha > 0 and (
+        abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6
+    )
+    return clip.radius > 0 or (clip.stroke_on and clip.stroke > 0) or shadow
+
+
+def _box_alpha(left: float, top: float, width: float, height: float, radius: float, alpha: float) -> str:
+    """Выражение `geq` для прозрачности скруглённого прямоугольника.
+
+    Считается расстояние от точки до края прямоугольника со скруглёнными
+    углами: внутри оно меньше нуля, снаружи больше. Полпикселя по краю дают
+    мягкую границу — без неё скругление выходило ступеньками.
+    """
+    cx = left + width / 2
+    cy = top + height / 2
+    hx = max(width / 2 - radius, 0.0)
+    hy = max(height / 2 - radius, 0.0)
+    qx = f"(abs(X+0.5-{cx:.3f})-{hx:.3f})"
+    qy = f"(abs(Y+0.5-{cy:.3f})-{hy:.3f})"
+    distance = f"(hypot(max({qx},0),max({qy},0))+min(max({qx},{qy}),0)-{radius:.3f})"
+    return f"{255 * alpha:.3f}*clip(0.5-{distance},0,1)"
+
+
+def _layer(colour: str, size: tuple[int, int], expression: str) -> list[str]:
+    """Вход ffmpeg: слой одного цвета, прозрачный вне фигуры."""
+    width, height = size
+    return [
+        "-f", "lavfi", "-i",
+        f"color=c={_colour(colour)}:s={width}x{height}:d=0.04,format=rgba,"
+        f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{expression}'",
+    ]
+
+
+def fill_margin(clip: ComposeClip, height: int) -> int:
+    """Сколько места нужно вокруг заливки под тень, в пикселях.
+
+    Чётное: наложение в видео встаёт на чётные позиции, и нечётный запас
+    сдвигал бы заливку на пиксель относительно её места.
+    """
+    if not (clip.shadow_on and clip.shadow_alpha > 0):
+        return 0
+    reach = max(abs(clip.shadow_x), abs(clip.shadow_y)) * height
+    return int(math.ceil(reach / 2)) * 2
+
+
+async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
+    """Рисует заливку картинкой: скругление, рамка, тень.
+
+    Сплошной цвет ffmpeg отдаёт сам, а вот скруглить углы, обвести и уронить
+    тень он не умеет — это рисуется попиксельно (`geq`). Попиксельный счёт
+    медленный, поэтому делается один раз на одну форму и лежит в кэше: при
+    сборке длинного монтажа заливка повторяет готовую картинку, а не считает
+    каждый кадр заново.
+    """
+    box_w, box_h = clip_box(clip, width, height) if is_placed(clip) else (width, height)
+    margin = fill_margin(clip, height)
+    canvas = (box_w + 2 * margin, box_h + 2 * margin)
+    radius = min(clip.radius * height, min(box_w, box_h) / 2)
+    border = clip.stroke * height if clip.stroke_on and clip.stroke > 0 else 0.0
+
+    stamp = "|".join(
+        str(item)
+        for item in (
+            canvas, box_w, box_h, margin, round(radius, 2), round(border, 2), clip.color,
+            clip.stroke_color, clip.shadow_on, round(clip.shadow_x * height, 2),
+            round(clip.shadow_y * height, 2), clip.shadow_color, clip.shadow_alpha,
+        )
+    )
+    folder = paths.data_dir() / "fills"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{hashlib.sha1(stamp.encode()).hexdigest()[:20]}.png"
+    if target.exists():
+        return target
+
+    inputs: list[str] = [
+        "-f", "lavfi", "-i", f"color=c=black@0:s={canvas[0]}x{canvas[1]}:d=0.04,format=rgba",
+    ]
+    if margin:
+        inputs += _layer(
+            clip.shadow_color,
+            canvas,
+            _box_alpha(
+                margin + clip.shadow_x * height, margin + clip.shadow_y * height,
+                box_w, box_h, radius, clip.shadow_alpha,
+            ),
+        )
+    if border:
+        inputs += _layer(clip.stroke_color, canvas, _box_alpha(margin, margin, box_w, box_h, radius, 1.0))
+    inset = min(border, min(box_w, box_h) / 2 - 1)
+    inputs += _layer(
+        clip.color,
+        canvas,
+        _box_alpha(
+            margin + inset, margin + inset, box_w - 2 * inset, box_h - 2 * inset,
+            max(radius - inset, 0.0), 1.0,
+        ),
+    )
+
+    layers = len(inputs) // 4
+    graph = []
+    current = "[0:v]"
+    for index in range(1, layers):
+        nxt = f"[l{index}]"
+        graph.append(f"{current}[{index}:v]overlay=format=auto{nxt}")
+        current = nxt
+    args = [
+        binaries.ffmpeg(), "-y", "-v", "error", *inputs,
+        "-filter_complex", ";".join(graph), "-map", current,
+        "-frames:v", "1", str(target),
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=binaries.CREATE_NO_WINDOW,
+        env=binaries.subprocess_env(),
+    )
+    _, err = await process.communicate()
+    if process.returncode != 0 or not target.exists():
+        target.unlink(missing_ok=True)
+        detail = err.decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError("Не удалось нарисовать заливку: " + (detail[-1] if detail else "?"))
+
+    # Старые формы подчищаем: каждое движение ползунка даёт новую картинку.
+    edge = time.time() - _TEXT_AGE
+    for stale in folder.glob("*.png"):
+        with contextlib.suppress(OSError):
+            if stale.stat().st_mtime < edge:
+                stale.unlink()
+    return target
+
+
+async def prepare_fills(
+    project: ComposeProject, width: int | None = None, height: int | None = None
+) -> None:
+    """Готовит картинки заливок со скруглением, рамкой и тенью.
+
+    Отдельным шагом и асинхронно: рисует их ffmpeg, и ждать его внутри
+    `build_segment`, который зовут прямо из обработчиков, значило бы подвесить
+    весь сервер. Размер — тот же, что потом возьмёт сборка.
+    """
+    frame_w = _even(width or project.width)
+    frame_h = _even(height or project.height)
+    for track in project.tracks:
+        for clip in track.clips:
+            if is_decorated_fill(clip):
+                clip.fill_image = str(await _render_fill(clip, frame_w, frame_h))
 
 
 def frame_alpha(clip: ComposeClip, moment: float) -> float:
@@ -487,6 +659,10 @@ def build_segment(
                 # времени непрозрачный, и надпись закрывает собой весь кадр.
                 "-i", f"color=c=black@0:s={width}x{height}:r={fps},format=yuva420p",
             ]
+        elif clip.kind == "color" and clip.fill_image:
+            # Заливку со скруглением, рамкой и тенью нарисовали заранее —
+            # здесь она обычная картинка, повторяемая весь клип.
+            inputs += ["-loop", "1", "-t", f"{take:.3f}", "-i", clip.fill_image]
         elif clip.kind == "color":
             # Заливку рисует сам ffmpeg — файла у такого клипа нет. Сразу в
             # нужном размере: масштабировать сплошной цвет незачем.

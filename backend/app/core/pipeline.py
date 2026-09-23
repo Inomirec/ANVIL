@@ -342,6 +342,7 @@ def submit_compose_frame(request: ComposeSnapshotRequest, project: ComposeProjec
         ctx.job.output = str(output)
         try:
             ctx.progress(0.15, "Собираю кадр")
+            await compose.prepare_fills(project)
             args = compose.build_segment(
                 project, output, at=request.at,
                 span=1.0 / max(project.fps, 1), still=True, codec=["-c:v", "png"],
@@ -438,6 +439,7 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         try:
             codec = encode.video_codec_args(video, encode.effective_crf(video, None))
             codec += encode.audio_codec_args(audio)
+            await compose.prepare_fills(project)
             args = compose.build_segment(
                 project, output, at=begin, span=total or None, codec=codec,
                 progress=True,

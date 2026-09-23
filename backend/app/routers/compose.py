@@ -8,10 +8,11 @@ import hashlib
 import json
 import re
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from .. import paths
 from ..core import binaries, compose, fonts, fsutil, pipeline, trash
@@ -52,6 +53,10 @@ async def frame(request: ComposeFrameRequest) -> Response:
     os.close(handle)
     target = Path(name)
     try:
+        # Заливки со скруглением, рамкой и тенью рисуются заранее и отдельно:
+        # внутри сборки команды ждать ffmpeg было бы нельзя.
+        preview_height = round(request.preview_width * project.height / project.width)
+        await compose.prepare_fills(project, request.preview_width, preview_height)
         args = compose.build_frame(project, target, request.at, request.preview_width)
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -125,6 +130,7 @@ async def draft(request: ComposeDraftRequest) -> dict:
             # Пока ждали очереди, соседний запрос мог всё собрать за нас.
             if not target.exists():
                 width = round(request.height * project.width / project.height)
+                await compose.prepare_fills(project, width, request.height)
                 args = compose.build_segment(
                     project, target, at=at, span=span,
                     width=width, height=request.height,
@@ -307,6 +313,44 @@ async def font_list() -> dict[str, object]:
     """
     families = await asyncio.to_thread(fonts.families)
     return {"fonts": [item.to_dict() for item in families]}
+
+
+@router.get("/fonts/face")
+async def font_face(name: str, bold: bool = False, italic: bool = False) -> dict[str, object]:
+    """Какой файл шрифта возьмёт сборка и какой у него шаг строк.
+
+    Окно рисует выделенную надпись само и должно брать ровно тот же файл, что
+    и программа: по имени браузер находил не всё — «Pribambas-Regular» он не
+    знал и молча подставлял Arial. Отсюда ссылка на сам файл и высота строки
+    из него же, чтобы строки на экране и в файле стояли одинаково.
+    """
+    path = await asyncio.to_thread(fonts.path_for, name, bold, italic)
+    if not path:
+        raise HTTPException(404, "Шрифтов в системе не нашлось")
+    ratio = await asyncio.to_thread(fonts.line_height, path)
+    return {
+        "key": hashlib.sha1(path.encode("utf-8")).hexdigest()[:12],
+        "url": (
+            "/api/compose/fonts/file?"
+            + urllib.parse.urlencode({"name": name, "bold": str(bold).lower(), "italic": str(italic).lower()})
+        ),
+        "lineHeight": round(ratio, 4),
+    }
+
+
+@router.get("/fonts/file")
+async def font_file(name: str, bold: bool = False, italic: bool = False) -> FileResponse:
+    """Сам файл шрифта — только из тех, что установлены в системе.
+
+    Путь берётся не из запроса, а из списка шрифтов Windows: отдать через
+    эту дверь что-нибудь, кроме шрифта, нельзя.
+    """
+    path = await asyncio.to_thread(fonts.path_for, name, bold, italic)
+    if not path:
+        raise HTTPException(404, "Шрифт не найден")
+    kind = "font/otf" if path.lower().endswith(".otf") else "font/ttf"
+    # Файл шрифта не меняется, пока он установлен, — пусть окно держит его.
+    return FileResponse(path, media_type=kind, headers={"Cache-Control": "max-age=3600"})
 
 
 @router.post("/snapshot")

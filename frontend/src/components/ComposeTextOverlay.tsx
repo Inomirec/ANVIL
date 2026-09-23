@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { api } from '../lib/api'
 import { TEXT_DEFAULTS, useCompose, type ComposeClip } from '../composeStore'
 import { guidesOf, stick, type GridKind } from './ComposeFrameBox'
 
@@ -31,6 +32,81 @@ function withAlpha(hex: string, alpha: number): string {
 /** Место в долях кадра: как у программы, в долях высоты, но через `cqh`. */
 const share = (value: number) => `calc(${value} * 100cqh)`
 
+/** Сколько теней кладём по кругу, чтобы из них сложилась обводка. */
+const RING = 24
+
+/**
+ * Обводка из теней, разложенных по кругу.
+ *
+ * Обычная обводка текста в браузере строит контур с острыми стыками, и на
+ * толстой обводке у острых углов букв торчали пики. Программа же обводит
+ * скруглённо. Тени одного цвета, разложенные кольцом на толщину обводки, дают
+ * ровно такой скруглённый край — и снаружи букв, как у программы.
+ */
+function ringStroke(width: number, colour: string): string[] {
+  const shadows: string[] = []
+  for (let step = 0; step < RING; step += 1) {
+    const angle = (step / RING) * Math.PI * 2
+    shadows.push(
+      `${share(Math.cos(angle) * width)} ${share(Math.sin(angle) * width)} 0 ${colour}`,
+    )
+  }
+  return shadows
+}
+
+/** Шрифт, загруженный из того же файла, что берёт сборка. */
+interface LoadedFace {
+  family: string
+  lineHeight: number
+}
+
+/** Уже загруженные файлы шрифтов: один файл грузится один раз. */
+const faces = new Map<string, Promise<LoadedFace>>()
+
+function loadFace(name: string, bold: boolean, italic: boolean): Promise<LoadedFace> {
+  const wanted = `${name}|${bold}|${italic}`
+  const known = faces.get(wanted)
+  if (known) return known
+  const promise = api.fontFace(name, bold, italic).then(async (face) => {
+    const family = `sgh-font-${face.key}`
+    if (![...document.fonts].some((item) => item.family === family)) {
+      const loaded = await new FontFace(family, `url(${face.url})`).load()
+      document.fonts.add(loaded)
+    }
+    return { family, lineHeight: face.lineHeight }
+  })
+  // Не вышло — забываем, чтобы при следующей попытке спросить заново.
+  promise.catch(() => faces.delete(wanted))
+  faces.set(wanted, promise)
+  return promise
+}
+
+/**
+ * Файл шрифта для живой надписи.
+ *
+ * По имени браузер находит не всякий шрифт: «Pribambas-Regular» он не знал и
+ * молча рисовал Arial, хотя в файл надпись уходила нужным шрифтом. Поэтому
+ * окно берёт тот же файл, что и сборка, и из него же — шаг строк: иначе
+ * строки в окне и в файле стояли бы на разной высоте.
+ */
+function useFace(name: string, bold: boolean, italic: boolean): LoadedFace | null {
+  const [face, setFace] = useState<LoadedFace | null>(null)
+  useEffect(() => {
+    let alive = true
+    loadFace(name, bold, italic)
+      .then((loaded) => {
+        if (alive) setFace(loaded)
+      })
+      .catch(() => {
+        if (alive) setFace(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [name, bold, italic])
+  return face
+}
+
 export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: GridKind }) {
   const box = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLDivElement>(null)
@@ -46,6 +122,7 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
   } | null>(null)
 
   const v = { ...TEXT_DEFAULTS, ...clip }
+  const face = useFace(v.font, v.bold, v.italic)
 
   // Текст в поле ставим сами и только когда он пришёл снаружи: сменили клип,
   // отменили правку. Перезаписывать поле на каждую набранную букву нельзя —
@@ -164,21 +241,25 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
         spellCheck={false}
         className={`min-w-[1ch] whitespace-pre outline-none ${focused ? 'cursor-text' : 'cursor-move'}`}
         style={{
-          fontFamily: `"${v.font}", Arial, sans-serif`,
-          fontWeight: v.bold ? 700 : 400,
-          fontStyle: v.italic ? 'italic' : 'normal',
+          // Пока файл шрифта не пришёл — по имени, как получится. Пришёл —
+          // ровно им. Жирность и наклон тогда уже в самом файле: добавлять их
+          // поверх значило бы нарисовать жирнее, чем в готовом видео.
+          fontFamily: face ? `"${face.family}"` : `"${v.font}", Arial, sans-serif`,
+          fontWeight: face ? 400 : v.bold ? 700 : 400,
+          fontStyle: face ? 'normal' : v.italic ? 'italic' : 'normal',
           fontSize: share(v.fontSize),
-          lineHeight: 1.35,
+          lineHeight: face?.lineHeight ?? 1.2,
           color: v.textColor,
           textAlign: v.align,
-          // Обводка у программы ложится снаружи букв. Здесь её рисуют по
-          // контуру пополам, поэтому толщину удваиваем и кладём заливку
-          // поверх: снаружи остаётся ровно столько, сколько задано.
-          WebkitTextStroke: stroke ? `${share(v.stroke * 2)} ${v.strokeColor}` : undefined,
-          paintOrder: 'stroke fill',
-          textShadow: shadow
-            ? `${share(v.shadowX)} ${share(v.shadowY)} 0 ${withAlpha(v.shadowColor, v.shadowAlpha)}`
-            : undefined,
+          // Обводка и тень — одним списком теней: сначала кольцо обводки,
+          // под ним тень. Порядок важен, первая в списке лежит сверху.
+          textShadow:
+            [
+              ...(stroke ? ringStroke(v.stroke, v.strokeColor) : []),
+              ...(shadow
+                ? [`${share(v.shadowX)} ${share(v.shadowY)} 0 ${withAlpha(v.shadowColor, v.shadowAlpha)}`]
+                : []),
+            ].join(', ') || undefined,
           background: v.box ? withAlpha(v.boxColor, v.boxAlpha) : undefined,
           padding: v.box ? share(v.boxPad) : undefined,
         }}

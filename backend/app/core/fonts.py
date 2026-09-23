@@ -13,8 +13,9 @@
 from __future__ import annotations
 
 import os
+import struct
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 #: Ветка реестра со списком шрифтов — одна и та же для системных и своих.
@@ -24,7 +25,9 @@ _BRANCH = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
 _USABLE = {".ttf", ".otf", ".ttc"}
 
 #: Слова в имени, по которым узнаём начертание. Порядок важен: «Bold Italic»
-#: должно разобраться раньше, чем просто «Bold».
+#: должно разобраться раньше, чем просто «Bold». «Regular» — обычное
+#: начертание: его тоже отрезаем, иначе шрифт «Pribambas-Regular» так и
+#: назывался бы, а браузер знает его как «Pribambas».
 _STYLES = (
     ("bold italic", True, True),
     ("bolditalic", True, True),
@@ -33,6 +36,7 @@ _STYLES = (
     ("italic", False, True),
     ("oblique", False, True),
     ("bold", True, False),
+    ("regular", False, False),
 )
 
 
@@ -75,8 +79,12 @@ def _split_style(label: str) -> tuple[str, bool, bool]:
     clean = label.split("(")[0].strip()
     low = clean.lower()
     for mark, bold, italic in _STYLES:
-        if low.endswith(" " + mark):
-            return clean[: -(len(mark) + 1)].strip(), bold, italic
+        # Начертание пишут и через пробел («Arial Bold»), и через дефис
+        # («Pribambas-Regular») — так их называют сами файлы шрифтов.
+        for joint in (" ", "-"):
+            if low.endswith(joint + mark) or low.endswith(joint + mark.replace(" ", "")):
+                cut = len(mark) + 1 if low.endswith(joint + mark) else len(mark.replace(" ", "")) + 1
+                return clean[:-cut].strip(" -"), bold, italic
     # «Arial Black» и «Arial Narrow» — это отдельные семейства, а не начертания.
     return clean, False, False
 
@@ -121,7 +129,6 @@ def _read_branch(root: object) -> list[tuple[str, str]]:
     return rows
 
 
-_cache: list[Family] = field(default_factory=list)  # type: ignore[assignment]
 _families: list[Family] | None = None
 
 
@@ -179,8 +186,49 @@ def path_for(name: str, bold: bool = False, italic: bool = False) -> str:
     for family in families():
         if family.name.lower() == name.lower():
             return family.pick(bold, italic)
+    # Имя могли записать прежней версией — с начертанием в хвосте
+    # («Pribambas-Regular»). Отрезаем его так же, как при чтении списка.
+    short, _, _ = _split_style(name)
+    for family in families():
+        if family.name.lower() == short.lower():
+            return family.pick(bold, italic)
     for fallback in ("Arial", "Segoe UI", "Tahoma"):
         for family in families():
             if family.name.lower() == fallback.lower():
                 return family.pick(bold, italic)
     return families()[0].pick(bold, italic) if families() else ""
+
+
+_line_heights: dict[str, float] = {}
+
+
+def line_height(path: str) -> float:
+    """Шаг между строками в долях размера букв — ровно как у ffmpeg.
+
+    ffmpeg ставит строки надписи на высоту, записанную в самом шрифте:
+    таблица `hhea` — высота над строкой, под ней и зазор, делённые на
+    размер буквы в единицах шрифта. Проверено на четырёх шрифтах: шаг строк
+    в готовом кадре совпадает с этим числом до тысячных. Окно берёт то же
+    число, поэтому строки на превью и в файле стоят одинаково.
+
+    Сломанный или странный файл не повод падать — берём обычное 1.2.
+    """
+    if path in _line_heights:
+        return _line_heights[path]
+    ratio = 1.2
+    try:
+        data = Path(path).read_bytes()
+        base = struct.unpack(">I", data[12:16])[0] if data[:4] == b"ttcf" else 0
+        count = struct.unpack(">H", data[base + 4 : base + 6])[0]
+        tables: dict[bytes, int] = {}
+        for index in range(count):
+            entry = base + 12 + index * 16
+            tables[data[entry : entry + 4]] = struct.unpack(">I", data[entry + 8 : entry + 12])[0]
+        units = struct.unpack(">H", data[tables[b"head"] + 18 : tables[b"head"] + 20])[0]
+        ascent, descent, gap = struct.unpack(">hhh", data[tables[b"hhea"] + 4 : tables[b"hhea"] + 10])
+        if units > 0 and ascent - descent > 0:
+            ratio = (ascent - descent + gap) / units
+    except (OSError, KeyError, struct.error, IndexError):
+        pass
+    _line_heights[path] = ratio
+    return ratio
