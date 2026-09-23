@@ -20,6 +20,7 @@ import {
   DEFAULT_IMAGE_SECONDS,
   FRAME_QUALITY,
   FRAME_SHAPES,
+  sourceFrame,
   useCompose,
   type ComposeClip,
   type ComposeTrack,
@@ -34,6 +35,7 @@ import {
 } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
+import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
 import { ComposeTextPanel } from './ComposeTextPanel'
 import { ComposeFillPanel } from './ComposeFillPanel'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
@@ -221,6 +223,10 @@ export function ComposeTab() {
   // Держим и место, откуда началась работа: значок должен появиться под
   // курсором сразу, а не после первого движения мыши.
   const [adding, setAdding] = useState<{ x: number; y: number } | null>(null)
+  // Вопрос о размере кадра по первому файлу. Отметка нужна, когда бросили
+  // сразу несколько файлов: первым считается только один.
+  const [frameQuestion, setFrameQuestion] = useState<FrameQuestion | null>(null)
+  const framePending = useRef(false)
   // Кадр под иглой иногда считается заметно дольше обычного — на длинном
   // монтаже это выглядит как зависание. Показываем то же, что и при чтении.
   const [slowFrame, setSlowFrame] = useState(false)
@@ -341,7 +347,9 @@ export function ComposeTab() {
       clearTimeout(timer)
       if (slow) clearTimeout(slow)
     }
-  }, [playhead, clips, tracks, player.playing, liveTextId])
+    // Размер кадра тоже: без него после смены формы окно показывало кадр
+    // прежней формы, пока не сдвинешь иглу.
+  }, [playhead, clips, tracks, player.playing, liveTextId, width, height])
 
   // Картинку держим ровно до следующей: иначе браузер копит их в памяти.
   useEffect(() => () => {
@@ -356,6 +364,7 @@ export function ComposeTab() {
     from: { x: number; y: number },
   ) {
     setAdding(from)
+    let claimed = false
     try {
       // Файл может лежать где угодно, а программа работает только внутри
       // рабочих папок. Раньше такой файл просто отбивался ошибкой, и человек
@@ -378,6 +387,19 @@ export function ComposeTab() {
       if (info.kind === 'other') {
         toast('Такой файл на таймлайн не положить', 'error')
         return
+      }
+      // Первый файл с картинкой на пустом таймлайне — спросим, не взять ли
+      // кадр по нему. Смотрим до того, как клип ляжет: после он уже не первый.
+      // Надписи и заливки не считаются: у них своего размера нет.
+      const firstPicture =
+        (info.kind === 'image' || info.kind === 'video') &&
+        !framePending.current &&
+        !useCompose
+          .getState()
+          .tracks.some((track) => track.clips.some((item) => item.kind === 'image' || item.kind === 'video'))
+      if (firstPicture) {
+        framePending.current = true
+        claimed = true
       }
       const length = info.media?.duration ?? 0
       const clip: Omit<ComposeClip, 'id'> = {
@@ -419,9 +441,22 @@ export function ComposeTab() {
       // месте, и окно просмотра показало бы чёрный кадр — как будто файл
       // не добавился вовсе.
       useCompose.getState().setPlayhead(clip.start + Math.min(0.2, clip.duration / 2))
+
+      const source = { width: info.media?.width ?? 0, height: info.media?.height ?? 0 }
+      if (firstPicture && source.width && source.height) {
+        const state = useCompose.getState()
+        const wanted = sourceFrame(source.width, source.height)
+        // Кадр уже такой же — спрашивать не о чем.
+        if (wanted.width !== state.width || wanted.height !== state.height) {
+          setFrameQuestion({ name: info.name, ...source })
+          // Вопрос висит — отметку снимет ответ на него.
+          claimed = false
+        }
+      }
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {
+      if (claimed) framePending.current = false
       setAdding(null)
     }
   }
@@ -1027,6 +1062,20 @@ export function ComposeTab() {
       </aside>
 
       <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
+
+      <ComposeFrameAsk
+        question={frameQuestion}
+        current={{ width, height }}
+        onSource={() => {
+          if (frameQuestion) useCompose.getState().fitToSource(frameQuestion.width, frameQuestion.height)
+          setFrameQuestion(null)
+          framePending.current = false
+        }}
+        onKeep={() => {
+          setFrameQuestion(null)
+          framePending.current = false
+        }}
+      />
 
 
       <ComposeRenderSettings

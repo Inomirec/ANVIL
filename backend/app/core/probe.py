@@ -301,9 +301,23 @@ async def probe(path: str | Path, use_cache: bool = True) -> MediaInfo:
             )
         )
 
+    # Ролик с телефона хранит кадр лёжа и метку «повернуть на 90°». ffmpeg при
+    # сборке его развернёт, а ffprobe отдаёт размеры до поворота — и вертикальный
+    # ролик считался бы горизонтальным.
+    rotated = False
+    for raw, stream in zip(data.get("streams", []) or [], streams):
+        if stream.kind != "video" or not stream.width or not stream.height:
+            continue
+        turns = [side.get("rotation") for side in raw.get("side_data_list") or []]
+        turns.append((raw.get("tags") or {}).get("rotate"))
+        if any(_to_int(turn) is not None and abs(_to_int(turn)) % 180 == 90 for turn in turns):
+            stream.width, stream.height = stream.height, stream.width
+            rotated = True
+
     # Повёрнутое меткой фото ffmpeg развернёт сам, а ffprobe отдаёт размеры
-    # до поворота — приводим их к тому, что человек видит на экране.
-    if exif_orientation(file) in TURNED:
+    # до поворота — приводим их к тому, что человек видит на экране. Если
+    # поворот уже нашёлся выше, второй раз не разворачиваем.
+    if not rotated and exif_orientation(file) in TURNED:
         for stream in streams:
             if stream.kind == "video" and stream.width and stream.height:
                 stream.width, stream.height = stream.height, stream.width

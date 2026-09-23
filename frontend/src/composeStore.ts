@@ -345,6 +345,21 @@ export function frameSize(
     : { width: even(quality), height: even((quality * along) / across) }
 }
 
+/** Длинная сторона кадра «как у файла» — не больше 4K. */
+export const SOURCE_SIZE_LIMIT = 3840
+
+/**
+ * Размер кадра под файл: его же ширина и высота, чётные.
+ *
+ * Фотография с телефона бывает 8000 точек в ширину — собирать такое видео
+ * никто не станет, поэтому крупнее 4K уменьшаем, сохраняя форму.
+ */
+export function sourceFrame(width: number, height: number): { width: number; height: number } {
+  const shrink = Math.min(1, SOURCE_SIZE_LIMIT / Math.max(width, height))
+  const even = (value: number) => Math.max(16, Math.round((value * shrink) / 2) * 2)
+  return { width: even(width), height: even(height) }
+}
+
 const STORAGE_KEY = 'sgh.compose'
 
 interface Saved {
@@ -389,6 +404,8 @@ interface State extends Saved {
   setTurned: (turned: boolean) => void
   setCustomSize: (width: number, height: number) => void
   useCustom: (custom: boolean) => void
+  /** Кадр как у файла: готовым набором, если такой есть, иначе своим. */
+  fitToSource: (width: number, height: number) => void
   setFps: (fps: number) => void
   setPlayhead: (at: number) => void
   setScale: (scale: number) => void
@@ -788,6 +805,26 @@ export const useCompose = create<State>((set, get) => ({
       const { quality, shape, turned } = get()
       set({ custom: false, ...frameSize(quality, shape, turned) })
     }
+    save(get())
+  },
+
+  fitToSource(width, height) {
+    const wanted = sourceFrame(width, height)
+    // Совпал с готовым набором — ставим его: так в настройках кадра
+    // подсвечено понятное «1080p, 16:9», а не безликое «Свой».
+    for (const quality of FRAME_QUALITY) {
+      for (const { value: shape } of FRAME_SHAPES) {
+        for (const turned of [false, true]) {
+          const size = frameSize(quality, shape, turned)
+          if (size.width === wanted.width && size.height === wanted.height) {
+            set({ quality, shape, turned, custom: false, ...size })
+            save(get())
+            return
+          }
+        }
+      }
+    }
+    set({ ...wanted, custom: true })
     save(get())
   },
 
