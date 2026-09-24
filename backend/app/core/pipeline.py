@@ -342,6 +342,7 @@ def submit_compose_frame(request: ComposeSnapshotRequest, project: ComposeProjec
         ctx.job.output = str(output)
         try:
             ctx.progress(0.15, "Собираю кадр")
+            await compose.stabilize_all(project)
             await compose.prepare_fills(project)
             args = compose.build_segment(
                 project, output, at=request.at,
@@ -439,6 +440,9 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         try:
             codec = encode.video_codec_args(video, encode.effective_crf(video, None))
             codec += encode.audio_codec_args(audio)
+            if any(compose.effects.stabilizer(clip) for track in project.tracks for clip in track.clips):
+                ctx.progress(0.0, "Стабилизация")
+            await compose.stabilize_all(project)
             await compose.prepare_fills(project)
             args = compose.build_segment(
                 project, output, at=begin, span=total or None, codec=codec,

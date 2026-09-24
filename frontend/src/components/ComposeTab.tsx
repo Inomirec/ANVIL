@@ -201,6 +201,7 @@ export function ComposeTab() {
   const [frameError, setFrameError] = useState<string | null>(null)
   const [missingOpen, setMissingOpen] = useState(false)
   const opened = useCompose((state) => state.opened)
+  const refresh = useCompose((state) => state.refresh)
   const missingAlert = useCompose((state) => state.missingAlert)
   useEffect(() => {
     if (missingAlert) setMissingOpen(true)
@@ -362,7 +363,7 @@ export function ComposeTab() {
     }
     // Размер кадра тоже: без него после смены формы окно показывало кадр
     // прежней формы, пока не сдвинешь иглу.
-  }, [playhead, clips, tracks, player.playing, liveTextId, width, height])
+  }, [playhead, clips, tracks, player.playing, liveTextId, width, height, refresh])
 
   // Открыли проект (или программа подняла прошлый монтаж) — сразу чёрный
   // кадр вместо кадра прежнего проекта: иначе ошибку о пропавшем файле

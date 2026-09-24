@@ -32,7 +32,7 @@ from pathlib import Path
 
 from .. import paths
 from ..models import ComposeClip, ComposeProject
-from . import binaries, effects, fonts, fsutil
+from . import binaries, effects, fonts, fsutil, stabilize
 from .probe import probe
 
 #: Черновой кодек: быстрее всего, что есть. Черновик живёт секунды и нужен
@@ -113,14 +113,17 @@ def _window(clip: ComposeClip, at: float, span: float) -> tuple[float, float, fl
     ``reverse`` — так и кадр под иглой, и кусок просмотра показывают ровно то
     место, что окажется в готовом файле.
     """
-    # Сколько клипа уже прошло к началу окна.
+    # Сколько клипа уже прошло к началу окна. Всё, что про время таймлайна,
+    # в секундах таймлайна; про файл — умножаем на скорость: ускоренный вдвое
+    # клип за секунду таймлайна проходит две секунды файла.
     skip = max(0.0, at - clip.start)
     offset = max(0.0, clip.start - at)
     take = max(min(clip.duration - skip, span - offset), 0.0)
+    speed = clip.speed if clip.kind in {"video", "audio"} else 1.0
     if clip.reverse:
-        seek = clip.source_in + max(0.0, clip.duration - skip - take)
+        seek = clip.source_in + max(0.0, clip.duration - skip - take) * speed
     else:
-        seek = clip.source_in + skip
+        seek = clip.source_in + skip * speed
     return seek, take, offset
 
 
@@ -693,7 +696,11 @@ def build_segment(
             # Картинка — один кадр; без повтора она исчезнет сразу же.
             inputs += [*_repeat(clip.source), "-t", f"{take:.3f}", "-i", clip.source]
         else:
-            inputs += ["-ss", f"{seek:.3f}", "-t", f"{take:.3f}", "-i", clip.source]
+            # Стабилизированный ролик читаем из ровной копии: времена в ней те
+            # же, что в исходнике, поэтому и обрезка, и разрез на месте.
+            source = clip.stable_source or clip.source
+            # Из файла берём столько, сколько пройдёт за окно с этой скоростью.
+            inputs += ["-ss", f"{seek:.3f}", "-t", f"{take * clip.speed:.3f}", "-i", source]
 
         if clip.kind != "audio":
             fades = video_fades(clip, at, take, moment=at if still else None)
@@ -868,6 +875,13 @@ async def prepare(
                 missing.append(clip.source)
                 continue
             clip.source = str(path)
+            steady = effects.stabilizer(clip)
+            if steady:
+                # Для окна просмотра — что есть: копия готова — берём её, нет —
+                # показываем исходник, а копия тем временем считается в фоне.
+                # Готовому файлу ждать приходится: см. ``stabilize_all``.
+                ready = stabilize.ready(str(path), *steady)
+                clip.stable_source = str(ready) if ready else ""
             if effects.needs_size(clip) and not clip.source_width:
                 try:
                     info = await probe(path)
@@ -895,6 +909,20 @@ async def prepare(
         listed = "\n".join(shown[:5]) + (f"\n…и ещё {len(shown) - 5}" if len(shown) > 5 else "")
         raise FileNotFoundError(f"Файлы монтажа не найдены или лежат вне рабочих папок:\n{listed}")
     return project
+
+
+async def stabilize_all(project: ComposeProject) -> None:
+    """Дожидается ровных копий у всех стабилизированных роликов.
+
+    Для готового файла и снимка кадра: собрать их по исходнику, пока копия
+    ещё считается, значило бы молча выдать тряску, от которой просили
+    избавиться.
+    """
+    for track in project.tracks:
+        for clip in track.clips:
+            steady = effects.stabilizer(clip)
+            if steady and not clip.stable_source:
+                clip.stable_source = str(await stabilize.wait(clip.source, *steady))
 
 
 def check_sources(sources: list[str]) -> dict[str, list[str]]:

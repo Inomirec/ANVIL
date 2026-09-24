@@ -24,6 +24,7 @@ from ..models import (
     ComposeFrameRequest,
     ComposeProjectFile,
     ComposeSnapshotRequest,
+    StabilizeRequest,
 )
 from . import media
 
@@ -370,6 +371,27 @@ async def font_file(name: str, bold: bool = False, italic: bool = False) -> File
     kind = "font/otf" if path.lower().endswith(".otf") else "font/ttf"
     # Файл шрифта не меняется, пока он установлен, — пусть окно держит его.
     return FileResponse(path, media_type=kind, headers={"Cache-Control": "max-age=3600"})
+
+
+@router.post("/stabilize")
+async def stabilize_status(request: StabilizeRequest) -> dict[str, object]:
+    """Готова ли ровная копия ролика — для карточки стабилизатора.
+
+    Если копии нет и она не считается, начинает считать: карточка спрашивает
+    сразу, как только эффект добавили, не дожидаясь кадра.
+    """
+    from ..core import stabilize
+
+    try:
+        path = fsutil.safe_path(request.source)
+    except (PermissionError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    smoothing = max(3, min(60, request.smoothing))
+    answer = stabilize.status(str(path), smoothing, request.crop)
+    if answer["state"] == "idle":
+        stabilize.ready(str(path), smoothing, request.crop)
+        answer = stabilize.status(str(path), smoothing, request.crop)
+    return answer
 
 
 @router.post("/check")

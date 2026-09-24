@@ -351,10 +351,16 @@ class ComposeClip(ComposeModel):
     rotate: int = Field(default=0, ge=0, le=270)
     #: Играть задом наперёд — и картинку, и звук.
     reverse: bool = False
+    #: Скорость: 2 — вдвое быстрее, 0.5 — вдвое медленнее. ``duration`` —
+    #: место на таймлайне, а из файла берётся ``duration * speed`` секунд.
+    speed: float = Field(default=1.0, ge=0.25, le=4.0)
     #: Размер самого файла в пикселях. Узнаёт сервер перед сборкой, и только
     #: когда нужно: удаление водяного знака берёт место в пикселях файла.
     source_width: int = 0
     source_height: int = 0
+    #: Ровная копия ролика после стабилизатора. Ставит сервер перед сборкой,
+    #: когда копия готова: тогда монтаж читает её вместо исходника.
+    stable_source: str = ""
 
     # --- надпись (только у клипов вида ``text``) --------------------------
     #: Что написать. Переводы строк сохраняются: так набирают субтитры в две
@@ -460,6 +466,14 @@ class ComposeFindRequest(BaseModel):
 
     folder: str
     sources: list[str]
+
+
+class StabilizeRequest(BaseModel):
+    """Готова ли ровная копия ролика с такими настройками."""
+
+    source: str
+    smoothing: int = 15
+    crop: bool = True
 
 
 class ComposeFrameRequest(ComposeModel):

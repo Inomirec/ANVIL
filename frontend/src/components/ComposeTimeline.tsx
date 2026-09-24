@@ -45,6 +45,9 @@ import {
   volumeLabel,
   volumeShare,
   useCompose,
+  MAX_SPEED,
+  MIN_SPEED,
+  speedOf,
   type ComposeClip,
   type ComposeTrack,
 } from '../composeStore'
@@ -104,7 +107,14 @@ type Drag =
       started: boolean
     }
   | { kind: 'level'; id: string; top: number; height: number }
-  | { kind: 'edge'; id: string; side: 'left' | 'right'; clip: ComposeClip }
+  | {
+      kind: 'edge'
+      id: string
+      side: 'left' | 'right'
+      clip: ComposeClip
+      /** С Ctrl край меняет скорость, а не обрезает. */
+      stretch?: boolean
+    }
   | { kind: 'fade'; id: string; side: 'in' | 'out'; clip: ComposeClip }
   | { kind: 'playhead' }
   | { kind: 'marquee'; fromAt: number; fromY: number }
@@ -393,17 +403,54 @@ export function ComposeTimeline({
       const points = magnets(state.tracks, [current.id], state.playhead)
       const nearby = SNAP_PIXELS / state.scale
 
+      // Секунда таймлайна у ускоренного клипа — это несколько секунд файла:
+      // всё, что про файл, умножаем на скорость, всё, что про таймлайн, — делим.
+      const speed = speedOf(origin)
+
+      if (current.stretch) {
+        // Ctrl + край: отрезок файла тот же, меняется только, за сколько он
+        // проиграется. Тянешь длиннее — медленнее, короче — быстрее. Второй
+        // край стоит на месте.
+        const span = origin.duration * speed
+        const end0 = origin.start + origin.duration
+        const wanted =
+          current.side === 'right'
+            ? snap(at, points, nearby) - origin.start
+            : end0 - snap(at, points, nearby)
+        const next = Math.min(MAX_SPEED, Math.max(MIN_SPEED, span / Math.max(wanted, 0.05)))
+        // Круглую скорость ставим точно: ×1, ×2, ×0.5 ловятся на глаз.
+        const nice = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4].find(
+          (value) => Math.abs(value - next) / value < 0.03,
+        )
+        const chosen = Math.round((nice ?? next) * 1000) / 1000
+        const length = span / chosen
+        state.resizeClip(
+          current.id,
+          current.side === 'right' ? origin.start : Math.max(0, end0 - length),
+          length,
+          origin.sourceIn,
+          chosen,
+        )
+        return
+      }
+
       if (origin.reverse && origin.kind !== 'image') {
         // Задом наперёд края меняются ролями: левый край клипа — это конец
         // отрезка файла, правый — его начало. Поэтому правый край двигает
         // точку, с которой читаем файл, а левый — нет.
-        const tail = (origin.sourceDuration || Infinity) - (origin.sourceIn + origin.duration)
+        const tail =
+          ((origin.sourceDuration || Infinity) - (origin.sourceIn + origin.duration * speed)) / speed
         if (current.side === 'right') {
           let end = snap(at, points, nearby)
           end = Math.max(end, origin.start + MIN_CLIP_SECONDS)
-          end = Math.min(end, origin.start + origin.duration + origin.sourceIn)
+          end = Math.min(end, origin.start + origin.duration + origin.sourceIn / speed)
           const length = end - origin.start
-          state.resizeClip(current.id, origin.start, length, origin.sourceIn + origin.duration - length)
+          state.resizeClip(
+            current.id,
+            origin.start,
+            length,
+            origin.sourceIn + (origin.duration - length) * speed,
+          )
         } else {
           let begin = snap(at, points, nearby)
           begin = Math.min(begin, origin.start + origin.duration - MIN_CLIP_SECONDS)
@@ -417,7 +464,7 @@ export function ComposeTimeline({
         let end = snap(at, points, nearby)
         // У ролика нельзя взять больше, чем в нём есть.
         if (origin.sourceDuration) {
-          end = Math.min(end, origin.start + (origin.sourceDuration - origin.sourceIn))
+          end = Math.min(end, origin.start + (origin.sourceDuration - origin.sourceIn) / speed)
         }
         state.resizeClip(current.id, origin.start, end - origin.start, origin.sourceIn)
       } else {
@@ -426,8 +473,9 @@ export function ComposeTimeline({
         const shift = begin - origin.start
         // Тянем за левый край — у ролика вместе с началом уезжает и точка,
         // с которой он играет: иначе кусок «съезжал» бы по содержимому.
-        const sourceIn = origin.kind === 'image' ? 0 : Math.max(0, origin.sourceIn + shift)
-        const limited = origin.kind === 'image' ? begin : origin.start + (sourceIn - origin.sourceIn)
+        const sourceIn = origin.kind === 'image' ? 0 : Math.max(0, origin.sourceIn + shift * speed)
+        const limited =
+          origin.kind === 'image' ? begin : origin.start + (sourceIn - origin.sourceIn) / speed
         state.resizeClip(
           current.id,
           Math.max(0, limited),
@@ -985,7 +1033,16 @@ export function ComposeTimeline({
                         clip,
                       }
                     } else {
-                      drag.current = { kind: 'edge', id: clip.id, side: where, clip }
+                      drag.current = {
+                        kind: 'edge',
+                        id: clip.id,
+                        side: where,
+                        clip,
+                        // Ctrl + край — скорость, как в монтажных программах.
+                        stretch:
+                          (event.ctrlKey || event.metaKey) &&
+                          (clip.kind === 'video' || clip.kind === 'audio'),
+                      }
                     }
                   }}
                   onMute={() => updateClip(clip.id, { muted: !clip.muted })}
@@ -1861,7 +1918,7 @@ function StripFill({ clip, strip }: { clip: ComposeClip; strip: FilmstripInfo })
   // Лента нарисована на весь файл, а клип показывает его кусок: растягиваем
   // ленту во столько раз, во сколько кусок короче файла, и сдвигаем к началу
   // куска.
-  const stretch = (whole / clip.duration) * 100
+  const stretch = (whole / (clip.duration * speedOf(clip))) * 100
   const shift = (clip.sourceIn / whole) * 100
   return (
     <div className="absolute inset-0 overflow-hidden opacity-55">
@@ -1883,7 +1940,7 @@ function StripFill({ clip, strip }: { clip: ComposeClip; strip: FilmstripInfo })
 function WaveFill({ clip, peaks }: { clip: ComposeClip; peaks: number[] }) {
   const whole = clip.sourceDuration || clip.duration
   const from = Math.floor((clip.sourceIn / whole) * peaks.length)
-  const to = Math.ceil(((clip.sourceIn + clip.duration) / whole) * peaks.length)
+  const to = Math.ceil(((clip.sourceIn + clip.duration * speedOf(clip)) / whole) * peaks.length)
   const slice = peaks.slice(Math.max(0, from), Math.max(from + 1, to))
   if (!slice.length) return null
 
@@ -2112,6 +2169,13 @@ function ClipBox({
             clip.reverse) && (
             <span className="shrink-0 rounded bg-accent/30 px-1 font-mono text-[9px] leading-[13px] text-white">
               fx
+            </span>
+          )}
+          {Math.abs(speedOf(clip) - 1) > 1e-3 && (
+            // Скорость видно прямо на клипе: растянутый Ctrl клип иначе ничем
+            // не отличается от обрезанного.
+            <span className="shrink-0 rounded bg-warn/40 px-1 font-mono text-[9px] leading-[13px] text-white">
+              ×{Math.round(speedOf(clip) * 100) / 100}
             </span>
           )}
           <span className="truncate">{clip.name}</span>

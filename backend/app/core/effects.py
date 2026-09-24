@@ -133,6 +133,9 @@ def video_chain(clip: ComposeClip, *, preview: bool = False) -> str:
     parts: list[str] = []
     if clip.reverse and clip.kind == "video":
         parts.append("reverse")
+    if clip.kind == "video" and abs(clip.speed - 1.0) > 1e-3:
+        # Ускорение — сжать время кадров; лишние кадры потом отбросит fps.
+        parts.append(f"setpts=(PTS-STARTPTS)/{clip.speed:.4f}")
     turn = clip.rotate % 360
     if turn == 90:
         parts.append("transpose=clock")
@@ -168,6 +171,19 @@ def blurred_fill(clip: ComposeClip) -> tuple[float, float] | None:
     return None
 
 
+def stabilizer(clip: ComposeClip) -> tuple[int, bool] | None:
+    """Настройки стабилизатора: плавность и приближение, или ``None``."""
+    if clip.kind != "video":
+        return None
+    for effect in clip.effects:
+        if effect.on and effect.type == "stabilize":
+            return (
+                int(_number(effect, "smoothing", 15, 3, 60)),
+                _number(effect, "crop", 1, 0, 1) >= 0.5,
+            )
+    return None
+
+
 def needs_size(clip: ComposeClip) -> bool:
     """Нужен ли сборке размер файла в пикселях."""
     return any(effect.on and effect.type == "delogo" for effect in clip.effects)
@@ -178,6 +194,14 @@ def audio_chain(clip: ComposeClip) -> str:
     parts: list[str] = []
     if clip.reverse:
         parts.append("areverse")
+    if abs(clip.speed - 1.0) > 1e-3:
+        # atempo меняет скорость, не трогая высоту голоса, — без «бурундука».
+        # Медленнее половины за один раз он не умеет — тогда дважды по корню.
+        if clip.speed < 0.5:
+            half = clip.speed ** 0.5
+            parts.append(f"atempo={half:.4f},atempo={half:.4f}")
+        else:
+            parts.append(f"atempo={clip.speed:.4f}")
     for effect in clip.effects:
         if effect.on:
             chunk = _audio_effect(effect)

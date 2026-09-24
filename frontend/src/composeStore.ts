@@ -62,6 +62,9 @@ export interface ComposeClip {
   rotate?: number
   /** Играть задом наперёд. */
   reverse?: boolean
+  /** Скорость: 2 — вдвое быстрее, 0.5 — вдвое медленнее. Из файла берётся
+   *  ``duration * speed`` секунд. */
+  speed?: number
   /** Непрозрачность картинки: 1 — как есть, 0 — совсем не видно. */
   opacity: number
   /** Приближение внутри кадра: 1 — вписано целиком. */
@@ -430,6 +433,15 @@ function recallCustom(): { width: number; height: number } | null {
   return null
 }
 
+/** Скорость клипа: у картинок, надписей и заливок её нет. */
+export function speedOf(clip: ComposeClip): number {
+  return clip.kind === 'video' || clip.kind === 'audio' ? clip.speed ?? 1 : 1
+}
+
+/** Пределы скорости — как у сервера. */
+export const MIN_SPEED = 0.25
+export const MAX_SPEED = 4
+
 const STORAGE_KEY = 'sgh.compose'
 
 interface Saved {
@@ -460,6 +472,10 @@ interface State extends Saved {
   selected: string[]
   /** Что человек выбрал сам, до того как выделение разошлось по группам. */
   picked: string[]
+  /** Растёт, когда кадр надо собрать заново без правки монтажа: например,
+   *  досчиталась ровная копия после стабилизатора. */
+  refresh: number
+  bumpRefresh: () => void
   /** Файлы монтажа, которых нет на месте: такие клипы помечены на дорожке. */
   missing: string[]
   setMissing: (paths: string[]) => void
@@ -519,6 +535,8 @@ interface State extends Saved {
   flipClips: (ids: string[], axis: 'h' | 'v') => void
   /** Повернуть на 90° по часовой стрелке. */
   rotateClips: (ids: string[]) => void
+  /** Вернуть обычную скорость: отрезок файла тот же, клип снова своей длины. */
+  resetSpeed: (id: string) => void
   /** Задом наперёд — и картинку, и родной звук ролика. */
   reverseClips: (ids: string[]) => void
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
@@ -529,7 +547,7 @@ interface State extends Saved {
   addPair: (video: Omit<ComposeClip, 'id'>, trackId?: string) => string
   updateClip: (id: string, patch: Partial<ComposeClip>) => void
   moveClips: (ids: string[], shift: number) => void
-  resizeClip: (id: string, start: number, duration: number, sourceIn: number) => void
+  resizeClip: (id: string, start: number, duration: number, sourceIn: number, speed?: number) => void
   splitAtPlayhead: () => void
   removeClips: (ids: string[]) => void
   addTrack: (kind: 'video' | 'audio') => void
@@ -751,12 +769,19 @@ function syncLinked(tracks: ComposeTrack[]): ComposeTrack[] {
       if (
         lead.start === clip.start &&
         lead.duration === clip.duration &&
-        lead.sourceIn === clip.sourceIn
+        lead.sourceIn === clip.sourceIn &&
+        (lead.speed ?? 1) === (clip.speed ?? 1)
       ) {
         return clip
       }
       changed = true
-      return { ...clip, start: lead.start, duration: lead.duration, sourceIn: lead.sourceIn }
+      return {
+        ...clip,
+        start: lead.start,
+        duration: lead.duration,
+        sourceIn: lead.sourceIn,
+        speed: lead.speed,
+      }
     })
     return changed ? { ...track, clips } : track
   })
@@ -869,6 +894,8 @@ export const useCompose = create<State>((set, get) => ({
     }
   })(),
   headWidth: recall('sgh.composeHead', 150),
+  refresh: 0,
+  bumpRefresh: () => set({ refresh: get().refresh + 1 }),
   missing: [],
   missingAlert: 0,
   opened: 0,
@@ -1238,7 +1265,7 @@ export const useCompose = create<State>((set, get) => ({
     save(get())
   },
 
-  resizeClip(id, start, duration, sourceIn) {
+  resizeClip(id, start, duration, sourceIn, speed) {
     set((state) => {
       const all = state.tracks.flatMap((track) => track.clips)
       const link = all.find((clip) => clip.id === id)?.groupId
@@ -1257,6 +1284,9 @@ export const useCompose = create<State>((set, get) => ({
                     start: Math.max(0, start),
                     duration: Math.max(MIN_CLIP_SECONDS, duration),
                     sourceIn: Math.max(0, sourceIn),
+                    // Скорость у картинки и звука ролика одна: иначе губы и
+                    // голос разошлись бы с первой же секунды.
+                    ...(speed !== undefined && clip.kind !== 'image' ? { speed } : {}),
                   }
                 : clip,
             )
@@ -1301,7 +1331,9 @@ export const useCompose = create<State>((set, get) => ({
             // Задом наперёд — наоборот: правая половина на таймлайне — это
             // начало отрезка файла, левая — его конец.
             sourceIn:
-              clip.kind === 'image' || clip.reverse ? clip.sourceIn : clip.sourceIn + passed,
+              clip.kind === 'image' || clip.reverse
+                ? clip.sourceIn
+                : clip.sourceIn + passed * speedOf(clip),
             // Половинки связаны между собой заново: старая связка осталась у
             // левых кусков, правым нужна своя.
             groupId: clip.groupId ? `${clip.groupId}-r` : undefined,
@@ -1311,7 +1343,9 @@ export const useCompose = create<State>((set, get) => ({
             {
               ...clip,
               duration: passed,
-              ...(clip.reverse ? { sourceIn: clip.sourceIn + clip.duration - passed } : {}),
+              ...(clip.reverse
+                ? { sourceIn: clip.sourceIn + (clip.duration - passed) * speedOf(clip) }
+                : {}),
             },
             right,
           )
@@ -1483,7 +1517,7 @@ export const useCompose = create<State>((set, get) => ({
           id,
           zone.to,
           end - zone.to,
-          clip.kind === 'image' ? 0 : Math.max(0, clip.sourceIn + shift),
+          clip.kind === 'image' ? 0 : Math.max(0, clip.sourceIn + shift * speedOf(clip)),
         )
       }
       return
@@ -1766,6 +1800,13 @@ export const useCompose = create<State>((set, get) => ({
         ratio: clip.ratio ? 1 / clip.ratio : clip.ratio,
       })
     }
+  },
+
+  resetSpeed(id) {
+    const clip = get().findClip(id)?.clip
+    if (!clip) return
+    get().mark()
+    get().resizeClip(id, clip.start, clip.duration * speedOf(clip), clip.sourceIn, 1)
   },
 
   reverseClips(ids) {

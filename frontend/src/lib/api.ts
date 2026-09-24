@@ -106,6 +106,12 @@ export const api = {
   /** Окно Windows для выбора файла — открывается в папке ``directory``. */
   pickFile: (directory?: string | null) =>
     post<{ supported: boolean; path: string | null }>('/api/settings/pick-file', { directory }),
+  /** Готова ли ровная копия ролика после стабилизатора. */
+  stabilizeStatus: (source: string, smoothing: number, crop: boolean) =>
+    post<{ state: 'ready' | 'working' | 'error' | 'idle' | 'missing'; progress?: number; error?: string }>(
+      '/api/compose/stabilize',
+      { source, smoothing, crop },
+    ),
   /** Какие файлы монтажа пропали и какие лежат вне рабочих папок. */
   composeCheck: (sources: string[]) =>
     post<{ missing: string[]; outside: string[] }>('/api/compose/check', { sources }),

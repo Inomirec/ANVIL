@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { ChevronDown, FlipHorizontal2, FlipVertical2, Plus, RotateCw, Undo2, X } from 'lucide-react'
-import { useCompose, type ClipEffect, type ComposeClip } from '../composeStore'
+import { useEffect, useState } from 'react'
+import { ChevronDown, FlipHorizontal2, FlipVertical2, Gauge, Plus, RotateCw, Undo2, X } from 'lucide-react'
+import { speedOf, useCompose, type ClipEffect, type ComposeClip } from '../composeStore'
 import {
   EFFECTS,
   effectKind,
@@ -8,6 +8,7 @@ import {
   targetOf,
   type EffectTarget,
 } from '../composeEffects'
+import { api } from '../lib/api'
 import { ColorSquare, SliderNumber } from './ComposeTextPanel'
 import { Button, Modal } from './ui'
 
@@ -47,7 +48,7 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
         </p>
       </div>
 
-      {visual && <Transforms clip={visual} />}
+      {(visual ?? sound) && <Transforms clip={(visual ?? sound)!} />}
 
       <Button tone="primary" className="w-full" onClick={() => setPicking(true)}>
         <Plus size={15} />
@@ -106,6 +107,13 @@ function Transforms({ clip }: { clip: ComposeClip }) {
         // Доворачиваем до нуля: каждый поворот — на 90°.
         for (let turn = clip.rotate ?? 0; turn % 360; turn += 90) state.rotateClips([clip.id])
       },
+    })
+  }
+  if (Math.abs(speedOf(clip) - 1) > 1e-3) {
+    marks.push({
+      label: `Скорость ×${Math.round(speedOf(clip) * 100) / 100}`,
+      icon: <Gauge size={12} />,
+      off: () => state.resetSpeed(clip.id),
     })
   }
   if (clip.reverse) {
@@ -188,6 +196,9 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
           <X size={13} />
         </button>
       </div>
+      {effect.type === 'stabilize' && effect.on && (
+        <StabilizeState clipId={clipId} effect={effect} />
+      )}
       {!folded && (
         // Выключенный эффект настраивать можно, но видно, что он не действует.
         <div className={`space-y-2.5 border-t border-line-soft px-3 py-2.5 ${effect.on ? '' : 'opacity-50'}`}>
@@ -237,6 +248,71 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
             )
           })}
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Сколько осталось стабилизатору.
+ *
+ * Ролик стабилизируется целиком и один раз, в фоне: это может занять время,
+ * и всё это время в кадре исходник. Без строки прогресса выглядело бы так,
+ * будто эффект не работает. Досчиталось — кадр собирается заново.
+ */
+function StabilizeState({ clipId, effect }: { clipId: string; effect: ClipEffect }) {
+  const clip = useCompose((state) => state.findClip(clipId)?.clip)
+  const bumpRefresh = useCompose((state) => state.bumpRefresh)
+  const [answer, setAnswer] = useState<{ state: string; progress?: number; error?: string } | null>(null)
+  const source = clip?.source ?? ''
+  const smoothing = Math.round(Number(effect.params.smoothing ?? 15))
+  const crop = Number(effect.params.crop ?? 1) >= 0.5
+
+  useEffect(() => {
+    if (!source) return
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let last = ''
+    const ask = async () => {
+      try {
+        const next = await api.stabilizeStatus(source, smoothing, crop)
+        if (!alive) return
+        setAnswer(next)
+        // Только что досчиталось — кадр надо собрать по ровной копии.
+        if (next.state === 'ready' && last && last !== 'ready') bumpRefresh()
+        last = next.state
+        if (next.state === 'working') timer = setTimeout(ask, 1000)
+      } catch {
+        if (alive) timer = setTimeout(ask, 3000)
+      }
+    }
+    // Ползунок двигают — спрашиваем, когда отпустили: каждая настройка —
+    // это новый обсчёт.
+    timer = setTimeout(ask, 600)
+    return () => {
+      alive = false
+      if (timer) clearTimeout(timer)
+    }
+  }, [source, smoothing, crop, bumpRefresh])
+
+  if (!answer || answer.state === 'ready') return null
+  return (
+    <div className="border-t border-line-soft px-3 py-2 text-[11px] leading-snug">
+      {answer.state === 'error' ? (
+        <span className="select-text text-danger">{answer.error}</span>
+      ) : (
+        <>
+          <span className="text-ink-dim">
+            Готовлю стабилизацию: {Math.round((answer.progress ?? 0) * 100)}%. Пока в кадре — ролик
+            без неё.
+          </span>
+          <span className="mt-1 block h-1 overflow-hidden rounded-full bg-surface-3">
+            <span
+              className="block h-full bg-accent transition-all"
+              style={{ width: `${Math.round((answer.progress ?? 0) * 100)}%` }}
+            />
+          </span>
+        </>
       )}
     </div>
   )

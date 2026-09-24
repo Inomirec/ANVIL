@@ -109,6 +109,16 @@ export const EFFECTS: EffectKind[] = [
     ],
   },
   {
+    type: 'stabilize',
+    name: 'Стабилизатор',
+    target: 'video',
+    hint: 'Убрать тряску камеры. Ролик один раз обсчитывается в фоне — это занимает время',
+    params: [
+      { key: 'smoothing', label: 'Плавность', min: 3, max: 60, default: 15 },
+      { key: 'crop', label: 'Приблизить, чтобы спрятать края', kind: 'check', default: 1 },
+    ],
+  },
+  {
     type: 'voice_denoise',
     name: 'Шумоподавление голоса',
     target: 'audio',
