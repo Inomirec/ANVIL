@@ -271,6 +271,7 @@ export function SliderNumber({
   reset,
   onChange,
   stacked = false,
+  marks,
 }: {
   label: string
   value: number
@@ -283,6 +284,8 @@ export function SliderNumber({
   onChange: (value: number) => void
   /** Подпись строкой над ползунком — для длинных подписей. */
   stacked?: boolean
+  /** Рекомендованные значения — подписи под шкалой, нажатие ставит значение. */
+  marks?: { value: number; label: string }[]
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const apply = () => {
@@ -291,10 +294,8 @@ export function SliderNumber({
     if (Number.isFinite(number)) onChange(Math.min(max, Math.max(min, number)))
     setDraft(null)
   }
-  const row = (
-    <div className="flex items-center gap-2">
-      {!stacked && <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>}
-      <input
+  const range = (
+    <input
         type="range"
         min={min}
         max={max}
@@ -307,8 +308,61 @@ export function SliderNumber({
           onChange(reset)
         }}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="min-w-0 flex-1"
+        className={marks?.length ? 'w-full' : 'min-w-0 flex-1'}
       />
+  )
+  // Подписи рекомендованных значений под шкалой. Эффект считается не сразу —
+  // стабилизатор и вовсе минуты, — и искать хорошее значение наугад долго.
+  // Метка стоит ровно под своим делением: поправка на ширину бегунка, иначе у
+  // краёв шкалы она съезжала бы от него.
+  // Метки стоят плотно, если соседние ближе чем на полшкалы: шкала в колонке
+  // шириной в полторы сотни пикселей, и слова соседних подписей налезали
+  // друг на друга. Тогда подписи идут лесенкой — соседи в разных рядах.
+  const crowded = Boolean(
+    marks?.some((mark, index) => index > 0 && (mark.value - marks[index - 1].value) / (max - min) < 0.6),
+  )
+  const scale = marks?.length ? (
+    <div className="min-w-0 flex-1">
+      {range}
+      <div className={`relative ${crowded ? 'h-[30px]' : 'h-3.5'}`}>
+        {marks.map((mark, index) => {
+          const share = (mark.value - min) / (max - min)
+          // Тесно — каждая вторая подпись уходит строкой ниже, на длинной
+          // риске: шкала в колонке узкая, и слова налезали друг на друга.
+          const lower = crowded && index % 2 === 1
+          const near = Math.abs(value - mark.value) <= (max - min) * 0.02
+          // У самых краёв подпись не по центру деления, а прижата внутрь:
+          // иначе она выступала бы за шкалу.
+          const edge = share < 0.12 ? 'start' : share > 0.88 ? 'end' : 'middle'
+          return (
+            <button
+              key={mark.value}
+              type="button"
+              onClick={() => onChange(mark.value)}
+              title={`Поставить ${mark.value}${unit ? ' ' + unit : ''}`}
+              className={`absolute top-0 whitespace-nowrap text-[9.5px] leading-none transition-colors ${
+                edge === 'middle' ? '-translate-x-1/2' : edge === 'end' ? '-translate-x-full' : ''
+              } ${near ? 'text-accent-soft' : 'text-ink-faint hover:text-ink-dim'}`}
+              style={{ left: `calc(${share * 100}% + ${(0.5 - share) * 12}px)` }}
+            >
+              <span
+                className={`mb-0.5 block w-px bg-current ${lower ? 'h-[16px] opacity-50' : 'h-1'} ${
+                  edge === 'middle' ? 'mx-auto' : edge === 'end' ? 'ml-auto' : ''
+                }`}
+              />
+              {mark.label}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  ) : (
+    range
+  )
+  const row = (
+    <div className={`flex gap-2 ${marks?.length ? 'items-start' : 'items-center'}`}>
+      {!stacked && <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>}
+      {scale}
       <label className="flex w-[60px] shrink-0 items-center rounded-md border border-line-soft bg-surface-2 px-1.5">
         <input
           value={draft ?? String(Math.round(value * 10) / 10)}

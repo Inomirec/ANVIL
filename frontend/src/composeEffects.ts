@@ -21,6 +21,8 @@ export interface EffectParam {
   step?: number
   unit?: string
   default: number | string
+  /** Рекомендованные значения — подписи под шкалой. */
+  marks?: { value: number; label: string }[]
 }
 
 export interface EffectKind {
@@ -40,10 +42,10 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Яркость, контраст, насыщенность и теплота цвета',
     params: [
-      { key: 'brightness', label: 'Яркость', min: -100, max: 100, default: 0 },
-      { key: 'contrast', label: 'Контраст', min: -100, max: 100, default: 0 },
-      { key: 'saturation', label: 'Насыщенность', min: -100, max: 100, default: 0 },
-      { key: 'temperature', label: 'Теплее / холоднее', min: -100, max: 100, default: 0 },
+      { key: 'brightness', label: 'Яркость', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'темнее' }, { value: 0, label: '0' }, { value: 40, label: 'светлее' }] },
+      { key: 'contrast', label: 'Контраст', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'мягче' }, { value: 0, label: '0' }, { value: 30, label: 'сочнее' }] },
+      { key: 'saturation', label: 'Насыщенность', min: -100, max: 100, default: 0, marks: [{ value: -60, label: 'бледнее' }, { value: 0, label: '0' }, { value: 40, label: 'ярче' }] },
+      { key: 'temperature', label: 'Теплее / холоднее', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'холоднее' }, { value: 0, label: '0' }, { value: 40, label: 'теплее' }] },
     ],
   },
   {
@@ -51,28 +53,28 @@ export const EFFECTS: EffectKind[] = [
     name: 'Чёрно-белое',
     target: 'video',
     hint: 'Убрать цвет — целиком или частично',
-    params: [{ key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100 }],
+    params: [{ key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'наполовину' }, { value: 100, label: 'полностью' }] }],
   },
   {
     type: 'blur',
     name: 'Размытие',
     target: 'video',
     hint: 'Размыть весь клип целиком',
-    params: [{ key: 'strength', label: 'Сила', min: 1, max: 80, default: 10 }],
+    params: [{ key: 'strength', label: 'Сила', min: 1, max: 80, default: 10, marks: [{ value: 5, label: 'чуть' }, { value: 22, label: 'заметно' }, { value: 50, label: 'сильно' }] }],
   },
   {
     type: 'denoise',
     name: 'Шумоподавление',
     target: 'video',
     hint: 'Убрать зерно с тёмной съёмки. Сильное — замыливает мелкие детали',
-    params: [{ key: 'strength', label: 'Сила', min: 1, max: 12, step: 0.5, default: 4 }],
+    params: [{ key: 'strength', label: 'Сила', min: 1, max: 12, step: 0.5, default: 5, marks: [{ value: 2.5, label: 'слабо' }, { value: 5, label: 'обычно' }, { value: 9, label: 'сильно' }] }],
   },
   {
     type: 'pixelate',
     name: 'Пикселизация',
     target: 'video',
     hint: 'Крупные квадраты вместо картинки',
-    params: [{ key: 'size', label: 'Размер квадрата', min: 2, max: 120, unit: 'px', default: 16 }],
+    params: [{ key: 'size', label: 'Размер квадрата', min: 2, max: 80, unit: 'px', default: 30, marks: [{ value: 6, label: 'мелко' }, { value: 30, label: 'обычно' }, { value: 70, label: 'крупно' }] }],
   },
   {
     type: 'chromakey',
@@ -81,8 +83,8 @@ export const EFFECTS: EffectKind[] = [
     hint: 'Сделать прозрачным фон одного цвета — зелёный или синий экран',
     params: [
       { key: 'color', label: 'Цвет фона', kind: 'color', default: '#00ff00' },
-      { key: 'similarity', label: 'Насколько похожий цвет убирать', min: 1, max: 60, default: 15 },
-      { key: 'blend', label: 'Мягкость края', min: 0, max: 40, default: 5 },
+      { key: 'similarity', label: 'Насколько похожий цвет убирать', min: 1, max: 60, default: 20, marks: [{ value: 6, label: 'строго' }, { value: 20, label: 'обычно' }, { value: 40, label: 'широко' }] },
+      { key: 'blend', label: 'Мягкость края', min: 0, max: 40, default: 5, marks: [{ value: 0, label: 'резко' }, { value: 12, label: 'мягко' }, { value: 30, label: 'размыто' }] },
     ],
   },
   {
@@ -91,8 +93,8 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Вместо чёрных полос по бокам — та же картинка, растянутая и размытая',
     params: [
-      { key: 'strength', label: 'Размытие', min: 5, max: 80, default: 30 },
-      { key: 'dim', label: 'Затемнение', min: 0, max: 80, unit: '%', default: 20 },
+      { key: 'strength', label: 'Размытие', min: 5, max: 80, default: 32, marks: [{ value: 12, label: 'легко' }, { value: 32, label: 'обычно' }, { value: 60, label: 'сильно' }] },
+      { key: 'dim', label: 'Затемнение', min: 0, max: 80, unit: '%', default: 20, marks: [{ value: 0, label: 'нет' }, { value: 20, label: 'обычно' }, { value: 50, label: 'сильно' }] },
     ],
   },
   {
@@ -114,7 +116,7 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Убрать тряску камеры. Ролик один раз обсчитывается в фоне — это занимает время',
     params: [
-      { key: 'smoothing', label: 'Плавность', min: 3, max: 60, default: 15 },
+      { key: 'smoothing', label: 'Плавность', min: 3, max: 60, default: 18, marks: [{ value: 5, label: 'слабо' }, { value: 18, label: 'обычно' }, { value: 35, label: 'плавно' }, { value: 55, label: 'очень' }] },
       { key: 'crop', label: 'Приблизить, чтобы спрятать края', kind: 'check', default: 1 },
     ],
   },
@@ -123,14 +125,14 @@ export const EFFECTS: EffectKind[] = [
     name: 'Шумоподавление голоса',
     target: 'audio',
     hint: 'Убрать гул и шипение из записи с микрофона',
-    params: [{ key: 'strength', label: 'Сила', min: 1, max: 40, unit: 'дБ', default: 12 }],
+    params: [{ key: 'strength', label: 'Сила', min: 1, max: 40, unit: 'дБ', default: 15, marks: [{ value: 5, label: 'слабо' }, { value: 15, label: 'обычно' }, { value: 30, label: 'сильно' }] }],
   },
   {
     type: 'leveler',
     name: 'Выравнивание громкости',
     target: 'audio',
     hint: 'Тихие места громче, громкие тише — внутри этого клипа',
-    params: [{ key: 'strength', label: 'Насколько подтягивать тихое', min: 1, max: 30, default: 10 }],
+    params: [{ key: 'strength', label: 'Насколько подтягивать тихое', min: 1, max: 30, default: 12, marks: [{ value: 4, label: 'слегка' }, { value: 12, label: 'обычно' }, { value: 22, label: 'сильно' }] }],
   },
   {
     type: 'echo',
@@ -138,8 +140,8 @@ export const EFFECTS: EffectKind[] = [
     target: 'audio',
     hint: 'Повтор звука с задержкой',
     params: [
-      { key: 'delay', label: 'Задержка', min: 20, max: 1500, step: 10, unit: 'мс', default: 300 },
-      { key: 'decay', label: 'Громкость повтора', min: 5, max: 90, unit: '%', default: 40 },
+      { key: 'delay', label: 'Задержка', min: 20, max: 1500, step: 10, unit: 'мс', default: 300, marks: [{ value: 150, label: 'комната' }, { value: 500, label: 'зал' }, { value: 1100, label: 'горы' }] },
+      { key: 'decay', label: 'Громкость повтора', min: 5, max: 90, unit: '%', default: 40, marks: [{ value: 20, label: 'тихо' }, { value: 40, label: 'обычно' }, { value: 70, label: 'громко' }] },
     ],
   },
 ]

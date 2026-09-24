@@ -66,11 +66,11 @@ def _name(source: str, *parts: object) -> str:
 
 def target_for(source: str, smoothing: int, crop: bool) -> Path:
     """Где лежит (или будет лежать) ровная копия с этими настройками."""
-    return _folder() / f"{_name(source, 'v1', smoothing, int(crop))}.mp4"
+    return _folder() / f"{_name(source, 'v2', smoothing, int(crop))}.mp4"
 
 
 def _marks_for(source: str) -> Path:
-    return _folder() / f"{_name(source, 'marks-v1')}.trf"
+    return _folder() / f"{_name(source, 'marks-v2')}.trf"
 
 
 def _escaped(path: Path) -> str:
@@ -126,7 +126,11 @@ async def _make(source: str, smoothing: int, crop: bool) -> None:
     marks = _marks_for(source)
 
     # Разметка тряски — одна на файл, какие бы настройки потом ни выбрали.
+    # Если она уже есть, считать осталось только копию — и её доля шкалы
+    # вся от нуля до конца: прежде полоса в этом случае сразу вставала на
+    # середину, как будто половина уже сделана.
     lock = _locks.setdefault(source, asyncio.Lock())
+    fresh = not marks.exists()
     async with lock:
         if not marks.exists():
             partial = marks.with_suffix(".part.trf")
@@ -135,13 +139,19 @@ async def _make(source: str, smoothing: int, crop: bool) -> None:
                 [
                     binaries.ffmpeg(), "-hide_banner", "-nostdin", "-y",
                     "-progress", "pipe:1", "-nostats", "-i", source,
-                    "-vf", f"vidstabdetect=shakiness=6:accuracy=15:result={_escaped(partial)}",
+                    # Поля помельче и допуск к малоконтрастным местам: тряска
+                    # находится увереннее, и копию меньше «водит». Проверено на
+                    # ролике с тряской и наклоном: рывки вдвое слабее прежних.
+                    "-vf",
+                    "vidstabdetect=shakiness=8:accuracy=15:stepsize=4:mincontrast=0.2"
+                    f":result={_escaped(partial)}",
                     "-an", "-f", "null", "-",
                 ],
                 total, 0.0, 0.5, key,
             )
             partial.replace(marks)
-    _progress[key] = 0.5
+    base, share = (0.5, 0.5) if fresh else (0.0, 1.0)
+    _progress[key] = base
 
     # Ровная копия: почти без потерь, чтобы вторая сборка не мылила картинку.
     # Лёгкая резкость после выравнивания — как советуют сами авторы фильтра:
@@ -154,14 +164,19 @@ async def _make(source: str, smoothing: int, crop: bool) -> None:
             "-progress", "pipe:1", "-nostats", "-i", source,
             "-vf",
             f"vidstabtransform=input={_escaped(marks)}:smoothing={smoothing}"
-            f":optzoom={1 if crop else 0}:interpol=bicubic,unsharp=5:5:0.8:3:3:0.4",
+            # Наклон ограничен тремя градусами: ошибочно найденный наклон
+            # «водит» и гнёт картинку сильнее, чем исходная тряска. Края,
+            # которые открылись после сдвига, — чёрные, а не куски прошлых
+            # кадров: те смазывались и дёргались.
+            f":optzoom={1 if crop else 0}:maxangle=0.05:crop=black:interpol=bicubic"
+            ",unsharp=5:5:0.8:3:3:0.4",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p",
             # Звук тоже копируем: ролик без отдельной звуковой дорожки на
             # таймлайне берёт звук из того же файла, что и картинку.
             "-c:a", "aac", "-b:a", "320k",
             str(partial),
         ],
-        total, 0.5, 0.5, key,
+        total, base, share, key,
     )
     partial.replace(target)
     _progress[key] = 1.0

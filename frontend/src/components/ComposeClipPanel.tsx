@@ -243,6 +243,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                 step={param.step}
                 unit={param.unit ?? ''}
                 reset={Number(param.default)}
+                marks={param.marks}
                 onChange={(next) => updateEffect(clipId, effect.id, { params: { [param.key]: next } })}
               />
             )
