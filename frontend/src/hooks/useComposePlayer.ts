@@ -113,6 +113,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
         if (asked === 'auto' && spent > SLOW_SECONDS && height.current > MIN_HEIGHT) {
           height.current = Math.max(MIN_HEIGHT, Math.round(height.current / 1.5))
         }
+        if (data.missing?.length) useCompose.getState().reportMissing(data.missing)
         return { url: data.url, at: data.at, span: data.span }
       } catch (problem) {
         // Об ошибке говорим, только если её ещё ждут.

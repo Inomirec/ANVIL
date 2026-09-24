@@ -486,6 +486,10 @@ export function ComposeTimeline({
           event.preventDefault()
           useCompose.getState().selectAll()
         } else if (key === 'c' || key === 'с') {
+          // Выделен текст (например, ошибка в окне просмотра) — это обычное
+          // копирование текста, клипы тут ни при чём. Прежде Ctrl+C
+          // перехватывался всегда, и выделенную ошибку скопировать было нельзя.
+          if (window.getSelection()?.toString()) return
           // Копируем сами клипы со всеми их настройками. Системный буфер
           // сюда не годится: в нём был бы текст, а не кусок монтажа.
           event.preventDefault()

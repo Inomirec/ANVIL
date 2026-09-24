@@ -39,12 +39,16 @@ async def frame(request: ComposeFrameRequest) -> Response:
     картинки, которая нужна полсекунды. Просчёт занимает около десятой доли
     секунды, потому что в команду попадают только клипы под иглой.
     """
+    # Длину считаем до проверки файлов: пропавший клип из кадра выпадает, но
+    # место на таймлайне он занимает по-прежнему.
+    total = request.project.duration
+    lost: list[str] = []
     try:
-        project = await compose.prepare(request.project, skip_missing=True)
+        project = await compose.prepare(request.project, skip_missing=True, lost=lost)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
-    if not project.duration:
+    if not total:
         raise HTTPException(400, "На таймлайне пусто")
 
     # Свой файл на каждый запрос: два кадра могут считаться одновременно, и
@@ -77,7 +81,15 @@ async def frame(request: ComposeFrameRequest) -> Response:
     finally:
         target.unlink(missing_ok=True)
 
-    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store",
+            # Какие файлы пропали — окно откроет по ним список пропавших.
+            "X-Sgh-Missing": urllib.parse.quote(json.dumps(lost, ensure_ascii=False)),
+        },
+    )
 
 
 #: Где лежат черновики просмотра и сколько их держим.
@@ -110,16 +122,20 @@ async def draft(request: ComposeDraftRequest) -> dict:
     человек нажимает «играть» на одном и том же месте по многу раз, и
     пересобирать одно и то же незачем.
     """
+    # Длина — по всем клипам, и по пропавшим тоже: иначе удалённый файл
+    # «укорачивал» монтаж, и просмотр отвечал «дальше конца смотреть нечего».
+    total = request.project.duration
+    lost: list[str] = []
     try:
-        project = await compose.prepare(request.project, skip_missing=True)
+        project = await compose.prepare(request.project, skip_missing=True, lost=lost)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
-    if not project.duration:
+    if not total:
         raise HTTPException(400, "На таймлайне пусто")
 
-    at = min(request.at, project.duration)
-    span = min(request.span, max(project.duration - at, 0.0))
+    at = min(request.at, total)
+    span = min(request.span, max(total - at, 0.0))
     if span <= 0:
         raise HTTPException(400, "Дальше конца монтажа смотреть нечего")
 
@@ -160,6 +176,7 @@ async def draft(request: ComposeDraftRequest) -> dict:
         "at": at,
         "span": span,
         "size": target.stat().st_size,
+        "missing": lost,
     }
 
 

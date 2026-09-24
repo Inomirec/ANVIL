@@ -443,6 +443,10 @@ interface State extends Saved {
   /** Файлы монтажа, которых нет на месте: такие клипы помечены на дорожке. */
   missing: string[]
   setMissing: (paths: string[]) => void
+  /** Кадр или просмотр сообщили о пропавших файлах. Новые — повод открыть
+   *  окно пропавших снова (`missingAlert` растёт). */
+  reportMissing: (paths: string[]) => void
+  missingAlert: number
   /** Подставляет новый путь вместо пропавшего во всех клипах с этим файлом. */
   relink: (from: string, to: string) => void
   /** Растёт при каждом открытии проекта: окно просмотра по нему сбрасывает
@@ -832,6 +836,7 @@ export const useCompose = create<State>((set, get) => ({
   })(),
   headWidth: recall('sgh.composeHead', 150),
   missing: [],
+  missingAlert: 0,
   opened: 0,
 
   setQuality(quality) {
@@ -1647,6 +1652,13 @@ export const useCompose = create<State>((set, get) => ({
 
   setMissing(paths) {
     set({ missing: paths })
+  },
+
+  reportMissing(paths) {
+    const known = get().missing
+    const fresh = paths.filter((path) => !known.includes(path))
+    if (!fresh.length) return
+    set({ missing: [...known, ...fresh], missingAlert: get().missingAlert + 1 })
   },
 
   relink(from, to) {

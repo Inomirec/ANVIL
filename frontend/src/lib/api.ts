@@ -160,7 +160,7 @@ export const api = {
     ),
 
   /** Кадр монтажа под иглой. Приходит картинкой, а не ссылкой. */
-  composeFrame: async (payload: unknown, signal?: AbortSignal): Promise<Blob> => {
+  composeFrame: async (payload: unknown, signal?: AbortSignal): Promise<{ blob: Blob; missing: string[] }> => {
     const response = await fetch('/api/compose/frame', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -176,7 +176,14 @@ export const api = {
       }
       throw new ApiError(String(detail), response.status)
     }
-    return response.blob()
+    // Сервер сообщает, какие файлы монтажа пропали: кадр собран без них.
+    let missing: string[] = []
+    try {
+      missing = JSON.parse(decodeURIComponent(response.headers.get('X-Sgh-Missing') ?? '[]'))
+    } catch {
+      /* заголовка может не быть */
+    }
+    return { blob: await response.blob(), missing }
   },
   composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
   /** Какой файл шрифта возьмёт сборка и его шаг строк — для живой надписи. */
@@ -223,7 +230,10 @@ export const api = {
     }),
   /** Кусок монтажа для просмотра: собирается быстрым кодеком и кэшируется. */
   composeDraft: (payload: unknown) =>
-    post<{ url: string; at: number; span: number; size: number }>('/api/compose/draft', payload),
+    post<{ url: string; at: number; span: number; size: number; missing?: string[] }>(
+      '/api/compose/draft',
+      payload,
+    ),
 
   exportPreview: (payload: unknown) =>
     post<{ summary: string; command: string | null; output?: string }>('/api/export/preview', payload),

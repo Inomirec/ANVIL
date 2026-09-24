@@ -672,8 +672,8 @@ def build_segment(
                 "-i", f"color=c={clip.color}:s={box[0]}x{box[1]}:r={fps}",
             ]
         elif clip.kind == "image":
-            # Картинка — один кадр; без -loop она исчезнет сразу же.
-            inputs += ["-loop", "1", "-t", f"{take:.3f}", "-i", clip.source]
+            # Картинка — один кадр; без повтора она исчезнет сразу же.
+            inputs += [*_repeat(clip.source), "-t", f"{take:.3f}", "-i", clip.source]
         else:
             inputs += ["-ss", f"{seek:.3f}", "-t", f"{take:.3f}", "-i", clip.source]
 
@@ -775,7 +775,30 @@ def build_frame(project: ComposeProject, output: Path, at: float, width: int) ->
     )
 
 
-async def prepare(project: ComposeProject, *, skip_missing: bool = False) -> ComposeProject:
+#: Картинки, которые ffmpeg читает «по одной» (image2): у них есть `-loop 1`.
+_STILL_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+def _repeat(source: str) -> list[str]:
+    """Как повторять картинку весь клип.
+
+    `-loop 1` есть только у чтения по одной картинке. AVIF и GIF ffmpeg
+    открывает иначе — как ролик, — и на `-loop` отвечает «Option loop not
+    found»: картинка не попадала ни в кадр, ни в сборку. Им нужен
+    `-stream_loop -1` — повтор файла целиком; у движущегося GIF это заодно
+    зацикливает анимацию. Проверено на avif, gif, webp, png и jpg.
+    """
+    if Path(source).suffix.lower() in _STILL_SUFFIXES:
+        return ["-loop", "1"]
+    return ["-stream_loop", "-1"]
+
+
+async def prepare(
+    project: ComposeProject,
+    *,
+    skip_missing: bool = False,
+    lost: list[str] | None = None,
+) -> ComposeProject:
     """Проверяет файлы монтажа и выясняет, у кого из них есть звук.
 
     Зовётся перед каждой сборкой. Проверка путей — та же, что у остальной
@@ -784,7 +807,9 @@ async def prepare(project: ComposeProject, *, skip_missing: bool = False) -> Com
     а ответы ffprobe кэшируются, так что дважды один файл не читается.
 
     ``skip_missing`` — для просмотра: пропавший файл просто не рисуется, а
-    остальной монтаж виден. Человек может отложить поиск файла и работать
+    остальной монтаж виден. Какие файлы пропущены, складывается в ``lost`` —
+    окно по ним открывает список пропавших, даже если файл удалили прямо во
+    время работы. Человек может отложить поиск файла и работать
     дальше; о пропаже ему уже сказало окно при открытии проекта. Готовый
     файл так не собирается: молча выкинуть кусок монтажа из результата нельзя.
     """
@@ -813,6 +838,8 @@ async def prepare(project: ComposeProject, *, skip_missing: bool = False) -> Com
             kept.append(clip)
         track.clips = kept
 
+    if lost is not None:
+        lost.extend(dict.fromkeys(missing))
     if missing and not skip_missing:
         # Полный путь, а не одно имя: по имени непонятно, где файл лежал и что
         # искать, а одинаковые имена бывают в разных папках.

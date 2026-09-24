@@ -299,7 +299,9 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
   return (
     <div
       ref={box}
-      className="absolute cursor-move border border-dashed border-accent-soft/90 bg-accent/5"
+      // Без заливки: даже лёгкая пелена цвета программы поверх клипа делала
+      // картинку тусклее, пока клип выделен. Хватает пунктирной рамки.
+      className="absolute cursor-move border border-dashed border-accent-soft/90"
       style={{
         left: `${(clip.x - wide / 2) * 100}%`,
         top: `${(clip.y - tall / 2) * 100}%`,

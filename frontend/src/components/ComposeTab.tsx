@@ -198,6 +198,10 @@ export function ComposeTab() {
   const [frameError, setFrameError] = useState<string | null>(null)
   const [missingOpen, setMissingOpen] = useState(false)
   const opened = useCompose((state) => state.opened)
+  const missingAlert = useCompose((state) => state.missingAlert)
+  useEffect(() => {
+    if (missingAlert) setMissingOpen(true)
+  }, [missingAlert])
   const [busy, setBusy] = useState(false)
   // Чем кодировать готовый файл. Запоминаем: настраивают это редко, а
   // собирают часто.
@@ -330,12 +334,15 @@ export function ComposeTab() {
           },
           control.signal,
         )
-        .then((blob) => {
+        .then(({ blob, missing }) => {
           setFrameUrl((old) => {
             if (old) URL.revokeObjectURL(old)
             return URL.createObjectURL(blob)
           })
           setFrameError(null)
+          // Файл удалили прямо во время работы — кадр собран без него, а
+          // окно пропавших откроется само, как при открытии проекта.
+          if (missing.length) useCompose.getState().reportMissing(missing)
         })
         .catch((error: Error) => {
           if (error.name === 'AbortError') return
@@ -872,11 +879,13 @@ export function ComposeTab() {
                 {!player.playing && frameUrl && (
                   <img src={frameUrl} alt="" className="h-full w-full object-contain" />
                 )}
-                {!player.playing && frameError && (
-                  // Текст ошибки выделяется: его переписывают или ищут по нему.
+                {/* Ошибка — в одном месте, посреди кадра: и кадра, и просмотра.
+                    Прежде ошибка просмотра повторялась ещё и полосой внизу. Текст
+                    выделяется и копируется: его переписывают или ищут по нему. */}
+                {!player.playing && (player.error || frameError) && (
                   <div className="absolute inset-0 flex items-center justify-center p-4">
                     <p className="cursor-text select-text whitespace-pre-line break-all text-center text-[12px] leading-snug text-danger">
-                      {frameError}
+                      {player.error || frameError}
                     </p>
                   </div>
                 )}
@@ -895,11 +904,7 @@ export function ComposeTab() {
 
               </div>
 
-                {player.error && (
-                  <p className="absolute inset-x-0 bottom-0 cursor-text select-text whitespace-pre-line break-all bg-danger/85 px-3 py-1.5 text-center text-[11px] text-white">
-                    {player.error}
-                  </p>
-                )}
+
               </div>
             )}
             </div>
