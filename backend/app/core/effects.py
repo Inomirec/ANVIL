@@ -211,7 +211,104 @@ def stabilizer(clip: ComposeClip) -> "stabilize.Settings | None":
 
 def needs_size(clip: ComposeClip) -> bool:
     """Нужен ли сборке размер файла в пикселях."""
-    return any(effect.on and effect.type == "delogo" for effect in clip.effects)
+    return has_mask(clip) or any(effect.on and effect.type == "delogo" for effect in clip.effects)
+
+
+def has_mask(clip: ComposeClip) -> bool:
+    return clip.kind in {"video", "image"} and clip.mask is not None and clip.mask.on
+
+
+def base_chain(clip: ComposeClip) -> str:
+    """Задом наперёд, скорость, поворот и отражение — с запятой в конце или ""."""
+    parts: list[str] = []
+    if clip.reverse and clip.kind == "video":
+        parts.append("reverse")
+    if clip.kind == "video" and abs(clip.speed - 1.0) > 1e-3:
+        parts.append(f"setpts=(PTS-STARTPTS)/{clip.speed:.4f}")
+    turn = clip.rotate % 360
+    if turn == 90:
+        parts.append("transpose=clock")
+    elif turn == 180:
+        parts.append("hflip,vflip")
+    elif turn == 270:
+        parts.append("transpose=cclock")
+    if clip.flip_h:
+        parts.append("hflip")
+    if clip.flip_v:
+        parts.append("vflip")
+    return ",".join(parts) + "," if parts else ""
+
+
+def effect_chain(clip: ComposeClip, *, preview: bool = False) -> str:
+    """Только эффекты из списка — с запятой в конце или ""."""
+    parts = [chunk for effect in clip.effects if effect.on and (chunk := _video_effect(effect, clip, preview))]
+    return ",".join(parts) + "," if parts else ""
+
+
+def mask_graph(clip: ComposeClip, source: str, mask: str, tag: str, out: str, *, preview: bool) -> str:
+    """Граф клипа с маской: от входа до готовой картинки ``out``.
+
+    Маска умножается на собственную прозрачность клипа, а не заменяет её:
+    иначе у картинки с прозрачным фоном (логотипа) фон стал бы чёрным. Режим
+    «эффекты внутри» — клип раздваивается: эффекты считаются на копии, копия
+    вырезается маской и ложится поверх нетронутого клипа.
+    """
+    assert clip.mask is not None
+    head = base_chain(clip)
+    fx = effect_chain(clip, preview=preview)
+    parts = [f"{source}{head}format=yuva420p[{tag}in]"]
+    if clip.mask.mode == "effects":
+        parts.append(f"[{tag}in]split[{tag}o][{tag}e]")
+        parts.append(f"[{tag}e]{fx}format=yuva420p[{tag}f]")
+        target, rest = f"[{tag}f]", f"[{tag}o]"
+    else:
+        parts.append(f"[{tag}in]{fx}format=yuva420p[{tag}f]")
+        target, rest = f"[{tag}f]", ""
+    parts.append(f"{target}split[{tag}c][{tag}a]")
+    parts.append(f"[{tag}a]alphaextract[{tag}al]")
+    parts.append(f"{mask}format=gray[{tag}mk]")
+    parts.append(f"[{tag}al][{tag}mk]blend=all_mode=multiply[{tag}m]")
+    if rest:
+        parts.append(f"[{tag}c][{tag}m]alphamerge[{tag}x]")
+        parts.append(f"{rest}[{tag}x]overlay=format=auto:shortest=1{out}")
+    else:
+        parts.append(f"[{tag}c][{tag}m]alphamerge{out}")
+    return ";".join(parts)
+
+
+def mask_size(clip: ComposeClip) -> tuple[int, int]:
+    """Размер картинки маски — как у кадра клипа после поворота."""
+    width, height = clip.source_width, clip.source_height
+    if clip.rotate % 180 == 90:
+        width, height = height, width
+    return width, height
+
+
+def mask_expression(clip: ComposeClip) -> str:
+    """Яркость маски в каждой точке: 255 — виден, 0 — нет.
+
+    Считается по расстоянию до края формы в пикселях, край — мягкая полоса
+    шириной ``feather`` от меньшей стороны маски. Рисуется один раз на
+    картинку и берётся из кэша, поэтому точность важнее скорости.
+    """
+    assert clip.mask is not None
+    m = clip.mask
+    width, height = mask_size(clip)
+    cx, cy = m.x * width, m.y * height
+    hw, hh = m.w * width / 2, m.h * height / 2
+    soft = max(0.5, m.feather * min(hw, hh))
+    if m.shape == "ellipse":
+        # Расстояние до края овала приближённо: насколько «радиус» точки
+        # больше единицы, в пикселях меньшей полуоси.
+        distance = (
+            f"(hypot((X-{cx:.2f})/{hw:.2f},(Y-{cy:.2f})/{hh:.2f})-1)*{min(hw, hh):.2f}"
+        )
+    else:
+        distance = f"max(abs(X-{cx:.2f})-{hw:.2f},abs(Y-{cy:.2f})-{hh:.2f})"
+    inside = f"clip(0.5-({distance})/{soft:.2f},0,1)"
+    if m.invert:
+        inside = f"(1-{inside})"
+    return f"255*{inside}"
 
 
 def audio_chain(clip: ComposeClip) -> str:

@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, Crop, FlipHorizontal2, FlipVertical2, Gauge, Plus, RotateCw, Undo2, X } from 'lucide-react'
-import { isCropped, speedOf, useCompose, type ClipEffect, type ComposeClip } from '../composeStore'
+import { ChevronDown, Crop, FlipHorizontal2, FlipVertical2, Gauge, Plus, RotateCw, SquareDashed, Undo2, X } from 'lucide-react'
+import {
+  isCropped,
+  newMask,
+  speedOf,
+  useCompose,
+  type ClipEffect,
+  type ClipMask,
+  type ComposeClip,
+} from '../composeStore'
 import {
   EFFECTS,
   effectKind,
@@ -35,6 +43,8 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
   const [picking, setPicking] = useState(false)
   const cropping = useCompose((state) => state.cropping)
   const setCropping = useCompose((state) => state.setCropping)
+  const masking = useCompose((state) => state.masking)
+  const setMasking = useCompose((state) => state.setMasking)
 
   const parts: { clip: ComposeClip; target: EffectTarget; title: string }[] = []
   if (visual && targetOf(visual.kind)) parts.push({ clip: visual, target: 'video', title: 'Картинка' })
@@ -58,20 +68,47 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
           Добавить эффект
         </Button>
         {visual && (visual.kind === 'video' || visual.kind === 'image') && (
-          <Button
-            tone={cropping === visual.id ? 'primary' : 'subtle'}
-            onClick={() => setCropping(cropping === visual.id ? null : visual.id)}
-            title={
-              cropping === visual.id
-                ? 'Закончить обрезку (Enter)'
-                : 'Обрезать края картинки прямо в окне просмотра'
-            }
-          >
-            <Crop size={15} />
-            {cropping === visual.id ? 'Готово' : 'Обрезать'}
-          </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              tone={cropping === visual.id ? 'primary' : 'subtle'}
+              onClick={() => setCropping(cropping === visual.id ? null : visual.id)}
+              title={
+                cropping === visual.id
+                  ? 'Закончить обрезку (Enter)'
+                  : 'Обрезать края картинки прямо в окне просмотра'
+              }
+            >
+              <Crop size={15} />
+              {cropping === visual.id ? 'Готово' : 'Обрезать'}
+            </Button>
+            <Button
+              tone={masking === visual.id ? 'primary' : 'subtle'}
+              onClick={() => {
+                if (masking === visual.id) {
+                  setMasking(null)
+                  return
+                }
+                if (!visual.mask) {
+                  const state = useCompose.getState()
+                  state.mark()
+                  state.updateClip(visual.id, { mask: newMask(visual) })
+                }
+                setMasking(visual.id)
+              }}
+              title={
+                masking === visual.id
+                  ? 'Закончить с маской (Enter)'
+                  : 'Прямоугольник или овал: показать только часть картинки или применить эффекты только к ней'
+              }
+            >
+              <SquareDashed size={15} />
+              {masking === visual.id ? 'Готово' : 'Маска'}
+            </Button>
+          </div>
         )}
       </div>
+
+      {visual?.mask && <MaskCard clip={visual} mask={visual.mask} />}
 
       {parts.map((part) => (
         <div key={part.clip.id} className="space-y-2">
@@ -171,6 +208,127 @@ function Transforms({ clip }: { clip: ComposeClip }) {
           </button>
         </span>
       ))}
+    </div>
+  )
+}
+
+/**
+ * Маска клипа в колонке: форма, что она делает, мягкость края.
+ *
+ * Сделана как карточка эффекта — с галочкой «включена» и крестиком, — чтобы
+ * вела себя так же. Место и размер задаются мышью в окне просмотра.
+ */
+function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask }) {
+  const updateClip = useCompose((state) => state.updateClip)
+  const mark = useCompose((state) => state.mark)
+  const masking = useCompose((state) => state.masking)
+  const setMasking = useCompose((state) => state.setMasking)
+  const put = (patch: Partial<ClipMask>) => updateClip(clip.id, { mask: { ...mask, ...patch } })
+  const effects = (clip.effects ?? []).some((effect) => effect.on)
+
+  const choice = (
+    label: string,
+    value: string,
+    options: { value: string; label: string; hint: string }[],
+    onPick: (value: string) => void,
+  ) => (
+    <div className="space-y-1">
+      <span className="block text-[11.5px] text-ink-dim">{label}</span>
+      <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-3/40 p-0.5">
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            title={option.hint}
+            onClick={() => {
+              mark()
+              onPick(option.value)
+            }}
+            className={`rounded-md py-1 text-[11px] transition-colors ${
+              value === option.value ? 'bg-surface-3 text-ink shadow-sm' : 'text-ink-faint hover:text-ink-dim'
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="rounded-xl bg-surface-2 ring-1 ring-warn/40">
+      <div className="flex items-center gap-1.5 px-2 py-1.5">
+        <input
+          type="checkbox"
+          checked={mask.on}
+          title={mask.on ? 'Выключить маску — настройки останутся' : 'Включить маску'}
+          onChange={(event) => {
+            mark()
+            put({ on: event.target.checked })
+          }}
+          className="ml-1 h-3.5 w-3.5 cursor-pointer accent-[var(--color-accent)]"
+        />
+        <span className={`min-w-0 flex-1 text-[12.5px] font-medium ${mask.on ? 'text-ink' : 'text-ink-faint line-through'}`}>
+          Маска
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            mark()
+            if (masking === clip.id) setMasking(null)
+            updateClip(clip.id, { mask: null })
+          }}
+          title="Убрать маску"
+          className="rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-danger"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <div className={`space-y-2.5 border-t border-line-soft px-3 py-2.5 ${mask.on ? '' : 'opacity-50'}`}>
+        {choice('Форма', mask.shape, [
+          { value: 'ellipse', label: 'Овал', hint: 'Овал с мягким краем — для лица' },
+          { value: 'rect', label: 'Прямоугольник', hint: 'Прямоугольник — для номера, надписи, угла кадра' },
+        ], (value) => put({ shape: value as ClipMask['shape'] }))}
+        {choice('Что делает', mask.mode, [
+          { value: 'effects', label: 'Эффекты внутри', hint: 'Эффекты клипа действуют только внутри маски, остальное как было' },
+          { value: 'show', label: 'Показать внутри', hint: 'Клип виден только внутри маски, снаружи — прозрачный' },
+        ], (value) => put({ mode: value as ClipMask['mode'] }))}
+        {mask.mode === 'effects' && !effects && (
+          <p className="text-[11px] leading-snug text-warn">
+            У клипа нет эффектов — добавьте, например, размытие: оно подействует только внутри маски.
+          </p>
+        )}
+        <SliderNumber
+          stacked
+          label="Мягкость края"
+          value={Math.round(mask.feather * 100)}
+          min={0}
+          max={100}
+          unit="%"
+          reset={15}
+          marks={[
+            { value: 0, label: 'резко' },
+            { value: 15, label: 'обычно' },
+            { value: 50, label: 'мягко' },
+          ]}
+          onChange={(next) => put({ feather: next / 100 })}
+        />
+        <label
+          className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-dim"
+          title="Наоборот: действует всё, кроме выделенного"
+        >
+          <input
+            type="checkbox"
+            checked={mask.invert}
+            onChange={(event) => {
+              mark()
+              put({ invert: event.target.checked })
+            }}
+            className="h-3.5 w-3.5 accent-[var(--color-accent)]"
+          />
+          Перевернуть — всё, кроме выделенного
+        </label>
+      </div>
     </div>
   )
 }

@@ -487,6 +487,33 @@ async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
     return target
 
 
+async def _render_mask(clip: ComposeClip) -> Path:
+    """Чёрно-белая картинка маски размером с кадр клипа, из кэша по форме."""
+    width, height = effects.mask_size(clip)
+    expression = effects.mask_expression(clip)
+    key = hashlib.sha1(f"{width}x{height}|{expression}".encode("utf-8")).hexdigest()[:20]
+    folder = paths.data_dir() / "masks"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{key}.png"
+    if target.exists():
+        return target
+    partial = target.with_suffix(".part.png")
+    process = await asyncio.create_subprocess_exec(
+        binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:d=1,format=gray",
+        "-vf", f"geq=lum='{expression}'", "-frames:v", "1", str(partial),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=binaries.CREATE_NO_WINDOW,
+        env=binaries.subprocess_env(),
+    )
+    _, err = await process.communicate()
+    if process.returncode != 0 or not partial.exists():
+        raise RuntimeError("Не удалось нарисовать маску: " + err.decode("utf-8", "replace").strip()[:300])
+    partial.replace(target)
+    return target
+
+
 async def prepare_fills(
     project: ComposeProject, width: int | None = None, height: int | None = None
 ) -> None:
@@ -502,6 +529,9 @@ async def prepare_fills(
         for clip in track.clips:
             if is_decorated_fill(clip):
                 clip.fill_image = str(await _render_fill(clip, frame_w, frame_h))
+            # Маски — тоже картинки, рисуются здесь же и по той же причине.
+            if effects.has_mask(clip) and clip.source_width:
+                clip.mask_image = str(await _render_mask(clip))
 
 
 def frame_alpha(clip: ComposeClip, moment: float) -> float:
@@ -656,6 +686,8 @@ def build_segment(
     chain.append(f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f}[bg]")
 
     index = 0
+    #: Картинки масок: их входы идут после всех клипов.
+    masks: list[str] = []
     for _, clip in clips_at(project, at, span):
         seek, take, offset = _window(clip, at, span)
         if take <= 0:
@@ -704,6 +736,21 @@ def build_segment(
 
         if clip.kind != "audio":
             fades = video_fades(clip, at, take, moment=at if still else None)
+            # Откуда берётся картинка клипа. Обычно — прямо со входа, через
+            # линейную цепочку фильтров. С маской — через отдельный граф: у
+            # маски свой вход, а её номер станет известен, когда соберутся все
+            # клипы, поэтому пока стоит метка, её заменят в конце.
+            pre_label = f"[{index}:v]"
+            pre_chain = effects.video_chain(clip, preview=preview)
+            if effects.has_mask(clip) and clip.mask_image:
+                masks.append(clip.mask_image)
+                chain.append(effects.mask_graph(
+                    clip, pre_label, f"@MASK{len(masks) - 1}@", f"k{index}", f"[pre{index}]",
+                    preview=preview,
+                ))
+                pre_label = f"[pre{index}]"
+                crop = effects.crop_filter(clip)
+                pre_chain = crop + "," if crop else ""
             fill = effects.blurred_fill(clip) if clip.kind in {"video", "image"} else None
             if fill:
                 # Размытый фон: под клипом он сам же, растянутый на всё своё
@@ -713,7 +760,7 @@ def build_segment(
                 sigma, dim = fill
                 box_w, box_h = clip_box(clip, width, height) if is_placed(clip) else (width, height)
                 chain.append(
-                    f"[{index}:v]{effects.video_chain(clip, preview=preview)}split=2[fa{index}][fb{index}];"
+                    f"{pre_label}{pre_chain}split=2[fa{index}][fb{index}];"
                     f"[fa{index}]scale={box_w}:{box_h}:force_original_aspect_ratio=increase,"
                     f"crop={box_w}:{box_h},gblur=sigma={sigma:.1f},"
                     f"eq=brightness={-dim * 0.5:.3f}[fbg{index}];"
@@ -726,7 +773,7 @@ def build_segment(
             else:
                 # Эффекты — до вписывания в кадр: они работают с самим файлом.
                 chain.append(
-                    f"[{index}:v]{effects.video_chain(clip, preview=preview)}{place_filter(clip, width, height, fps)}"
+                    f"{pre_label}{pre_chain}{place_filter(clip, width, height, fps)}"
                     f"{fades},"
                     f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
                 )
@@ -741,6 +788,12 @@ def build_segment(
             )
             audio_labels.append(f"[a{index}]")
         index += 1
+
+    # Входы масок — после входов клипов. Картинка маски повторяется весь
+    # отрезок: клип сам решает, сколько её взять.
+    for number, image in enumerate(masks):
+        inputs += ["-loop", "1", "-t", f"{span:.3f}", "-i", image]
+        chain = [part.replace(f"@MASK{number}@", f"[{index + number}:v]") for part in chain]
 
     # Слои снизу вверх. eof_action=pass — кончившийся клип просто перестаёт
     # показываться, а не обрывает всю картинку.

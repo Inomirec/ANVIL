@@ -12,6 +12,25 @@ import { create } from 'zustand'
 
 export type ClipKind = 'video' | 'image' | 'audio' | 'color' | 'text'
 
+/**
+ * Маска клипа: где он виден или где действуют его эффекты.
+ *
+ * Место — в долях картинки клипа: середина ``x``/``y``, размер ``w``/``h``.
+ * ``feather`` — мягкость края, доля меньшей стороны маски.
+ */
+export interface ClipMask {
+  shape: 'rect' | 'ellipse'
+  x: number
+  y: number
+  w: number
+  h: number
+  feather: number
+  invert: boolean
+  /** ``show`` — клип виден только внутри, ``effects`` — эффекты только внутри. */
+  mode: 'show' | 'effects'
+  on: boolean
+}
+
 /** Эффект клипа: какой, включён ли, свёрнут ли в колонке и его настройки. */
 export interface ClipEffect {
   id: string
@@ -62,6 +81,8 @@ export interface ComposeClip {
   rotate?: number
   /** Играть задом наперёд. */
   reverse?: boolean
+  /** Маска — прямоугольник или овал. */
+  mask?: ClipMask | null
   /** Обрезка — сколько отрезать с каждой стороны, в долях картинки. Отрезанное
    *  прозрачно, оставшееся стоит на своём месте. */
   cropLeft?: number
@@ -445,6 +466,24 @@ export function speedOf(clip: ComposeClip): number {
 }
 
 /** Пределы скорости — как у сервера. */
+/** Маска по умолчанию — посередине, в половину картинки. */
+export function newMask(clip: ComposeClip): ClipMask {
+  const effects = (clip.effects ?? []).some((effect) => effect.on)
+  return {
+    shape: 'ellipse',
+    x: 0.5,
+    y: 0.5,
+    w: 0.4,
+    h: 0.4,
+    feather: 0.15,
+    invert: false,
+    // Есть эффекты — маску, скорее всего, кладут, чтобы размыть или
+    // запикселить кусок; нет — чтобы показать только часть картинки.
+    mode: effects ? 'effects' : 'show',
+    on: true,
+  }
+}
+
 /** Обрезан ли клип хоть с одной стороны. */
 export function isCropped(clip: ComposeClip): boolean {
   return Boolean(
@@ -492,6 +531,9 @@ interface State extends Saved {
    *  досчиталась ровная копия после стабилизатора. */
   refresh: number
   bumpRefresh: () => void
+  /** Клип, у которого сейчас двигают маску в окне просмотра, или ``null``. */
+  masking: string | null
+  setMasking: (id: string | null) => void
   /** Клип, который сейчас обрезают в окне просмотра, или ``null``. */
   cropping: string | null
   setCropping: (id: string | null) => void
@@ -914,6 +956,18 @@ export const useCompose = create<State>((set, get) => ({
   })(),
   headWidth: recall('sgh.composeHead', 150),
   refresh: 0,
+  masking: null,
+  setMasking: (id) => {
+    if (id) {
+      const clip = get().findClip(id)?.clip
+      const { playhead } = get()
+      if (clip && (playhead < clip.start || playhead >= clip.start + clip.duration)) {
+        set({ playhead: clip.start + clip.duration / 2 })
+      }
+    }
+    // Двигать маску и обрезать разом нельзя: рамки лежат друг на друге.
+    set({ masking: id, ...(id ? { cropping: null } : {}) })
+  },
   cropping: null,
   setCropping: (id) => {
     if (id) {
@@ -925,7 +979,7 @@ export const useCompose = create<State>((set, get) => ({
         set({ playhead: clip.start + clip.duration / 2 })
       }
     }
-    set({ cropping: id })
+    set({ cropping: id, ...(id ? { masking: null } : {}) })
   },
   bumpRefresh: () => set({ refresh: get().refresh + 1 }),
   missing: [],

@@ -48,6 +48,7 @@ import {
   MAX_SPEED,
   MIN_SPEED,
   isCropped,
+  newMask,
   speedOf,
   type ComposeClip,
   type ComposeTrack,
@@ -1604,6 +1605,14 @@ function ClipMenu({
                 state.select([clipId])
                 state.setCropping(clipId)
               })}
+              {item('Маска…', '', () => {
+                state.select([clipId])
+                if (!clip.mask) {
+                  state.mark()
+                  state.updateClip(clipId, { mask: newMask(clip) })
+                }
+                state.setMasking(clipId)
+              })}
             </>
           )}
           {clip.kind !== 'image' &&
@@ -2172,6 +2181,7 @@ function ClipBox({
             clip.flipV ||
             Boolean(clip.rotate) ||
             isCropped(clip) ||
+            Boolean(clip.mask?.on) ||
             clip.reverse) && (
             <span className="shrink-0 rounded bg-accent/30 px-1 font-mono text-[9px] leading-[13px] text-white">
               fx

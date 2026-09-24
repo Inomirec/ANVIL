@@ -38,6 +38,7 @@ import {
 } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeCropBox } from './ComposeCropBox'
+import { ComposeMaskBox } from './ComposeMaskBox'
 import { ComposeProjects } from './ComposeProjects'
 import { ComposeMissing } from './ComposeMissing'
 import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
@@ -203,6 +204,10 @@ export function ComposeTab() {
   const [missingOpen, setMissingOpen] = useState(false)
   const opened = useCompose((state) => state.opened)
   const refresh = useCompose((state) => state.refresh)
+  const masking = useCompose((state) => state.masking)
+  useEffect(() => {
+    if (masking && !selected.includes(masking)) useCompose.getState().setMasking(null)
+  }, [masking, selected])
   const cropping = useCompose((state) => state.cropping)
   // Выделение ушло с клипа — и обрезка его закончена: рамка обрезки без
   // выделенного клипа только путала бы.
@@ -934,6 +939,8 @@ export function ComposeTab() {
                 {!player.playing && placing && placing.kind !== 'text' && (
                   cropping === placing.id ? (
                     <ComposeCropBox clip={placing} />
+                  ) : masking === placing.id ? (
+                    <ComposeMaskBox clip={placing} />
                   ) : (
                     <ComposeFrameBox clip={placing} grid={grid} />
                   )

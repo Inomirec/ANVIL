@@ -284,6 +284,26 @@ class ClipEffect(ComposeModel):
     params: dict[str, float | str] = Field(default_factory=dict)
 
 
+class ClipMask(ComposeModel):
+    """Маска клипа: где он виден или где действуют его эффекты.
+
+    Место — в долях картинки клипа (уже повёрнутой и отражённой): середина
+    ``x``/``y`` и размер ``w``/``h``. Мягкость края — доля меньшей стороны
+    маски. ``mode``: ``show`` — клип виден только внутри, ``effects`` —
+    эффекты действуют только внутри, остальное как есть.
+    """
+
+    shape: Literal["rect", "ellipse"] = "rect"
+    x: float = Field(default=0.5, ge=-1.0, le=2.0)
+    y: float = Field(default=0.5, ge=-1.0, le=2.0)
+    w: float = Field(default=0.5, gt=0.0, le=3.0)
+    h: float = Field(default=0.5, gt=0.0, le=3.0)
+    feather: float = Field(default=0.1, ge=0.0, le=1.0)
+    invert: bool = False
+    mode: Literal["show", "effects"] = "show"
+    on: bool = True
+
+
 class ComposeClip(ComposeModel):
     """Один кусок на дорожке монтажа.
 
@@ -351,6 +371,10 @@ class ComposeClip(ComposeModel):
     rotate: int = Field(default=0, ge=0, le=270)
     #: Играть задом наперёд — и картинку, и звук.
     reverse: bool = False
+    #: Маска — прямоугольник или овал. ``None`` — маски нет.
+    mask: ClipMask | None = None
+    #: Готовая картинка маски: рисует сервер перед сборкой.
+    mask_image: str = ""
     #: Обрезка: сколько отрезать с каждой стороны, в долях картинки. Отрезанное
     #: становится прозрачным, оставшееся стоит на своём месте и своего размера.
     crop_left: float = Field(default=0.0, ge=0.0, le=0.95)
