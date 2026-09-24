@@ -477,6 +477,16 @@ def main() -> int:
             print("Окно не отвечает. Возможно, программа запущена без окна.")
         return 0
 
+    # Данные живут в папке программы. Прежние версии держали их в профиле
+    # пользователя — переносим один раз, когда старая копия уже закрыта.
+    from app.paths import migrate_legacy
+
+    # Проверочный сервер (--headless) ничего не переносит: он поднимается и
+    # при открытой программе, а переносить её файлы на ходу нельзя.
+    moved = [] if args.headless else migrate_legacy()
+    if moved:
+        logging.getLogger("sgh").info("Данные перенесены в папку программы: %s", ", ".join(moved))
+
     port = find_free_port(args.port, args.host)
     url = f"http://{args.host}:{port}"
 

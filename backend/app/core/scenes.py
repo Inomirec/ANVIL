@@ -27,6 +27,10 @@ from .probe import probe
 
 #: Высота кадра в сетке; ширина — по форме ролика.
 TILE_HEIGHT = 72
+#: Крупные кадры — для растянутой дорожки. Их меньше: сетка иначе вышла бы
+#: огромной картинкой.
+LARGE_HEIGHT = 160
+LARGE_FRAMES = 400
 
 #: Кадров в ряду сетки. Картинка не должна выходить за пределы JPEG.
 COLUMNS = 32
@@ -78,12 +82,12 @@ def cache_dir() -> Path:
     return data_dir() / "scenes"
 
 
-def _key(source: Path) -> str:
+def _key(source: Path, height: int = TILE_HEIGHT) -> str:
     try:
         stat = source.stat()
-        signature = f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{VERSION}"
+        signature = f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{VERSION}|{height}"
     except OSError:
-        signature = f"{source}|{VERSION}"
+        signature = f"{source}|{VERSION}|{height}"
     return hashlib.sha1(signature.encode("utf-8")).hexdigest()
 
 
@@ -106,9 +110,9 @@ def _load(sprite: Path) -> Scenes | None:
         return None
 
 
-def cached(source: Path) -> Scenes | None:
+def cached(source: Path, height: int = TILE_HEIGHT) -> Scenes | None:
     """Готовый ответ, если он уже есть, — без чтения ролика."""
-    return _load(cache_dir() / f"{_key(source)}.jpg")
+    return _load(cache_dir() / f"{_key(source, height)}.jpg")
 
 
 async def _run(args: list[str]) -> tuple[int, str]:
@@ -123,9 +127,14 @@ async def _run(args: list[str]) -> tuple[int, str]:
     return process.returncode or 0, err.decode("utf-8", "replace")
 
 
-async def build(source: Path) -> Scenes | None:
-    """Находит склейки и собирает сетку кадров (или берёт из кэша)."""
-    sprite = cache_dir() / f"{_key(source)}.jpg"
+async def build(source: Path, large: bool = False) -> Scenes | None:
+    """Находит склейки и собирает сетку кадров (или берёт из кэша).
+
+    ``large`` — кадры покрупнее, для растянутой дорожки.
+    """
+    tile_height = LARGE_HEIGHT if large else TILE_HEIGHT
+    limit = LARGE_FRAMES if large else MAX_FRAMES
+    sprite = cache_dir() / f"{_key(source, tile_height)}.jpg"
     ready = _load(sprite)
     if ready:
         return ready
@@ -143,16 +152,16 @@ async def build(source: Path) -> Scenes | None:
         duration = info.duration
         fps = video.fps or 25.0
 
-        tile_width = max(2, int(round(TILE_HEIGHT * video.width / video.height / 2)) * 2)
+        tile_width = max(2, int(round(tile_height * video.width / video.height / 2)) * 2)
         # Кадр внутри сцены — каждые несколько секунд, реже для длинных роликов.
-        step = min(10.0, max(0.5, duration / 200))
+        step = min(10.0, max(0.5, duration / (100 if large else 200)))
 
         work = cache_dir() / f"{sprite.stem}-frames"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True, exist_ok=True)
         try:
             chain = (
-                f"scale={tile_width}:{TILE_HEIGHT}:flags=fast_bilinear,"
+                f"scale={tile_width}:{tile_height}:flags=fast_bilinear,"
                 f"select='eq(n\\,0)+gt(scene\\,{THRESHOLD})+gte(t-prev_selected_t\\,{step:.3f})',"
                 "metadata=print:key=lavfi.scene_score,showinfo"
             )
@@ -164,7 +173,7 @@ async def build(source: Path) -> Scenes | None:
                     "-an", "-sn", "-dn",
                     "-vf", chain,
                     "-fps_mode", "passthrough",
-                    "-frames:v", str(MAX_FRAMES),
+                    "-frames:v", str(limit),
                     "-q:v", "4",
                     str(work / "f%05d.jpg"),
                 ])
@@ -200,8 +209,9 @@ async def build(source: Path) -> Scenes | None:
                     cuts.append(index)
                     last_cut = moment
 
-            rows = (len(times) + COLUMNS - 1) // COLUMNS
-            columns = min(COLUMNS, len(times))
+            wide = COLUMNS // 2 if large else COLUMNS
+            rows = (len(times) + wide - 1) // wide
+            columns = min(wide, len(times))
             code, log = await _run([
                 binaries.ffmpeg(),
                 "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
@@ -215,7 +225,7 @@ async def build(source: Path) -> Scenes | None:
             if code != 0 or not sprite.exists():
                 raise RuntimeError(log.strip()[:200] or "ffmpeg не смог собрать кадры")
 
-            result = Scenes(sprite, tile_width, TILE_HEIGHT, columns, fps, times, cuts)
+            result = Scenes(sprite, tile_width, tile_height, columns, fps, times, cuts)
             sprite.with_suffix(".json").write_text(json.dumps(result.as_json()), encoding="utf-8")
             return result
         finally:

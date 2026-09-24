@@ -153,6 +153,29 @@ def commands(
     return found
 
 
+def points_at(clip: ComposeClip, local: float) -> list[tuple[float, float]]:
+    """Точки своей формы маски в момент ``local``.
+
+    Между ключами с одинаковым числом точек каждая едет плавно, как и
+    остальные показатели; если число точек разное — форма меняется скачком
+    на ключе.
+    """
+    found = [key for key in keys(clip, "mask.points") if key.p]
+    static_points = list(clip.mask.points) if clip.mask is not None else []
+    if not found:
+        return static_points
+    if local <= found[0].t:
+        return list(found[0].p or [])
+    for left, right in zip(found, found[1:]):
+        if local < right.t:
+            a, b = left.p or [], right.p or []
+            if len(a) != len(b):
+                return list(a)
+            e = _ease((local - left.t) / max(right.t - left.t, 1e-3))
+            return [(ax + (bx - ax) * e, ay + (by - ay) * e) for (ax, ay), (bx, by) in zip(a, b)]
+    return list(found[-1].p or [])
+
+
 def _store(clip: ComposeClip, field: str, value: float) -> None:
     """Записать значение показателя в сам клип."""
     if field in _PLAIN:
@@ -179,6 +202,13 @@ def settle(clip: ComposeClip) -> None:
         found = clip.anim[field]
         if not found:
             del clip.anim[field]
+            continue
+        if field == "mask.points":
+            shapes = {tuple((round(x, 5), round(y, 5)) for x, y in (key.p or [])) for key in found}
+            if len(shapes) == 1:
+                if clip.mask is not None:
+                    clip.mask.points = list(found[0].p or [])
+                del clip.anim[field]
             continue
         values = {round(key.v, 6) for key in found}
         if len(values) == 1:

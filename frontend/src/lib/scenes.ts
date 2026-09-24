@@ -13,46 +13,53 @@ const cache = new Map<string, SceneInfo | null>()
 const waiting = new Map<string, Promise<SceneInfo | null>>()
 const listeners = new Set<() => void>()
 
-function load(path: string): Promise<SceneInfo | null> {
-  const known = waiting.get(path)
+/** Ключ кэша: крупные кадры — отдельный ответ сервера. */
+const slot = (path: string, large: boolean) => (large ? `${path}#large` : path)
+
+function load(path: string, large = false): Promise<SceneInfo | null> {
+  const id = slot(path, large)
+  const known = waiting.get(id)
   if (known) return known
   const promise = api
-    .scenes(path)
+    .scenes(path, large)
     .catch(() => null)
     .then((data) => {
-      cache.set(path, data)
-      waiting.delete(path)
+      cache.set(id, data)
+      waiting.delete(id)
       listeners.forEach((listener) => listener())
       return data
     })
-  waiting.set(path, promise)
+  waiting.set(id, promise)
   return promise
 }
 
 /** Сцены файла, если уже известны, — без запроса. */
 export function scenesOf(path: string): SceneInfo | null {
-  return cache.get(path) ?? null
+  return cache.get(path) ?? cache.get(slot(path, true)) ?? null
 }
 
-export function useScenes(path: string | null | undefined, enabled = true): SceneInfo | null {
-  const [info, setInfo] = useState<SceneInfo | null>(() => (path ? cache.get(path) ?? null : null))
+export function useScenes(path: string | null | undefined, enabled = true, large = false): SceneInfo | null {
+  const id = path ? slot(path, large) : ''
+  const [info, setInfo] = useState<SceneInfo | null>(() => (path ? cache.get(id) ?? cache.get(path) ?? null : null))
   useEffect(() => {
     if (!path || !enabled) {
-      setInfo(path ? cache.get(path) ?? null : null)
+      setInfo(path ? cache.get(id) ?? null : null)
       return
     }
-    if (cache.has(path)) {
-      setInfo(cache.get(path) ?? null)
+    if (cache.has(id)) {
+      setInfo(cache.get(id) ?? null)
       return
     }
+    // Пока крупные кадры готовятся, показываем обычные, если они уже есть.
+    if (large && cache.get(path)) setInfo(cache.get(path) ?? null)
     let alive = true
-    void load(path).then((data) => {
-      if (alive) setInfo(data)
+    void load(path, large).then((data) => {
+      if (alive && data) setInfo(data)
     })
     return () => {
       alive = false
     }
-  }, [path, enabled])
+  }, [path, id, enabled, large])
   return info
 }
 

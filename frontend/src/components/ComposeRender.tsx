@@ -32,6 +32,15 @@ export interface RenderPreset extends RenderSettings {
 }
 
 /** Готовые наборы. Их не удалить и не переписать — только взять за основу. */
+/** Название своего набора — не длиннее: оно стоит в строку под кнопкой сборки. */
+export const PRESET_NAME_LIMIT = 28
+
+/** Как называется набор, с которым совпадают настройки, — или «Свои настройки». */
+export function presetName(value: RenderSettings, mine: RenderPreset[]): string {
+  const found = [...BUILTIN_PRESETS, ...mine].find((preset) => sameAs(value, preset))
+  return found ? found.label.slice(0, PRESET_NAME_LIMIT) : 'Свои настройки'
+}
+
 export const BUILTIN_PRESETS: RenderPreset[] = [
   {
     id: 'av1-best',
@@ -73,7 +82,7 @@ function settingsOf(preset: RenderPreset): RenderSettings {
  * кодеки и их настройки, а чем крутить вес, человек решает отдельно. Иначе
  * одно переключение снимало подсветку, хотя по сути ничего не менялось.
  */
-function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
+export function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
   const settings = settingsOf(preset)
   return (Object.keys(settings) as (keyof RenderSettings)[])
     .filter((key) => key !== 'bitrateKbps')
@@ -350,6 +359,7 @@ export function ComposeRenderSettings({
               autoFocus
               className="field min-w-0 flex-1 py-1.5 text-[12.5px]"
               value={renamed}
+              maxLength={PRESET_NAME_LIMIT}
               onChange={(event) => setRenamed(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') setRenaming(null)
@@ -594,6 +604,7 @@ export function ComposeRenderSettings({
             <input
               className="field"
               value={name}
+              maxLength={PRESET_NAME_LIMIT}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => event.key === 'Enter' && void addMine()}
               placeholder="Например: для архива"

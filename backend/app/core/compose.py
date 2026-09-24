@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import math
 import time
 from pathlib import Path
@@ -578,6 +579,54 @@ async def _render_mask(clip: ComposeClip) -> Path:
     return target
 
 
+async def _render_mask_sequence(clip: ComposeClip, fps: int) -> Path:
+    """Маска своей формы с меняющимися точками — роликом на весь клип.
+
+    Кадры рисует программа (``effects.sequence_frame``) и отдаёт ffmpeg
+    сырыми байтами; он складывает их в маленький ролик без потерь. Лежит в
+    кэше по форме, ключам и длине клипа: пока их не трогали, второй раз не
+    рисуется.
+    """
+    size = effects.sequence_size(clip)
+    frames = max(1, int(math.ceil(clip.duration * fps)) + 1)
+    assert clip.mask is not None
+    stamp = "|".join([
+        clip.mask.model_dump_json(),
+        json.dumps({field: [key.model_dump() for key in keys] for field, keys in sorted(clip.anim.items())
+                    if field.startswith("mask.")}),
+        f"{size}|{frames}|{fps}",
+    ])
+    folder = paths.data_dir() / "masks"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"q-{hashlib.sha1(stamp.encode('utf-8')).hexdigest()[:20]}.mkv"
+    if target.exists():
+        return target
+    partial = target.with_suffix(".part.mkv")
+    process = await asyncio.create_subprocess_exec(
+        binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{size[0]}x{size[1]}", "-r", str(fps),
+        "-i", "-", "-c:v", "ffv1", str(partial),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=binaries.CREATE_NO_WINDOW,
+        env=binaries.subprocess_env(),
+    )
+    assert process.stdin is not None
+    for index in range(frames):
+        # Рисование — в отдельном потоке: на длинном клипе это секунды, а
+        # сервер тем временем должен отвечать.
+        frame = await asyncio.to_thread(effects.sequence_frame, clip, index / fps, size)
+        process.stdin.write(frame)
+        await process.stdin.drain()
+    process.stdin.close()
+    _, err = await process.communicate()
+    if process.returncode != 0 or not partial.exists():
+        raise RuntimeError("Не удалось нарисовать маску: " + err.decode("utf-8", "replace").strip()[:300])
+    partial.replace(target)
+    return target
+
+
 async def prepare_fills(
     project: ComposeProject, width: int | None = None, height: int | None = None
 ) -> None:
@@ -595,7 +644,10 @@ async def prepare_fills(
                 clip.fill_image = str(await _render_fill(clip, frame_w, frame_h))
             # Маски — тоже картинки, рисуются здесь же и по той же причине.
             if effects.has_mask(clip) and clip.source_width:
-                clip.mask_image = str(await _render_mask(clip))
+                if effects.points_animated(clip):
+                    clip.mask_image = str(await _render_mask_sequence(clip, project.fps))
+                else:
+                    clip.mask_image = str(await _render_mask(clip))
 
 
 def frame_alpha(clip: ComposeClip, moment: float) -> float:
@@ -751,7 +803,7 @@ def build_segment(
 
     index = 0
     #: Картинки масок: их входы идут после всех клипов.
-    masks: list[str] = []
+    masks: list[tuple[str, float]] = []
     for _, clip in clips_at(project, at, span):
         seek, take, offset = _window(clip, at, span)
         if take <= 0:
@@ -807,22 +859,33 @@ def build_segment(
             # маски свой вход, а её номер станет известен, когда соберутся все
             # клипы, поэтому пока стоит метка, её заменят в конце.
             pre_label = f"[{index}:v]"
+            # Окну программы большой кадр ни к чему: уменьшаем ролик до
+            # размера просмотра сразу, до масок и эффектов, — иначе они
+            # считались бы на полном 1080p и просмотр не успевал.
+            shrink = ""
+            if preview and clip.kind in {"video", "image"}:
+                factor = effects.preview_factor(clip, width, height)
+                if factor < 0.9:
+                    clip = effects.scaled_for_preview(clip, factor)
+                    # Размер — числами, теми же, что у копии клипа: по ним
+                    # считается маска, и разойтись им нельзя ни на пиксель.
+                    shrink = f"scale={clip.source_width}:{clip.source_height}:flags=bilinear,"
             timing = effects.Timing(
                 skip=max(0.0, at - clip.start), take=take, fps=fps, tag=f"k{index}"
             )
             if clip.kind in {"video", "image"} and effects.needs_graph(clip):
                 shape = ""
                 if effects.has_mask(clip) and clip.mask_image:
-                    masks.append(clip.mask_image)
+                    masks.append((clip.mask_image, max(0.0, at - clip.start)))
                     shape = f"@MASK{len(masks) - 1}@"
                 chain.append(effects.clip_graph(
-                    clip, pre_label, f"[pre{index}]", f"k{index}",
+                    clip, pre_label + shrink, f"[pre{index}]", f"k{index}",
                     shape=shape, preview=preview, timing=timing,
                 ))
                 pre_label = f"[pre{index}]"
                 pre_chain = ""
             else:
-                pre_chain = effects.video_chain(clip, preview=preview, timing=timing)
+                pre_chain = shrink + effects.video_chain(clip, preview=preview, timing=timing)
             fill = effects.blurred_fill(clip) if clip.kind in {"video", "image"} else None
             if fill:
                 # Размытый фон: под клипом он сам же, растянутый на всё своё
@@ -868,8 +931,12 @@ def build_segment(
 
     # Входы масок — после входов клипов. Картинка маски повторяется весь
     # отрезок: клип сам решает, сколько её взять.
-    for number, image in enumerate(masks):
-        inputs += ["-loop", "1", "-t", f"{span:.3f}", "-i", image]
+    for number, (image, skip) in enumerate(masks):
+        if image.endswith(".mkv"):
+            # Маска-ролик: с того места клипа, с которого читается сам клип.
+            inputs += ["-ss", f"{skip:.4f}", "-t", f"{span:.3f}", "-i", image]
+        else:
+            inputs += ["-loop", "1", "-t", f"{span:.3f}", "-i", image]
         chain = [part.replace(f"@MASK{number}@", f"[{index + number}:v]") for part in chain]
 
     # Слои снизу вверх. eof_action=pass — кончившийся клип просто перестаёт
@@ -1021,7 +1088,9 @@ async def prepare(
                 # Готовому файлу ждать приходится: см. ``stabilize_all``.
                 ready = stabilize.ready(str(path), steady)
                 clip.stable_source = str(ready) if ready else ""
-            if effects.needs_size(clip) and not clip.source_width:
+            # Размер файла нужен и маскам, и уменьшению для просмотра —
+            # узнаём у всех роликов и картинок (ответ ffprobe в кэше).
+            if clip.kind in {"video", "image"} and not clip.source_width:
                 try:
                     info = await probe(path)
                     stream = info.video

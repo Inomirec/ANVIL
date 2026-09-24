@@ -20,7 +20,14 @@ import type { ClipMask, ComposeClip } from './composeStore'
 export interface AnimKey {
   t: number
   v: number
+  /** Точки своей формы маски — у показателя `mask.points` вместо числа. */
+  p?: [number, number][]
 }
+
+/** Значение показателя: число, а у точек своей формы — список точек. */
+export type AnimValue = number | [number, number][]
+
+export const POINTS = 'mask.points'
 
 export type Anim = Record<string, AnimKey[]>
 
@@ -50,7 +57,11 @@ export function groupsOf(clip: ComposeClip): AnimGroup[] {
     groups.push({ id: 'size', label: 'Размер', fields: ['size', 'sizeY'] })
   }
   if (visual) groups.push({ id: 'crop', label: 'Обрезка', fields: CROP_FIELDS, auto: true })
-  if (visual && clip.mask) groups.push({ id: 'mask', label: 'Маска', fields: MASK_FIELDS, auto: true })
+  if (visual && clip.mask) {
+    // У своей формы по ключам меняются и сами точки — форма может меняться.
+    const fields = clip.mask.shape === 'custom' ? [...MASK_FIELDS, POINTS] : MASK_FIELDS
+    groups.push({ id: 'mask', label: 'Маска', fields, auto: true })
+  }
   for (const effect of clip.effects ?? []) {
     const kind = effectKind(effect.type)
     for (const param of kind?.params ?? []) {
@@ -118,6 +129,32 @@ export function valueAt(clip: ComposeClip, field: string, local: number): number
   return value
 }
 
+/** Точки своей формы маски через `local` секунд — плавно между ключами. */
+export function pointsAt(clip: ComposeClip, local: number): [number, number][] {
+  const keys = sorted(clip, POINTS).filter((key) => key.p)
+  if (!keys.length) return clip.mask?.points ?? []
+  if (local <= keys[0].t) return keys[0].p!
+  for (let index = 0; index < keys.length - 1; index++) {
+    const left = keys[index]
+    const right = keys[index + 1]
+    if (local < right.t) {
+      const a = left.p!
+      const b = right.p!
+      // Число точек разное — форма меняется скачком на ключе.
+      if (a.length !== b.length) return a
+      const s = (local - left.t) / Math.max(right.t - left.t, 1e-3)
+      const e = s * s * (3 - 2 * s)
+      return a.map(([x, y], i) => [x + (b[i][0] - x) * e, y + (b[i][1] - y) * e])
+    }
+  }
+  return keys[keys.length - 1].p!
+}
+
+/** Значение показателя под иглой — число или точки. */
+export function anyAt(clip: ComposeClip, field: string, local: number): AnimValue {
+  return field === POINTS ? pointsAt(clip, local) : valueAt(clip, field, local)
+}
+
 export function isKeyed(clip: ComposeClip, group: AnimGroup): boolean {
   return group.fields.some((field) => (clip.anim?.[field]?.length ?? 0) > 0)
 }
@@ -143,12 +180,13 @@ export function keyTimes(clip: ComposeClip, group: AnimGroup): number[] {
 }
 
 /** Клип с записанными в него значениями — место, обрезка, маска, эффекты. */
-export function withValues(clip: ComposeClip, values: Record<string, number>): ComposeClip {
+export function withValues(clip: ComposeClip, values: Record<string, AnimValue>): ComposeClip {
   let next: ComposeClip = { ...clip }
   for (const [field, value] of Object.entries(values)) {
     if (field.startsWith('mask.')) {
       if (next.mask) next = { ...next, mask: { ...next.mask, [field.slice(5)]: value } }
     } else if (field.startsWith('fx.')) {
+      if (typeof value !== 'number') continue
       const [, id, param] = field.split('.')
       next = {
         ...next,
@@ -164,8 +202,8 @@ export function withValues(clip: ComposeClip, values: Record<string, number>): C
 }
 
 /** Значения показателей группы под иглой. */
-export function groupValues(clip: ComposeClip, group: AnimGroup, local: number): Record<string, number> {
-  return Object.fromEntries(group.fields.map((field) => [field, valueAt(clip, field, local)]))
+export function groupValues(clip: ComposeClip, group: AnimGroup, local: number): Record<string, AnimValue> {
+  return Object.fromEntries(group.fields.map((field) => [field, anyAt(clip, field, local)]))
 }
 
 /**
@@ -175,23 +213,24 @@ export function groupValues(clip: ComposeClip, group: AnimGroup, local: number):
 export function shownAt(clip: ComposeClip, playhead: number): ComposeClip {
   if (!hasKeys(clip)) return clip
   const local = playhead - clip.start
-  const values: Record<string, number> = {}
+  const values: Record<string, AnimValue> = {}
   for (const [field, keys] of Object.entries(clip.anim ?? {})) {
-    if (keys.length) values[field] = valueAt(clip, field, local)
+    if (keys.length) values[field] = anyAt(clip, field, local)
   }
   return withValues(clip, values)
 }
 
 /** Ключи с поставленным ключом группы в момент `local` (или заменённым рядом). */
-export function withKey(clip: ComposeClip, group: AnimGroup, local: number, values: Record<string, number>): Anim {
+export function withKey(clip: ComposeClip, group: AnimGroup, local: number, values: Record<string, AnimValue>): Anim {
   const anim: Anim = { ...(clip.anim ?? {}) }
   const times = keyTimes(clip, group)
   const near = times.find((t) => Math.abs(t - local) < KEY_NEAR)
   const at = near ?? local
   for (const field of group.fields) {
-    const value = values[field] ?? valueAt(clip, field, local)
+    const value = values[field] ?? anyAt(clip, field, local)
     const rest = (anim[field] ?? []).filter((key) => Math.abs(key.t - at) >= KEY_NEAR / 2)
-    anim[field] = [...rest, { t: at, v: value }].sort((a, b) => a.t - b.t)
+    const key: AnimKey = Array.isArray(value) ? { t: at, v: 0, p: value } : { t: at, v: value }
+    anim[field] = [...rest, key].sort((a, b) => a.t - b.t)
   }
   return anim
 }

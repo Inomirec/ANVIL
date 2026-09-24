@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { clipRect, useCompose, type ClipMask, type ComposeClip } from '../composeStore'
+import { POINTS } from '../composeAnim'
 
 /**
  * Маска клипа в окне просмотра: её двигают и растягивают прямо по кадру.
@@ -93,14 +94,15 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
         )
         absolute[current.index] = [atX, atY]
         const { box: frame, inside } = frameOf(absolute)
+        // Точки — тоже показатель маски: у маски с ключами правка ляжет в
+        // ключ под иглой, и форма будет меняться во времени.
         state.applyValues(clip.id, {
           'mask.x': frame.x,
           'mask.y': frame.y,
           'mask.w': frame.w,
           'mask.h': frame.h,
+          [POINTS]: inside,
         })
-        const now = state.findClip(clip.id)?.clip.mask
-        if (now) state.updateClip(clip.id, { mask: { ...now, points: inside } })
         return
       }
       // Края маски в долях картинки; двигается та сторона, за которую взяли.
@@ -183,14 +185,19 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
           const state = useCompose.getState()
           state.mark()
           const { box: frame, inside } = frameOf(draft)
+          // Нарисованная форма — во всех ключах маски: иначе до первого
+          // ключа или после последнего осталась бы прежняя.
+          const found = state.findClip(clip.id)?.clip
+          if (found?.anim?.[POINTS]?.length) {
+            state.updateClip(clip.id, { anim: { ...found.anim, [POINTS]: [] } })
+          }
           state.applyValues(clip.id, {
             'mask.x': frame.x,
             'mask.y': frame.y,
             'mask.w': frame.w,
             'mask.h': frame.h,
+            [POINTS]: inside,
           })
-          const now = state.findClip(clip.id)?.clip.mask
-          if (now) state.updateClip(clip.id, { mask: { ...now, points: inside } })
           setDraft([])
           return
         }
@@ -271,7 +278,9 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
               <div
                 key={index}
                 title="Точка формы — тяните, чтобы поправить"
-                className="absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full border border-base bg-white"
+                // Над ручками рамки: крайние точки формы всегда лежат на её
+                // краю, и иначе точку перехватывала ручка размера.
+                className="absolute z-10 h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full border border-base bg-white"
                 style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
                 onMouseDown={(event) => {
                   if (!begin(event)) return

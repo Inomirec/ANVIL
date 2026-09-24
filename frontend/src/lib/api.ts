@@ -139,8 +139,8 @@ export const api = {
     ),
   filmstrip: (path: string) =>
     request<FilmstripInfo>(`/api/library/filmstrip?path=${encodeURIComponent(path)}`),
-  scenes: (path: string) =>
-    request<SceneInfo>(`/api/library/scenes?path=${encodeURIComponent(path)}`),
+  scenes: (path: string, large = false) =>
+    request<SceneInfo>(`/api/library/scenes?path=${encodeURIComponent(path)}${large ? '&large=1' : ''}`),
   deleteFile: (path: string) => post<{ ok: boolean }>('/api/library/delete', { path }),
   renameFile: (path: string, newName: string) =>
     post<{ ok: boolean; path: string }>('/api/library/rename', { path, new_name: newName }),

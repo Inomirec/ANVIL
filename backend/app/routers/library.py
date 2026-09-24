@@ -236,7 +236,7 @@ async def video_filmstrip_image(path: str, frames: int = filmstrip.DEFAULT_FRAME
 
 
 @router.get("/scenes")
-async def video_scenes(path: str) -> dict[str, Any]:
+async def video_scenes(path: str, large: bool = False) -> dict[str, Any]:
     """Склейки ролика и кадры по сценам — для ленты на клипе и шага по сценам."""
     try:
         target = fsutil.safe_path(path)
@@ -245,7 +245,7 @@ async def video_scenes(path: str) -> dict[str, Any]:
     if fsutil.media_kind(target) != "video":
         raise HTTPException(400, "Сцены есть только у видео")
     try:
-        found = await scenes.build(target)
+        found = await scenes.build(target, large)
     except (RuntimeError, OSError) as exc:
         raise HTTPException(500, f"Не удалось найти сцены: {exc}") from exc
     if not found:
@@ -253,18 +253,18 @@ async def video_scenes(path: str) -> dict[str, Any]:
     return {
         **found.as_json(),
         # Имя картинки меняется вместе с файлом — старую браузер не возьмёт.
-        "url": f"/api/library/scenes/image?path={quote(str(target))}&v={found.sprite.stem[:12]}",
+        "url": f"/api/library/scenes/image?path={quote(str(target))}&large={int(large)}&v={found.sprite.stem[:12]}",
     }
 
 
 @router.get("/scenes/image")
-async def video_scenes_image(path: str) -> FileResponse:
+async def video_scenes_image(path: str, large: int = 0) -> FileResponse:
     """Сетка кадров по сценам одной картинкой."""
     try:
         target = fsutil.safe_path(path)
     except (PermissionError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
-    found = scenes.cached(target)
+    found = scenes.cached(target, scenes.LARGE_HEIGHT if large else scenes.TILE_HEIGHT)
     if not found:
         raise HTTPException(404, "Кадры ещё не готовы")
     return FileResponse(

@@ -1,8 +1,13 @@
 r"""Пути приложения: где лежит конфиг, кэш превью и куда складывать результат.
 
-Приложение задумано портативным: если рядом с исполняемым файлом есть папка
-``data``, всё хранится там (удобно носить на флешке). Иначе используется
-стандартный ``%APPDATA%\SiGameHelper``.
+Программа переносная: настройки, проекты, журнал и кэш лежат в папке ``data``
+рядом с самой программой. Удалить программу — значит удалить одну папку,
+в системе ничего не остаётся. ``%APPDATA%\SiGameHelper`` — только запасной
+путь, если в папку программы писать нельзя, и старое место: оттуда данные
+один раз переезжают сами (``migrate_legacy``).
+
+``SGH_DATA_DIR`` в окружении задаёт папку явно — так проверочный сервер
+живёт со своими настройками и не трогает настоящие.
 """
 
 from __future__ import annotations
@@ -31,16 +36,79 @@ def bundle_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-def data_dir() -> Path:
-    """Каталог для конфига, логов и кэша превью."""
-    portable = _project_root() / "data"
-    if portable.exists():
-        return portable
+def _writable(folder: Path) -> bool:
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / ".write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
 
+
+def legacy_dir() -> Path:
+    """Где данные лежали раньше — в профиле пользователя."""
     base = os.environ.get("APPDATA") or os.environ.get("XDG_CONFIG_HOME")
     if base:
         return Path(base) / APP_NAME
     return Path.home() / f".{APP_NAME.lower()}"
+
+
+_chosen: Path | None = None
+
+
+def data_dir() -> Path:
+    """Каталог для конфига, проектов, логов и кэша."""
+    global _chosen
+    override = os.environ.get("SGH_DATA_DIR")
+    if override:
+        return Path(override)
+    if _chosen is None:
+        portable = _project_root() / "data"
+        _chosen = portable if portable.exists() or _writable(portable) else legacy_dir()
+    return _chosen
+
+
+#: Что из старой папки не переносим: запись установщика о том, куда он
+#: поставил программу, — её читает сам установщик, и живёт она там.
+_KEEP_IN_LEGACY = {"install.txt"}
+
+
+def migrate_legacy() -> list[str]:
+    """Перенести данные из старого места в папку программы — один раз.
+
+    Переносим, только если в папке программы ещё нет своих настроек, а в
+    старом месте они есть. Занятые файлы пропускаем: их перенесёт следующий
+    запуск. Возвращает имена перенесённого — для журнала.
+    """
+    if os.environ.get("SGH_DATA_DIR"):
+        return []
+    target = data_dir()
+    old = legacy_dir()
+    if target == old or not (old / "config.json").exists() or (target / "config.json").exists():
+        return []
+    import shutil
+
+    moved: list[str] = []
+    target.mkdir(parents=True, exist_ok=True)
+    for item in sorted(old.iterdir(), key=lambda path: path.name != "config.json"):
+        if item.name in _KEEP_IN_LEGACY:
+            continue
+        destination = target / item.name
+        try:
+            if destination.exists():
+                if item.is_dir() and destination.is_dir():
+                    for child in item.iterdir():
+                        if not (destination / child.name).exists():
+                            shutil.move(str(child), str(destination / child.name))
+                    shutil.rmtree(item, ignore_errors=True)
+                continue
+            shutil.move(str(item), str(destination))
+            moved.append(item.name)
+        except OSError:
+            continue
+    return moved
 
 
 def ensure_dirs() -> None:

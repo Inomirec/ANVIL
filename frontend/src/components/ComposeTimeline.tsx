@@ -29,7 +29,8 @@ import {
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
 import { cutTimes, frameCode, scenesOf, useScenes } from '../lib/scenes'
-import { groupOf, hasKeys, hasPlaceKeys, keyTimes } from '../composeAnim'
+import { groupOf, hasKeys, hasPlaceKeys, KEY_NEAR, keyTimes } from '../composeAnim'
+import { KeyBar } from './ComposeAnimUi'
 import { SceneStrip } from './SceneStrip'
 import {
   clipEdges,
@@ -226,6 +227,8 @@ export function ComposeTimeline({
   // нет — она заняла бы место у самого начала таймлайна, где лежат клипы.
   // Меню дорожки бывает двух видов: по полотну — что положить в это место,
   // по колонке с названием — что сделать с самой дорожкой.
+  /** Что копировали последним — ключи или клипы: от этого зависит Ctrl+V. */
+  const lastCopy = useRef<'keys' | 'clips'>('clips')
   const [trackMenu, setTrackMenu] = useState<{
     x: number
     y: number
@@ -534,6 +537,7 @@ export function ComposeTimeline({
         // Мышь не сдвинулась — это было обычное нажатие: ставим иглу.
         const state = useCompose.getState()
         state.select([])
+        state.selectKeys(null)
         state.setPlayhead(
           snap(current.fromAt, clipEdges(state.tracks), PLAYHEAD_SNAP / state.scale),
         )
@@ -622,10 +626,26 @@ export function ComposeTimeline({
           // сюда не годится: в нём был бы текст, а не кусок монтажа.
           event.preventDefault()
           const state = useCompose.getState()
+          // Выбраны ромбики ключей — копируем ключи, а не клипы.
+          if (state.selectedKeys) {
+            const taken = state.copyKeys()
+            lastCopy.current = 'keys'
+            if (taken) toast(`Скопировано ключей: ${taken}`, 'info')
+            return
+          }
+          lastCopy.current = 'clips'
           const taken = state.copyClips(state.selected)
           if (taken) toast(`Скопировано: ${taken} ${plural(taken, ['клип', 'клипа', 'клипов'])}`, 'info')
         } else if (key === 'v' || key === 'м') {
           event.preventDefault()
+          // Последними копировали ключи — вставляем их от иглы в настройку
+          // с включёнными часиками.
+          if (lastCopy.current === 'keys') {
+            if (!useCompose.getState().pasteKeys()) {
+              toast('Ключи вставляются в ту же настройку: включите её часики у выбранного клипа', 'info')
+            }
+            return
+          }
           useCompose.getState().pasteClips()
         }
         return
@@ -655,8 +675,29 @@ export function ComposeTimeline({
         event.preventDefault()
         if (player.playing) player.stop()
         else player.start()
+      } else if (key === 'k' || key === 'л') {
+        // K — ключ под иглой у настройки с включёнными часиками, Shift+K —
+        // убрать ключ под иглой.
+        event.preventDefault()
+        const state = useCompose.getState()
+        const focus = state.animFocus
+        const clip = state.tracks
+          .flatMap((track) => track.clips)
+          .find((item) => state.selected.includes(item.id) && focus && groupOf(item, focus))
+        if (!clip || !focus) {
+          toast('Сначала включите часики у настройки выбранного клипа', 'info')
+          return
+        }
+        if (event.shiftKey) state.unkeyHere(clip.id, focus)
+        else state.keyHere(clip.id, focus)
       } else if (event.key === 'Delete') {
-        const ids = useCompose.getState().selected
+        const state = useCompose.getState()
+        // Выбраны ромбики — удаляются они, а не клипы.
+        if (state.selectedKeys) {
+          state.deleteKeys()
+          return
+        }
+        const ids = state.selected
         if (ids.length) removeClips(ids)
       }
     }
@@ -806,6 +847,7 @@ export function ComposeTimeline({
           >
             <Type size={14} />
           </IconButton>
+          <KeyBar />
 
           {selected.length > 1 && (
             <span className="ml-1 shrink-0 text-[11px] text-accent-soft">
@@ -1071,6 +1113,9 @@ export function ComposeTimeline({
                         ? state.selected
                         : [clip.id]
                     select(ids)
+                    // Взяли клип — выбор ромбиков снимается: Delete и
+                    // Ctrl+C дальше относятся к клипам.
+                    state.selectKeys(null)
                     const at = secondsAt(event.clientX)
                     if (where === 'move') {
                       drag.current = {
@@ -1693,6 +1738,16 @@ function ClipMenu({
         <>
           <div className="my-1 h-px bg-line-soft" />
           <EffectsSubmenu clipId={clipId} onClose={onClose} />
+          {item('Копировать эффекты', '', () => {
+            const taken = state.copyEffects(clipId)
+            if (!taken) useStore.getState().toast('У клипа нет эффектов', 'info')
+          }, !(clip.effects?.length || state.partnerOf(clipId)?.effects?.length))}
+          {item(
+            many ? `Вставить эффекты (${state.selected.length})` : 'Вставить эффекты',
+            '',
+            () => state.pasteEffects(state.selected.length ? state.selected : [clipId]),
+            !state.hasEffectCopy(),
+          )}
           {clip.kind !== 'audio' && (
             <>
               {item('Отразить по горизонтали', '', () => state.flipClips(pick(state, clipId), 'h'))}
@@ -2100,12 +2155,59 @@ function ClipBox({
   const detailed = box > 40
   // Кадры по сценам: первая плитка каждой сцены — её первый кадр, ровно
   // там, где на клипе склейка.
-  const scenes = useScenes(clip.source, detailed && clip.kind === 'video')
+  // Растянутой дорожке — кадры покрупнее: мелкие на ней мылятся.
+  const scenes = useScenes(clip.source, detailed && clip.kind === 'video', height > 110)
   const peaks = useWave(clip.source, detailed && sound, clip.sourceDuration || clip.duration)
   const thumb = `/api/library/thumbnail?path=${encodeURIComponent(clip.source)}`
   // Чьи ключи показывать — группа, выбранная в колонке справа.
   const focus = useCompose((state) => state.animFocus)
   const focusGroup = groupOf(clip, focus)
+  const chosenKeys = useCompose((state) => state.selectedKeys)
+
+  /**
+   * Ромбик ключа: нажатие выбирает его (Shift — добавляет к выбранным) и
+   * ставит иглу на ключ; протяжка сдвигает выбранные ключи по времени —
+   * по кадрам проекта.
+   */
+  const grabKey = (event: React.MouseEvent, t: number) => {
+    if (event.button !== 0 || !focusGroup) return
+    event.stopPropagation()
+    event.preventDefault()
+    const state = useCompose.getState()
+    const current = state.selectedKeys
+    const same = current?.clipId === clip.id && current.group === focusGroup.id
+    const has = same && current.times.some((time) => Math.abs(time - t) < KEY_NEAR / 2)
+    let times = event.shiftKey
+      ? has
+        ? current!.times.filter((time) => Math.abs(time - t) >= KEY_NEAR / 2)
+        : [...(same ? current!.times : []), t]
+      : has
+        ? current!.times
+        : [t]
+    state.selectKeys({ clipId: clip.id, group: focusGroup.id, times })
+    state.mark()
+    const fromX = event.clientX
+    const frame = 1 / (state.fps || 30)
+    let applied = 0
+    const move = (moved: MouseEvent) => {
+      const now = useCompose.getState()
+      const wanted = Math.round((moved.clientX - fromX) / now.scale / frame) * frame
+      const step = wanted - applied
+      if (Math.abs(step) < frame / 2) return
+      now.moveKeys(clip.id, focusGroup.id, times, step)
+      times = times.map((time) => time + step)
+      applied = wanted
+      now.selectKeys({ clipId: clip.id, group: focusGroup.id, times })
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      // Не сдвинули — это было нажатие: игла встаёт на ключ.
+      if (!applied && !event.shiftKey) useCompose.getState().setPlayhead(clip.start + t)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
 
   const fadeInWidth = (clip.fadeIn / clip.duration) * box
   const fadeOutWidth = (clip.fadeOut / clip.duration) * box
@@ -2175,19 +2277,24 @@ function ClipBox({
       {active && focusGroup &&
         keyTimes(clip, focusGroup)
           .filter((t) => t >= -1e-3 && t <= clip.duration + 1e-3)
-          .map((t) => (
-            <button
-              key={t}
-              type="button"
-              title={`${focusGroup.label}: ключ на ${t.toFixed(2)} с от начала клипа — нажмите, чтобы перейти`}
-              onMouseDown={(event) => {
-                event.stopPropagation()
-                useCompose.getState().setPlayhead(clip.start + t)
-              }}
-              className="absolute bottom-0.5 z-10 h-3 w-3 -translate-x-1/2 rotate-45 border border-base bg-accent-soft hover:bg-white"
-              style={{ left: Math.min(Math.max(t * scale, 6), box - 6) }}
-            />
-          ))}
+          .map((t) => {
+            const chosen =
+              chosenKeys?.clipId === clip.id &&
+              chosenKeys.group === focusGroup.id &&
+              chosenKeys.times.some((time) => Math.abs(time - t) < KEY_NEAR / 2)
+            return (
+              <button
+                key={t}
+                type="button"
+                title={`${focusGroup.label}: ключ на ${t.toFixed(2)} с. Нажатие — выбрать и поставить иглу, Shift — добавить к выбранным, протяжка — сдвинуть. Delete — удалить, Ctrl+C / Ctrl+V — скопировать и вставить от иглы`}
+                onMouseDown={(event) => grabKey(event, t)}
+                className={`absolute bottom-0.5 z-10 h-3 w-3 -translate-x-1/2 rotate-45 border hover:bg-white ${
+                  chosen ? 'border-accent bg-white ring-2 ring-accent/60' : 'border-base bg-accent-soft'
+                }`}
+                style={{ left: Math.min(Math.max(t * scale, 6), box - 6) }}
+              />
+            )
+          })}
       {lost && (
         <div
           className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(239,68,68,0.35)_0_6px,transparent_6px_12px)]"

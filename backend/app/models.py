@@ -293,7 +293,9 @@ class AnimKey(ComposeModel):
     """
 
     t: float
-    v: float
+    v: float = 0.0
+    #: Точки своей формы маски — у показателя ``mask.points`` вместо числа.
+    p: list[tuple[float, float]] | None = None
 
 
 class ClipMask(ComposeModel):

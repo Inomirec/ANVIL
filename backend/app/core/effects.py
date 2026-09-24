@@ -369,6 +369,44 @@ def stabilizer(clip: ComposeClip) -> "stabilize.Settings | None":
     return None
 
 
+def preview_factor(clip: ComposeClip, width: int, height: int) -> float:
+    """Во сколько раз можно уменьшить файл для окна программы.
+
+    Столько, чтобы клип в кадре просмотра всё ещё был не мельче своего
+    места: у крупного (увеличенного) клипа запас больше.
+    """
+    if not clip.source_width or not clip.source_height:
+        return 1.0
+    grow = max(1.0, clip.size, clip.size_y, *(key.v for key in clip.anim.get("size", [])))
+    side = max(width, height) * grow
+    return min(1.0, side / max(clip.source_width, clip.source_height))
+
+
+def scaled_for_preview(clip: ComposeClip, factor: float) -> ComposeClip:
+    """Копия клипа для уменьшенного файла: всё, что задано в пикселях файла.
+
+    Размер файла (им считаются маска и водяной знак), сила размытия и
+    размер квадратов пикселизации — иначе на уменьшенном файле размытие
+    вышло бы сильнее, а квадраты крупнее, чем в готовом файле.
+    """
+    copy = clip.model_copy(deep=True)
+    copy.source_width = max(2, int(clip.source_width * factor / 2) * 2)
+    copy.source_height = max(2, int(clip.source_height * factor / 2) * 2)
+    pixel = {"blur": "strength", "pixelate": "size"}
+    for effect in copy.effects:
+        param = pixel.get(effect.type)
+        if not param:
+            continue
+        try:
+            effect.params[param] = float(effect.params.get(param, 0)) * factor
+        except (TypeError, ValueError):
+            pass
+        field = f"fx.{effect.id}.{param}"
+        for key in copy.anim.get(field, []):
+            key.v *= factor
+    return copy
+
+
 def has_mask(clip: ComposeClip) -> bool:
     return clip.kind in {"video", "image"} and clip.mask is not None and clip.mask.on
 
@@ -439,12 +477,72 @@ def shape_render(clip: ComposeClip) -> tuple[tuple[int, int], str, float]:
                 f"*lt(X+0.5,{(xj - xi) / (yj - yi):.5f}*(Y+0.5-{yi:.2f})+{xi:.2f})"
             )
         inside = f"mod({'+'.join(terms) or '0'},2)"
-        return (full_w, full_h), f"255*{inside}", (soft / 2 if m.feather > 0 else 0.0)
+        return (full_w, full_h), f"255*{inside}", (soft / 2.5 if m.feather > 0 else 0.0)
     if m.shape == "ellipse":
         distance = f"(hypot((X-{cx:.2f})/{hw:.2f},(Y-{cy:.2f})/{hh:.2f})-1)*{min(hw, hh):.2f}"
     else:
         distance = f"max(abs(X-{cx:.2f})-{hw:.2f},abs(Y-{cy:.2f})-{hh:.2f})"
-    return (full_w, full_h), f"255*clip(0.5-({distance})/{soft:.2f},0,1)", 0.0
+    # Мягкий край — только снаружи формы: внутри маска видна целиком.
+    return (full_w, full_h), f"255*clip(1-max({distance},0)/{soft:.2f},0,1)", 0.0
+
+
+def points_animated(clip: ComposeClip) -> bool:
+    """Своя форма, у которой по ключам меняются сами точки."""
+    return (
+        has_mask(clip)
+        and clip.mask is not None
+        and clip.mask.shape == "custom"
+        and anim.animated(clip, "mask.points")
+    )
+
+
+#: Длинная сторона кадров маски со своей формой, меняющейся по ключам. Их
+#: рисует сама программа, кадр за кадром, — крупнее незачем: край потом
+#: всё равно размывается и растягивается до размера клипа.
+SEQUENCE_SIDE = 480
+
+
+def sequence_size(clip: ComposeClip) -> tuple[int, int]:
+    width, height = mask_size(clip)
+    ratio = min(1.0, SEQUENCE_SIDE / max(width, height, 1))
+    return max(8, int(round(width * ratio / 2)) * 2), max(8, int(round(height * ratio / 2)) * 2)
+
+
+def sequence_frame(clip: ComposeClip, local: float, size: tuple[int, int]) -> bytes:
+    """Один кадр маски своей формы: белый многоугольник на чёрном, байты gray.
+
+    Заливка по строкам: на каждой строке находим, где её пересекают стороны
+    многоугольника, и закрашиваем промежутки через один — внутри то, что
+    между нечётным и чётным пересечением.
+    """
+    assert clip.mask is not None
+    width, height = size
+    x = anim.value_at(clip, "mask.x", local)
+    y = anim.value_at(clip, "mask.y", local)
+    w = anim.value_at(clip, "mask.w", local)
+    h = anim.value_at(clip, "mask.h", local)
+    points = [
+        ((x - w / 2 + u * w) * width, (y - h / 2 + v * h) * height)
+        for u, v in anim.points_at(clip, local)
+    ]
+    canvas = bytearray(width * height)
+    if len(points) < 3:
+        return bytes(canvas)
+    edges = list(zip(points, points[1:] + points[:1]))
+    for row in range(height):
+        middle = row + 0.5
+        crossings = []
+        for (x1, y1), (x2, y2) in edges:
+            if (y1 > middle) != (y2 > middle):
+                crossings.append(x1 + (middle - y1) * (x2 - x1) / (y2 - y1))
+        crossings.sort()
+        base = row * width
+        for start, end in zip(crossings[0::2], crossings[1::2]):
+            left = max(0, int(start + 0.5))
+            right = min(width, int(end + 0.5))
+            if right > left:
+                canvas[base + left:base + right] = b"\xff" * (right - left)
+    return bytes(canvas)
 
 
 def _multiply(source: str, matte: str, out: str, tag: str) -> str:
@@ -490,20 +588,32 @@ def clip_graph(
 
     if mask is not None and uses:
         width, height = mask_size(clip)
-        px, py = mask_margin(clip)
-        wide = anim.expression(clip, "mask.w", moment)
-        tall = anim.expression(clip, "mask.h", moment)
-        parts.append(f"{current}split[{tag}1][{tag}mc]")
-        current = f"[{tag}1]"
-        parts.append(f"[{tag}mc]format=gray,lut=c0=0[{tag}mb]")
-        parts.append(
-            f"{shape}format=gray,scale=w='max(2,{width}*({wide})*{1 + 2 * px:.5f})'"
-            f":h='max(2,{height}*({tall})*{1 + 2 * py:.5f})':eval=frame[{tag}ms]"
-        )
-        parts.append(
-            f"[{tag}mb][{tag}ms]overlay=x='W*({anim.expression(clip, 'mask.x', moment)})-w/2'"
-            f":y='H*({anim.expression(clip, 'mask.y', moment)})-h/2':eval=frame,format=gray[{tag}m]"
-        )
+        if points_animated(clip):
+            # Своя форма с меняющимися точками — готовые кадры маски (их
+            # рисует программа, см. ``sequence_frame``): растягиваем до
+            # размера клипа, мягкий край — размытием, и только наружу:
+            # удвоенная яркость размытого края внутри формы снова белая.
+            box = min(mask.w * width, mask.h * height)
+            sigma = mask.feather * box / 2 / 2.5
+            soft = f",gblur=sigma={sigma:.2f},lut=c0='min(255,2*val)'" if sigma > 0.3 else ""
+            parts.append(
+                f"{shape}setpts=PTS-STARTPTS,format=gray,scale={width}:{height}:flags=bilinear{soft}[{tag}m]"
+            )
+        else:
+            px, py = mask_margin(clip)
+            wide = anim.expression(clip, "mask.w", moment)
+            tall = anim.expression(clip, "mask.h", moment)
+            parts.append(f"{current}split[{tag}1][{tag}mc]")
+            current = f"[{tag}1]"
+            parts.append(f"[{tag}mc]format=gray,lut=c0=0[{tag}mb]")
+            parts.append(
+                f"{shape}format=gray,scale=w='max(2,{width}*({wide})*{1 + 2 * px:.5f})'"
+                f":h='max(2,{height}*({tall})*{1 + 2 * py:.5f})':eval=frame[{tag}ms]"
+            )
+            parts.append(
+                f"[{tag}mb][{tag}ms]overlay=x='W*({anim.expression(clip, 'mask.x', moment)})-w/2'"
+                f":y='H*({anim.expression(clip, 'mask.y', moment)})-h/2':eval=frame,format=gray[{tag}m]"
+            )
         if len(uses) == 2:
             parts.append(f"[{tag}m]split[{tag}mfx][{tag}mvis]")
             matte_for = {"fx": f"[{tag}mfx]", "vis": f"[{tag}mvis]"}

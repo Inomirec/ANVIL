@@ -11,13 +11,14 @@ import {
 import { useCompose, type ComposeClip } from '../composeStore'
 
 /**
- * Часики у показателя: включить ключи и выключить.
+ * Часики у показателя: «ключи этой настройки сейчас в работе».
  *
- * Включили — под иглой встаёт первый ключ с тем, что сейчас в кадре; дальше
- * любая правка этого показателя в другом месте клипа ставит там ключ, и между
- * ключами значение плавно меняется. Выключили — ключи пропадают, показатель
- * остаётся таким, каким был под иглой. Нажатие заодно выбирает группу: её
- * ключи видны на таймлайне.
+ * Гореть могут только одни часики на всё: включили эти — прежние погасли. У
+ * включённых ключи видны на таймлайне, их двигают, копируют и удаляют, а
+ * кнопки ключей на панели таймлайна работают с ними. Нет ещё ключей — под
+ * иглой встаёт первый. Выключение ничего не стирает: ключи остаются и
+ * работают, просто их не видно. Правка настройки с ключами в любом случае
+ * ложится в ключ под иглой.
  */
 export function AnimClock({ clip, group }: { clip: ComposeClip; group: string }) {
   const found = groupOf(clip, group)
@@ -25,6 +26,7 @@ export function AnimClock({ clip, group }: { clip: ComposeClip; group: string })
   const focus = useCompose((state) => state.animFocus)
   if (!found) return null
   const keyed = isKeyed(clip, found)
+  const active = focus === group
   return (
     <button
       type="button"
@@ -33,14 +35,18 @@ export function AnimClock({ clip, group }: { clip: ComposeClip; group: string })
         toggleAnim(clip.id, group)
       }}
       title={
-        keyed
-          ? `${found.label}: меняется по ключам. Нажмите, чтобы убрать ключи — останется то, что сейчас под иглой`
-          : `${found.label}: менять во времени. Под иглой встанет ключ; поставьте иглу в другое место и поменяйте значение — там появится второй`
+        active
+          ? `${found.label}: ключи в работе — видны на таймлайне. Нажмите, чтобы спрятать (ключи останутся)`
+          : keyed
+            ? `${found.label}: есть ключи. Нажмите, чтобы показать их на таймлайне и править`
+            : `${found.label}: менять во времени. Под иглой встанет ключ; поставьте иглу в другое место и поменяйте значение — там появится второй`
       }
       className={`shrink-0 rounded p-0.5 transition-colors ${
-        keyed
-          ? `text-accent-soft hover:text-ink ${focus === group ? 'bg-accent/25' : ''}`
-          : 'text-ink-faint/60 hover:text-ink-dim'
+        active
+          ? 'bg-accent text-white'
+          : keyed
+            ? 'text-accent-soft hover:bg-surface-3'
+            : 'text-ink-faint/60 hover:text-ink-dim'
       }`}
     >
       <Timer size={13} />
@@ -101,14 +107,10 @@ export function PlaceFields({ clip, size = true }: { clip: ComposeClip; size?: b
   const frameW = useCompose((state) => state.width)
   const frameH = useCompose((state) => state.height)
   const applyValues = useCompose((state) => state.applyValues)
-  const setAnimFocus = useCompose((state) => state.setAnimFocus)
   const focus = useCompose((state) => state.animFocus)
   const now = shownAt(clip, playhead)
   const row = (group: string, label: string, body: React.ReactNode) => (
-    <div
-      className={`flex items-center gap-2 rounded-md px-1 py-0.5 ${focus === group ? 'bg-accent/10' : ''}`}
-      onMouseDown={() => setAnimFocus(group)}
-    >
+    <div className={`flex items-center gap-2 rounded-md px-1 py-0.5 ${focus === group ? 'bg-accent/10' : ''}`}>
       <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>
       <div className="flex min-w-0 flex-1 items-center gap-1.5">{body}</div>
       <AnimClock clip={clip} group={group} />
@@ -177,9 +179,9 @@ export function KeyButtons({ clip }: { clip: ComposeClip }) {
   const onKey = times.some((t) => Math.abs(t - local) < KEY_NEAR)
   const before = [...times].reverse().find((t) => t < local - KEY_NEAR)
   const after = times.find((t) => t > local + KEY_NEAR)
-  const button = 'flex h-8 w-7 items-center justify-center rounded-lg text-ink-dim hover:bg-surface-3 hover:text-ink disabled:opacity-30'
+  const button = 'flex h-7 w-6 items-center justify-center rounded-md text-ink-dim hover:bg-surface-3 hover:text-ink disabled:opacity-30'
   return (
-    <div className="flex items-center rounded-lg border border-line-soft bg-surface-2" title={group.label}>
+    <div className="flex items-center" title={group.label}>
       <button
         type="button"
         className={button}
@@ -194,7 +196,7 @@ export function KeyButtons({ clip }: { clip: ComposeClip }) {
         className={button}
         disabled={onKey}
         onClick={() => keyHere(clip.id, group.id)}
-        title={`${group.label}: поставить ключ под иглой`}
+        title={`${group.label}: поставить ключ под иглой (K)`}
       >
         <DiamondPlus size={14} />
       </button>
@@ -203,7 +205,7 @@ export function KeyButtons({ clip }: { clip: ComposeClip }) {
         className={`${button} ${onKey ? 'text-accent-soft' : ''}`}
         disabled={!onKey}
         onClick={() => unkeyHere(clip.id, group.id)}
-        title={`${group.label}: удалить ключ под иглой`}
+        title={`${group.label}: удалить ключ под иглой (Shift+K). Выбранные ромбики удаляет Delete`}
       >
         <DiamondMinus size={14} />
       </button>
@@ -217,5 +219,27 @@ export function KeyButtons({ clip }: { clip: ComposeClip }) {
         <ChevronRight size={14} />
       </button>
     </div>
+  )
+}
+
+/**
+ * Кнопки ключей на панели таймлайна — для выбранного клипа и включённых
+ * часиков. Стоят рядом с кнопками дорожек, надписи и заливки: за ключом не
+ * надо тянуться мышью через весь экран.
+ */
+export function KeyBar() {
+  const selected = useCompose((state) => state.selected)
+  const focus = useCompose((state) => state.animFocus)
+  const tracks = useCompose((state) => state.tracks)
+  if (!focus) return null
+  const clip = tracks
+    .flatMap((track) => track.clips)
+    .find((item) => selected.includes(item.id) && groupOf(item, focus))
+  if (!clip) return null
+  return (
+    <>
+      <span className="mx-0.5 h-4 w-px bg-line-soft" />
+      <KeyButtons clip={clip} />
+    </>
   )
 }

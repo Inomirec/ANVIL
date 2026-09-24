@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { effectKind } from './composeEffects'
 import {
   CROP_FIELDS,
   groupOf,
@@ -13,7 +14,11 @@ import {
   withoutKey,
   withoutPrefix,
   withValues,
+  keyTimes,
+  POINTS,
   type Anim,
+  type AnimKey,
+  type AnimValue,
 } from './composeAnim'
 
 export { KEY_NEAR, shownAt } from './composeAnim'
@@ -669,7 +674,7 @@ interface State extends Saved {
    * ``fx.<id>.<настройка>``). У группы с ключами — в ключ под иглой, у
    * обрезки и маски ключ появляется сам при первой правке.
    */
-  applyValues: (id: string, values: Record<string, number>) => void
+  applyValues: (id: string, values: Record<string, AnimValue>) => void
   /** Группа, чьи ключи сейчас видны на таймлайне и ставятся кнопками. */
   animFocus: string | null
   setAnimFocus: (group: string | null) => void
@@ -677,6 +682,18 @@ interface State extends Saved {
   toggleAnim: (id: string, group: string) => void
   /** Поставить ключ группы под иглой с тем, что сейчас в кадре. */
   keyHere: (id: string, group: string) => void
+  /** Выбранные ключи на таймлайне: у какого клипа, какой группы, какие времена. */
+  selectedKeys: { clipId: string; group: string; times: number[] } | null
+  selectKeys: (selection: { clipId: string; group: string; times: number[] } | null) => void
+  /** Сдвинуть ключи группы, стоящие в ``times``, на ``delta`` секунд. */
+  moveKeys: (id: string, group: string, times: number[], delta: number) => void
+  /** Удалить выбранные ключи. */
+  deleteKeys: () => void
+  /** Скопировать выбранные ключи; вернёт, сколько скопировано. */
+  copyKeys: () => number
+  hasKeyCopy: () => boolean
+  /** Вставить скопированные ключи от иглы в выбранную настройку. */
+  pasteKeys: () => boolean
   /** Убрать ключ группы под иглой. */
   unkeyHere: (id: string, group: string) => void
   /** Вернуть клип в исходную позицию: во весь кадр, посередине, без ключей. */
@@ -690,6 +707,11 @@ interface State extends Saved {
   /** Родная половина ролика: картинка для звука и звук для картинки. */
   partnerOf: (clipId: string) => ComposeClip | null
   addEffect: (clipId: string, type: string, params: Record<string, number | string>) => void
+  /** Скопировать эффекты клипа (и его половины у ролика); вернёт, сколько. */
+  copyEffects: (clipId: string) => number
+  hasEffectCopy: () => boolean
+  /** Вставить скопированные эффекты в клипы: картинке — картинкины, звуку — звуковые. */
+  pasteEffects: (ids: string[]) => void
   updateEffect: (clipId: string, effectId: string, patch: Partial<ClipEffect>) => void
   removeEffect: (clipId: string, effectId: string) => void
   /** Отразить по горизонтали или вертикали. */
@@ -883,6 +905,24 @@ function save(state: State): void {
  * таймлайн из-за копирования незачем, да и переживать перезагрузку страницы
  * буферу обмена не положено.
  */
+/** Скопированные ключи: вид настройки и ключи по показателям, время — от первого. */
+let keyClipboard: { kind: string; fields: Record<string, AnimKey[]> } | null = null
+
+/** Скопированные эффекты вместе с ключами их настроек. */
+let effectClipboard: { effects: ClipEffect[]; keys: Record<string, AnimKey[]> } | null = null
+
+/** Вид настройки эффекта по имени группы: «fx.<id>.strength» → «<тип>.strength». */
+function effectOf(group: string): string {
+  const [, id, param] = group.split('.')
+  for (const track of useCompose.getState().tracks) {
+    for (const clip of track.clips) {
+      const effect = (clip.effects ?? []).find((item) => item.id === id)
+      if (effect) return `fx:${effect.type}.${param}`
+    }
+  }
+  return group
+}
+
 let clipboard: { clip: ComposeClip; trackId: string }[] = []
 
 const HISTORY_LIMIT = 60
@@ -1963,8 +2003,8 @@ export const useCompose = create<State>((set, get) => ({
     const local = get().playhead - clip.start
     // Показатели раскладываем по группам: у каждой свои ключи.
     let next: ComposeClip = clip
-    const plain: Record<string, number> = {}
-    const touched = new Map<string, Record<string, number>>()
+    const plain: Record<string, AnimValue> = {}
+    const touched = new Map<string, Record<string, AnimValue>>()
     for (const [field, value] of Object.entries(values)) {
       const groupId =
         field === 'x' || field === 'y'
@@ -1973,7 +2013,7 @@ export const useCompose = create<State>((set, get) => ({
             ? 'size'
             : CROP_FIELDS.includes(field)
               ? 'crop'
-              : MASK_FIELDS.includes(field)
+              : MASK_FIELDS.includes(field) || field === POINTS
                 ? 'mask'
                 : field.startsWith('fx.')
                   ? field
@@ -2017,20 +2057,119 @@ export const useCompose = create<State>((set, get) => ({
     const clip = get().findClip(id)?.clip
     const group = clip && groupOf(clip, groupId)
     if (!clip || !group) return
-    get().mark()
-    const local = get().playhead - clip.start
+    // Часики — это «чьи ключи сейчас в работе», а не «есть ли ключи».
+    // Одни на всё: включили эти — прежние погасли. Выключение ключей не
+    // стирает: движение остаётся, просто их не видно на таймлайне.
+    if (get().animFocus === groupId) {
+      set({ animFocus: null, selectedKeys: null })
+      return
+    }
     const keyed = group.fields.some((field) => (clip.anim?.[field]?.length ?? 0) > 0)
-    if (keyed) {
-      // Выключили часики — показатель остаётся таким, каким он сейчас под
-      // иглой, и больше не меняется.
-      const now = groupValues(clip, group, local)
-      const fixed = withValues({ ...clip, anim: withoutGroup(clip.anim, group.fields) }, now)
-      get().updateClip(id, { ...fixed })
-    } else {
-      const at = Math.min(Math.max(local, 0), clip.duration)
+    if (!keyed) {
+      // Ключей ещё нет — первый встаёт под иглой с тем, что сейчас видно.
+      get().mark()
+      const at = Math.min(Math.max(get().playhead - clip.start, 0), clip.duration)
       get().updateClip(id, { anim: withKey(clip, group, at, groupValues(clip, group, at)) })
     }
-    set({ animFocus: groupId })
+    set({ animFocus: groupId, selectedKeys: null })
+  },
+
+  selectedKeys: null,
+  selectKeys(selection) {
+    set({ selectedKeys: selection })
+  },
+
+  moveKeys(id, groupId, times, delta) {
+    const clip = get().findClip(id)?.clip
+    const group = clip && groupOf(clip, groupId)
+    if (!clip || !group || !delta) return
+    const near = (t: number) => times.some((time) => Math.abs(time - t) < KEY_NEAR / 2)
+    const anim: Anim = { ...(clip.anim ?? {}) }
+    for (const field of group.fields) {
+      const keys = anim[field] ?? []
+      const moving = keys.filter((key) => near(key.t))
+      // Сдвинутый ключ, попавший на соседний, занимает его место.
+      const staying = keys.filter(
+        (key) => !near(key.t) && !moving.some((item) => Math.abs(item.t + delta - key.t) < KEY_NEAR / 2),
+      )
+      anim[field] = [...staying, ...moving.map((key) => ({ ...key, t: key.t + delta }))].sort((a, b) => a.t - b.t)
+    }
+    get().updateClip(id, { anim })
+  },
+
+  deleteKeys() {
+    const chosen = get().selectedKeys
+    if (!chosen) return
+    const clip = get().findClip(chosen.clipId)?.clip
+    const group = clip && groupOf(clip, chosen.group)
+    if (!clip || !group) return
+    get().mark()
+    const near = (t: number) => chosen.times.some((time) => Math.abs(time - t) < KEY_NEAR / 2)
+    const anim: Anim = { ...(clip.anim ?? {}) }
+    let left = false
+    for (const field of group.fields) {
+      anim[field] = (anim[field] ?? []).filter((key) => !near(key.t))
+      if (anim[field].length) left = true
+      else delete anim[field]
+    }
+    // Убрали все ключи — показатель остаётся таким, каким был под иглой.
+    const local = get().playhead - clip.start
+    const next = left ? { ...clip, anim } : withValues({ ...clip, anim }, groupValues(clip, group, local))
+    get().updateClip(clip.id, { ...next })
+    set({ selectedKeys: null })
+  },
+
+  copyKeys() {
+    const chosen = get().selectedKeys
+    if (!chosen) return 0
+    const clip = get().findClip(chosen.clipId)?.clip
+    const group = clip && groupOf(clip, chosen.group)
+    if (!clip || !group) return 0
+    const first = Math.min(...chosen.times)
+    const near = (t: number) => chosen.times.some((time) => Math.abs(time - t) < KEY_NEAR / 2)
+    // Время — от самого левого из выбранных: вставятся от иглы тем же узором.
+    const fields: Record<string, AnimKey[]> = {}
+    for (const field of group.fields) {
+      fields[field] = (clip.anim?.[field] ?? [])
+        .filter((key) => near(key.t))
+        .map((key) => ({ ...key, t: key.t - first }))
+    }
+    keyClipboard = { kind: chosen.group.startsWith('fx.') ? effectOf(chosen.group) : chosen.group, fields }
+    return chosen.times.length
+  },
+
+  hasKeyCopy() {
+    return keyClipboard !== null
+  },
+
+  pasteKeys() {
+    const copy = keyClipboard
+    const focus = get().animFocus
+    const ids = get().selected
+    if (!copy || !focus) return false
+    const clip = ids.map((id) => get().findClip(id)?.clip).find((item) => item && groupOf(item, focus))
+    const group = clip && groupOf(clip, focus)
+    if (!clip || !group) return false
+    // Вставлять можно в ту же настройку — или в такую же у другого эффекта
+    // того же вида (размытие одного клипа — в размытие другого).
+    const kind = focus.startsWith('fx.') ? effectOf(focus) : focus
+    if (kind !== copy.kind) return false
+    get().mark()
+    const at = get().playhead - clip.start
+    const anim: Anim = { ...(clip.anim ?? {}) }
+    const sources = Object.values(copy.fields)
+    group.fields.forEach((field, index) => {
+      const pasted = (copy.fields[field] ?? sources[index] ?? []).map((key) => ({ ...key, t: key.t + at }))
+      if (!pasted.length) return
+      const clash = (t: number) => pasted.some((key) => Math.abs(key.t - t) < KEY_NEAR / 2)
+      anim[field] = [...(anim[field] ?? []).filter((key) => !clash(key.t)), ...pasted].sort((a, b) => a.t - b.t)
+    })
+    get().updateClip(clip.id, { anim })
+    const times = keyTimes({ ...clip, anim }, group).filter((t) =>
+      Object.values(copy.fields).some((keys) => keys.some((key) => Math.abs(key.t + at - t) < KEY_NEAR / 2)),
+    )
+    set({ selectedKeys: { clipId: clip.id, group: focus, times } })
+    return true
   },
 
   keyHere(id, groupId) {
@@ -2114,6 +2253,66 @@ export const useCompose = create<State>((set, get) => ({
           (item.kind === 'audio') !== (clip.kind === 'audio'),
       ) ?? null
     )
+  },
+
+  copyEffects(clipId) {
+    const clip = get().findClip(clipId)?.clip
+    if (!clip) return 0
+    // Эффекты ролика — это и картинка, и звук: берём обе половины.
+    const parts = [clip, get().partnerOf(clipId)].filter(Boolean) as ComposeClip[]
+    const effects: ClipEffect[] = []
+    const keys: Record<string, AnimKey[]> = {}
+    for (const part of parts) {
+      for (const effect of part.effects ?? []) {
+        effects.push(effect)
+        for (const [field, list] of Object.entries(part.anim ?? {})) {
+          if (field.startsWith(`fx.${effect.id}.`)) keys[field] = list
+        }
+      }
+    }
+    effectClipboard = effects.length ? { effects, keys } : null
+    return effects.length
+  },
+
+  hasEffectCopy() {
+    return effectClipboard !== null
+  },
+
+  pasteEffects(ids) {
+    const copy = effectClipboard
+    if (!copy) return
+    get().mark()
+    const targets = new Set<string>()
+    for (const id of ids) {
+      targets.add(id)
+      const partner = get().partnerOf(id)
+      if (partner) targets.add(partner.id)
+    }
+    for (const id of targets) {
+      const clip = get().findClip(id)?.clip
+      if (!clip) continue
+      const wanted = clip.kind === 'audio' ? 'audio' : clip.kind === 'video' || clip.kind === 'image' ? 'video' : null
+      const fitting = copy.effects.filter((effect) => effectKind(effect.type)?.target === wanted)
+      if (!fitting.length) continue
+      // Такой же эффект уже есть — заменяем его, а не ставим второй.
+      const types = new Set(fitting.map((effect) => effect.type))
+      const dropped = (clip.effects ?? []).filter((effect) => types.has(effect.type))
+      let anim = clip.anim ?? {}
+      for (const effect of dropped) anim = withoutPrefix(anim, `fx.${effect.id}.`)
+      const made = fitting.map((effect) => {
+        const fresh = { ...effect, id: nextId(), params: { ...effect.params } }
+        for (const [field, list] of Object.entries(copy.keys)) {
+          if (field.startsWith(`fx.${effect.id}.`)) {
+            anim = { ...anim, [`fx.${fresh.id}.${field.split('.')[2]}`]: list.map((key) => ({ ...key })) }
+          }
+        }
+        return fresh
+      })
+      get().updateClip(id, {
+        effects: [...(clip.effects ?? []).filter((effect) => !types.has(effect.type)), ...made],
+        anim,
+      })
+    }
   },
 
   addEffect(clipId, type, params) {

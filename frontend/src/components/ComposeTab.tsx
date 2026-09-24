@@ -40,13 +40,14 @@ import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
 import { ComposeTextPanel } from './ComposeTextPanel'
 import { ComposeFillPanel } from './ComposeFillPanel'
 import { ClipAddBar, ComposeClipPanel } from './ComposeClipPanel'
-import { KeyButtons } from './ComposeAnimUi'
 import { CROP_FIELDS, withoutGroup } from '../composeAnim'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderSettings,
   DEFAULT_RENDER,
+  presetName,
   renderSummary,
+  type RenderPreset,
   type RenderSettings,
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
@@ -227,6 +228,16 @@ export function ComposeTab() {
     }
   })
   const [renderOpen, setRenderOpen] = useState(false)
+  // Свои наборы сборки — чтобы под кнопкой писать название набора. Читаем
+  // заново, когда окно настроек закрыли: там могли сохранить новый.
+  const [myPresets, setMyPresets] = useState<RenderPreset[]>([])
+  useEffect(() => {
+    if (renderOpen) return
+    api
+      .composeRenderPresets()
+      .then((data) => setMyPresets(data.presets ?? []))
+      .catch(() => setMyPresets([]))
+  }, [renderOpen])
   // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
   // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
   const [outputName, setOutputName] = useState('')
@@ -865,11 +876,6 @@ export function ComposeTab() {
                 >
                   <Camera size={14} />
                 </IconButton>
-
-                {/* Ключи выбранного раздела (обрезка, положение, маска…) —
-                    только когда они уже есть: до первого ключа кнопки ни к
-                    чему. */}
-                {pickedVisual.length === 1 && <KeyButtons clip={pickedVisual[0]} />}
               </div>
             )}
 
@@ -1114,8 +1120,10 @@ export function ComposeTab() {
               <SlidersHorizontal size={14} className="shrink-0 text-accent-soft" />
               <span className="flex-1 text-[12.5px]">Настройки сборки</span>
             </button>
-            <p className="mt-1 text-[11px] leading-snug text-ink-faint">
-              {renderSummary(render)}
+            {/* Только название набора: полное описание (кодек, качество,
+                звук) не помещалось в строку. Подробности — при наведении. */}
+            <p className="mt-1 truncate text-[11px] leading-snug text-ink-faint" title={renderSummary(render)}>
+              {presetName(render, myPresets)}
             </p>
           </div>
 
