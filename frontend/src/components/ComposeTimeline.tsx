@@ -47,6 +47,7 @@ import {
   useCompose,
   MAX_SPEED,
   MIN_SPEED,
+  isAnimated,
   isCropped,
   newMask,
   speedOf,
@@ -2070,6 +2071,24 @@ function ClipBox({
       {!solid && clip.kind !== 'text' && (
         <div className="absolute inset-0 bg-gradient-to-b from-surface-3/55 to-surface-3/80" />
       )}
+      {/* Ключи анимации — ромбиками внизу клипа. Нажатие ставит иглу на
+          ключ: так к нему и переходят, чтобы поправить. */}
+      {isAnimated(clip) &&
+        (clip.keys ?? [])
+          .filter((key) => key.t >= -1e-3 && key.t <= clip.duration + 1e-3)
+          .map((key) => (
+            <button
+              key={key.t}
+              type="button"
+              title={`Ключ на ${key.t.toFixed(2)} с от начала клипа — нажмите, чтобы перейти`}
+              onMouseDown={(event) => {
+                event.stopPropagation()
+                useCompose.getState().setPlayhead(clip.start + key.t)
+              }}
+              className="absolute bottom-0.5 z-10 h-2.5 w-2.5 -translate-x-1/2 rotate-45 border border-base bg-accent-soft hover:bg-white"
+              style={{ left: Math.min(Math.max(key.t * scale, 5), box - 5) }}
+            />
+          ))}
       {lost && (
         <div
           className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(239,68,68,0.35)_0_6px,transparent_6px_12px)]"
@@ -2182,6 +2201,7 @@ function ClipBox({
             Boolean(clip.rotate) ||
             isCropped(clip) ||
             Boolean(clip.mask?.on) ||
+            isAnimated(clip) ||
             clip.reverse) && (
             <span className="shrink-0 rounded bg-accent/30 px-1 font-mono text-[9px] leading-[13px] text-white">
               fx

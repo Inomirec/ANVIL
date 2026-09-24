@@ -1,7 +1,24 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, Crop, FlipHorizontal2, FlipVertical2, Gauge, Plus, RotateCw, SquareDashed, Undo2, X } from 'lucide-react'
 import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Crop,
+  Diamond,
+  FlipHorizontal2,
+  FlipVertical2,
+  Gauge,
+  Plus,
+  RotateCw,
+  SquareDashed,
+  Timer,
+  Undo2,
+  X,
+} from 'lucide-react'
+import {
+  isAnimated,
   isCropped,
+  KEY_NEAR,
   newMask,
   speedOf,
   useCompose,
@@ -110,6 +127,8 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
 
       {visual?.mask && <MaskCard clip={visual} mask={visual.mask} />}
 
+      {visual && (visual.kind === 'video' || visual.kind === 'image') && <KeysCard clip={visual} />}
+
       {parts.map((part) => (
         <div key={part.clip.id} className="space-y-2">
           {both && (
@@ -208,6 +227,96 @@ function Transforms({ clip }: { clip: ComposeClip }) {
           </button>
         </span>
       ))}
+    </div>
+  )
+}
+
+/**
+ * Анимация места и размера — ключами.
+ *
+ * Как в монтажных программах: ставишь иглу, двигаешь клип рамкой в кадре —
+ * в этом месте появляется ключ; между ключами клип плавно едет и меняет
+ * размер. Ключи видно ромбиками на клипе в таймлайне. Здесь — включить,
+ * поставить или убрать ключ под иглой и перейти к соседнему.
+ */
+function KeysCard({ clip }: { clip: ComposeClip }) {
+  const playhead = useCompose((state) => state.playhead)
+  const setPlayhead = useCompose((state) => state.setPlayhead)
+  const startKeys = useCompose((state) => state.startKeys)
+  const addKey = useCompose((state) => state.addKey)
+  const removeKey = useCompose((state) => state.removeKey)
+  const stopKeys = useCompose((state) => state.stopKeys)
+
+  if (!isAnimated(clip)) {
+    return (
+      <Button
+        onClick={() => startKeys(clip.id)}
+        title="Место и размер клипа будут меняться во времени: ставьте иглу в разные места и двигайте клип рамкой — там появятся ключи"
+      >
+        <Timer size={15} />
+        Анимировать место и размер
+      </Button>
+    )
+  }
+
+  const local = playhead - clip.start
+  const keys = [...(clip.keys ?? [])].sort((a, b) => a.t - b.t)
+  const onKey = keys.some((key) => Math.abs(key.t - local) < KEY_NEAR)
+  // Переходить можно только к ключам внутри клипа: остальные — за его краем
+  // после обрезки, и игла туда не попадёт.
+  const inside = keys.filter((key) => key.t >= -1e-3 && key.t <= clip.duration + 1e-3)
+  const before = [...inside].reverse().find((key) => key.t < local - KEY_NEAR)
+  const after = inside.find((key) => key.t > local + KEY_NEAR)
+
+  return (
+    <div className="rounded-xl bg-surface-2 ring-1 ring-accent/40">
+      <div className="flex items-center gap-1.5 px-3 py-1.5">
+        <Timer size={13} className="text-accent-soft" />
+        <span className="min-w-0 flex-1 text-[12.5px] font-medium text-ink">Анимация</span>
+        <span className="text-[11px] text-ink-faint">ключей: {inside.length}</span>
+        <button
+          type="button"
+          onClick={() => stopKeys(clip.id)}
+          title="Выключить анимацию: клип останется там, где он сейчас под иглой"
+          className="rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-danger"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <div className="space-y-2 border-t border-line-soft px-3 py-2.5">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            disabled={!before}
+            onClick={() => before && setPlayhead(clip.start + before.t)}
+            title="К предыдущему ключу"
+            className="rounded-md p-1.5 text-ink-dim hover:bg-surface-3 disabled:opacity-30"
+          >
+            <ChevronLeft size={15} />
+          </button>
+          <Button
+            tone={onKey ? 'danger' : 'subtle'}
+            className="flex-1"
+            onClick={() => (onKey ? removeKey(clip.id) : addKey(clip.id))}
+            title={onKey ? 'Убрать ключ под иглой' : 'Поставить ключ под иглой с тем, как клип стоит сейчас'}
+          >
+            <Diamond size={13} className={onKey ? 'fill-current' : ''} />
+            {onKey ? 'Убрать ключ' : 'Ключ здесь'}
+          </Button>
+          <button
+            type="button"
+            disabled={!after}
+            onClick={() => after && setPlayhead(clip.start + after.t)}
+            title="К следующему ключу"
+            className="rounded-md p-1.5 text-ink-dim hover:bg-surface-3 disabled:opacity-30"
+          >
+            <ChevronRight size={15} />
+          </button>
+        </div>
+        <p className="text-[11px] leading-snug text-ink-faint">
+          Поставьте иглу и подвиньте клип рамкой в кадре — там появится ключ.
+        </p>
+      </div>
     </div>
   )
 }

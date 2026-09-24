@@ -284,6 +284,23 @@ class ClipEffect(ComposeModel):
     params: dict[str, float | str] = Field(default_factory=dict)
 
 
+class ClipKey(ComposeModel):
+    """Ключ анимации: где и какого размера клип в момент ``t``.
+
+    ``t`` — секунды от начала клипа на таймлайне. Между ключами клип плавно
+    переходит от одного положения к другому.
+    """
+
+    #: Может быть и меньше нуля, и больше длины клипа: после обрезки или
+    #: разреза ключи остаются на тех же кадрах ролика и продолжают задавать
+    #: движение, даже если сами оказались за краем клипа.
+    t: float
+    x: float = Field(default=0.5, ge=-1.0, le=2.0)
+    y: float = Field(default=0.5, ge=-1.0, le=2.0)
+    size: float = Field(default=1.0, gt=0.0, le=4.0)
+    size_y: float = Field(default=0.0, ge=0.0, le=4.0)
+
+
 class ClipMask(ComposeModel):
     """Маска клипа: где он виден или где действуют его эффекты.
 
@@ -371,6 +388,8 @@ class ComposeClip(ComposeModel):
     rotate: int = Field(default=0, ge=0, le=270)
     #: Играть задом наперёд — и картинку, и звук.
     reverse: bool = False
+    #: Ключи анимации места и размера. Пусто — клип стоит, как задан.
+    keys: list[ClipKey] = Field(default_factory=list)
     #: Маска — прямоугольник или овал. ``None`` — маски нет.
     mask: ClipMask | None = None
     #: Готовая картинка маски: рисует сервер перед сборкой.

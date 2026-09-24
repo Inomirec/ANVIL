@@ -180,8 +180,60 @@ def zoom_filter(clip: ComposeClip, width: int, height: int) -> str:
     return f",scale={big_w}:{big_h}:flags=lanczos,crop={width}:{height}"
 
 
+def animated(clip: ComposeClip) -> bool:
+    """Двигается ли клип по ключам. Пока — ролики и картинки."""
+    return clip.kind in {"video", "image"} and len(clip.keys) >= 1
+
+
+def _ease(s: str) -> str:
+    """Плавный разгон и торможение между ключами: 3s² − 2s³."""
+    return f"({s})*({s})*(3-2*({s}))"
+
+
+def key_expression(clip: ComposeClip, field: str, moment: str) -> str:
+    """Значение поля ключей в момент ``moment`` (секунды от начала клипа).
+
+    До первого ключа — как в первом, после последнего — как в последнем,
+    между — плавный переход. Та же кривая в окне программы
+    (``placeAt`` в ``composeStore.ts``), поэтому рамка идёт вровень с кадром.
+    """
+    keys = sorted(clip.keys, key=lambda key: key.t)
+
+    def value(key: object) -> float:
+        raw = getattr(key, field)
+        if field == "size_y" and raw <= 0:
+            return getattr(key, "size")
+        return raw
+
+    expression = f"{value(keys[-1]):.5f}"
+    for left, right in reversed(list(zip(keys, keys[1:]))):
+        span = max(right.t - left.t, 1e-3)
+        # Время ключа — в скобках: оно бывает и меньше нуля (см. ClipKey).
+        progress = _ease(f"({moment}-({left.t:.4f}))/{span:.4f}")
+        segment = f"{value(left):.5f}+({value(right) - value(left):.5f})*{progress}"
+        expression = f"if(lt({moment},({right.t:.4f})),{segment},{expression})"
+    return f"if(lt({moment},({keys[0].t:.4f})),{value(keys[0]):.5f},{expression})"
+
+
+def animated_place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: float) -> str:
+    """Размер по ключам, кадр за кадром.
+
+    ``t`` внутри цепочки клипа отсчитывается от начала прочитанного куска, а
+    ключи — от начала клипа; ``skip`` — сколько клипа прошло до куска.
+    """
+    moment = f"(t+{skip:.4f})"
+    size = key_expression(clip, "size", moment)
+    tall = key_expression(clip, "size_y", moment)
+    return (
+        f"scale=w='max(2,trunc({width}*({size})/2)*2)':h='max(2,trunc({height}*({tall})/2)*2)'"
+        f":force_original_aspect_ratio=decrease:eval=frame:flags=bicubic,setsar=1,fps={fps}"
+    )
+
+
 def is_placed(clip: ComposeClip) -> bool:
     """Двигали ли клип по кадру или меняли его размер."""
+    if animated(clip):
+        return True
     if clip.kind == "text":
         # У надписи двигается сам текст внутри слоя, а слой всегда во весь
         # кадр: иначе буквы пришлось бы масштабировать вместе с ним.
@@ -772,8 +824,13 @@ def build_segment(
                 )
             else:
                 # Эффекты — до вписывания в кадр: они работают с самим файлом.
+                placement = (
+                    animated_place_filter(clip, width, height, fps, max(0.0, at - clip.start))
+                    if animated(clip)
+                    else place_filter(clip, width, height, fps)
+                )
                 chain.append(
-                    f"{pre_label}{pre_chain}{place_filter(clip, width, height, fps)}"
+                    f"{pre_label}{pre_chain}{placement}"
                     f"{fades},"
                     f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
                 )
@@ -812,7 +869,14 @@ def build_segment(
         # вставали вразнобой — тот самый съезд на пиксель. Считаем чётность
         # сами, тогда одинаковые клетки получают одинаковые позиции.
         place = ""
-        if is_placed(clip):
+        if animated(clip) and not effects.blurred_fill(clip):
+            # Время фона — от начала отрезка; ключи — от начала клипа.
+            moment = f"(t+{at - clip.start:.4f})"
+            place = (
+                f":x='W*({key_expression(clip, 'x', moment)})-w/2'"
+                f":y='H*({key_expression(clip, 'y', moment)})-h/2':eval=frame"
+            )
+        elif is_placed(clip):
             box_w, box_h = clip_box(clip, width, height)
             left = _even_pixels(f"W*{clip.x:.5f}-{box_w / 2:.3f}")
             top = _even_pixels(f"H*{clip.y:.5f}-{box_h / 2:.3f}")

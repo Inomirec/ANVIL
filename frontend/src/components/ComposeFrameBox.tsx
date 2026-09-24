@@ -172,7 +172,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
           (event.clientY - current.fromY) / current.frameH,
           guides,
         )
-        state.updateClip(
+        state.placeClip(
           clip.id,
           clampPlace({ x: current.x + shiftX, y: current.y + shiftY }),
         )
@@ -199,7 +199,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         const right = atX >= current.anchorX ? 1 : -1
         const down = atY >= current.anchorY ? 1 : -1
         const free = clip.sizeY && clip.sizeY > 0
-        state.updateClip(
+        state.placeClip(
           clip.id,
           clampPlace({
             size: free ? w : rectToSize(w, h),
@@ -217,7 +217,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         const edge = atX + stick([atX], 0, guides)
         const size = Math.max(MIN_SIZE, Math.abs(edge - current.anchor))
         const right = edge >= current.anchor ? 1 : -1
-        state.updateClip(
+        state.placeClip(
           clip.id,
           clampPlace({ size, sizeY: tall, x: current.anchor + (right * size) / 2 }),
         )
@@ -225,7 +225,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         const edge = atY + stick([atY], 0, guides)
         const sizeY = Math.max(MIN_SIZE, Math.abs(edge - current.anchor))
         const down = edge >= current.anchor ? 1 : -1
-        state.updateClip(
+        state.placeClip(
           clip.id,
           clampPlace({ sizeY, y: current.anchor + (down * sizeY) / 2 }),
         )
@@ -247,8 +247,10 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
     return { frameW: area?.width ?? 1, frameH: area?.height ?? 1 }
   }
 
+  // У анимированного клипа это ложится в ключ под иглой, как и любая правка
+  // рамкой: см. ``placeClip``.
   const reset = () =>
-    useCompose.getState().updateClip(clip.id, { size: 1, sizeY: 0, x: 0.5, y: 0.5 })
+    useCompose.getState().placeClip(clip.id, { size: 1, sizeY: 0, x: 0.5, y: 0.5 })
 
   /**
    * Ручки стоят вплотную к углам рамки, но внутри неё.

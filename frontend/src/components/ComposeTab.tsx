@@ -23,6 +23,7 @@ import {
   FRAME_SHAPES,
   hasClipsIn,
   renderSpan,
+  shownAt,
   sourceFrame,
   useCompose,
   type ComposeClip,
@@ -936,13 +937,15 @@ export function ComposeTab() {
                     иначе она мешала бы просто смотреть. */}
                 <ComposeGrid kind={grid} />
 
+                {/* Рамки получают клип таким, каким он стоит под иглой: у
+                    анимированного место и размер берутся из ключей. */}
                 {!player.playing && placing && placing.kind !== 'text' && (
                   cropping === placing.id ? (
-                    <ComposeCropBox clip={placing} />
+                    <ComposeCropBox clip={shownAt(placing, playhead)} />
                   ) : masking === placing.id ? (
-                    <ComposeMaskBox clip={placing} />
+                    <ComposeMaskBox clip={shownAt(placing, playhead)} />
                   ) : (
-                    <ComposeFrameBox clip={placing} grid={grid} />
+                    <ComposeFrameBox clip={shownAt(placing, playhead)} grid={grid} />
                   )
                 )}
                 {!player.playing && liveText && (

@@ -13,6 +13,20 @@ import { create } from 'zustand'
 export type ClipKind = 'video' | 'image' | 'audio' | 'color' | 'text'
 
 /**
+ * Ключ анимации: где и какого размера клип в момент ``t``.
+ *
+ * ``t`` — секунды от начала клипа. Бывает и меньше нуля, и больше длины
+ * клипа: после обрезки и разреза ключи остаются на тех же кадрах ролика.
+ */
+export interface ClipKey {
+  t: number
+  x: number
+  y: number
+  size: number
+  sizeY: number
+}
+
+/**
  * Маска клипа: где он виден или где действуют его эффекты.
  *
  * Место — в долях картинки клипа: середина ``x``/``y``, размер ``w``/``h``.
@@ -83,6 +97,8 @@ export interface ComposeClip {
   reverse?: boolean
   /** Маска — прямоугольник или овал. */
   mask?: ClipMask | null
+  /** Ключи анимации места и размера. Меньше двух — клип стоит на месте. */
+  keys?: ClipKey[]
   /** Обрезка — сколько отрезать с каждой стороны, в долях картинки. Отрезанное
    *  прозрачно, оставшееся стоит на своём месте. */
   cropLeft?: number
@@ -466,6 +482,78 @@ export function speedOf(clip: ComposeClip): number {
 }
 
 /** Пределы скорости — как у сервера. */
+/** Насколько близко к ключу считается «на ключе» — кадр при 25 кадрах. */
+export const KEY_NEAR = 0.04
+
+/** Анимирован ли клип: у него есть ключи. Пока — ролики и картинки. */
+export function isAnimated(clip: ComposeClip): boolean {
+  return (clip.kind === 'video' || clip.kind === 'image') && (clip.keys?.length ?? 0) > 0
+}
+
+/**
+ * Место и размер клипа в момент ``local`` (секунды от начала клипа).
+ *
+ * Та же кривая, что у сервера (``key_expression`` в ``compose.py``): плавный
+ * разгон и торможение между ключами. Иначе рамка в окне просмотра и кадр
+ * расходились бы между ключами.
+ */
+export function placeAt(
+  clip: ComposeClip,
+  local: number,
+): { x: number; y: number; size: number; sizeY: number } {
+  const keys = [...(clip.keys ?? [])].sort((a, b) => a.t - b.t)
+  const own = { x: clip.x, y: clip.y, size: clip.size, sizeY: clip.sizeY ?? 0 }
+  if (!keys.length || !isAnimated(clip)) return own
+  const tall = (key: ClipKey) => (key.sizeY > 0 ? key.sizeY : key.size)
+  const pick = (key: ClipKey) => ({ x: key.x, y: key.y, size: key.size, sizeY: key.sizeY })
+  if (local <= keys[0].t) return pick(keys[0])
+  const last = keys[keys.length - 1]
+  if (local >= last.t) return pick(last)
+  for (let index = 0; index < keys.length - 1; index++) {
+    const left = keys[index]
+    const right = keys[index + 1]
+    if (local < right.t) {
+      const s = (local - left.t) / Math.max(right.t - left.t, 1e-3)
+      const e = s * s * (3 - 2 * s)
+      const mix = (a: number, b: number) => a + (b - a) * e
+      const anyFree = left.sizeY > 0 || right.sizeY > 0
+      return {
+        x: mix(left.x, right.x),
+        y: mix(left.y, right.y),
+        size: mix(left.size, right.size),
+        sizeY: anyFree ? mix(tall(left), tall(right)) : 0,
+      }
+    }
+  }
+  return pick(last)
+}
+
+/** Клип таким, каким он стоит в кадре под иглой: для рамок в окне просмотра. */
+export function shownAt(clip: ComposeClip, playhead: number): ComposeClip {
+  return isAnimated(clip) ? { ...clip, ...placeAt(clip, playhead - clip.start) } : clip
+}
+
+/**
+ * Ключи после правки клипа, так чтобы они остались на тех же кадрах ролика.
+ *
+ * Кадр ролика — это ``sourceIn + t * speed``; обрезали левый край или
+ * поменяли скорость — ``t`` пересчитывается под новые ``sourceIn`` и
+ * ``speed``. У картинки своих кадров нет — ключи держатся за время
+ * таймлайна: сдвинулось начало — сдвигаются и они.
+ */
+export function rekey(clip: ComposeClip, next: { start: number; sourceIn: number; speed: number }): ClipKey[] | undefined {
+  if (!clip.keys?.length) return clip.keys
+  if (clip.kind === 'image') {
+    const shift = next.start - clip.start
+    return clip.keys.map((key) => ({ ...key, t: key.t - shift }))
+  }
+  const speed = clip.speed ?? 1
+  return clip.keys.map((key) => ({
+    ...key,
+    t: (clip.sourceIn + key.t * speed - next.sourceIn) / next.speed,
+  }))
+}
+
 /** Маска по умолчанию — посередине, в половину картинки. */
 export function newMask(clip: ComposeClip): ClipMask {
   const effects = (clip.effects ?? []).some((effect) => effect.on)
@@ -587,6 +675,19 @@ interface State extends Saved {
   markOut: () => void
   clearMarks: () => void
 
+  /**
+   * Поставить клип в кадре. У анимированного клипа правка ложится в ключ под
+   * иглой — новый или тот, что уже там, — а не в сам клип.
+   */
+  placeClip: (id: string, patch: Partial<ComposeClip>) => void
+  /** Включить анимацию: первый ключ — под иглой, с нынешним местом клипа. */
+  startKeys: (id: string) => void
+  /** Поставить ключ под иглой с тем местом, что сейчас в кадре. */
+  addKey: (id: string) => void
+  /** Убрать ключ, ближайший к игле (в пределах кадра). */
+  removeKey: (id: string) => void
+  /** Выключить анимацию: клип остаётся там, где он под иглой. */
+  stopKeys: (id: string) => void
   /** Родная половина ролика: картинка для звука и звук для картинки. */
   partnerOf: (clipId: string) => ComposeClip | null
   addEffect: (clipId: string, type: string, params: Record<string, number | string>) => void
@@ -698,6 +799,7 @@ function normalize(input: unknown): Saved {
         ratio: clip.ratio ?? 0,
         radius: clip.radius ?? 0,
         effects: clip.effects ?? [],
+        keys: clip.keys ?? [],
         // Заливкам прежних версий добираем цвета рамки и тени: без них колонка
         // показывала бы одно, а программа рисовала бы другое.
         ...(clip.kind === 'color'
@@ -1367,6 +1469,11 @@ export const useCompose = create<State>((set, get) => ({
               family.includes(clip.id)
                 ? {
                     ...clip,
+                    keys: rekey(clip, {
+                      start: Math.max(0, start),
+                      sourceIn: Math.max(0, sourceIn),
+                      speed: speed ?? clip.speed ?? 1,
+                    }),
                     start: Math.max(0, start),
                     duration: Math.max(MIN_CLIP_SECONDS, duration),
                     sourceIn: Math.max(0, sourceIn),
@@ -1424,6 +1531,8 @@ export const useCompose = create<State>((set, get) => ({
             // левых кусков, правым нужна своя.
             groupId: clip.groupId ? `${clip.groupId}-r` : undefined,
           }
+          // Ключи правой половины — от её собственного начала, на тех же кадрах.
+          right.keys = rekey(clip, { start: right.start, sourceIn: right.sourceIn, speed: speedOf(clip) })
           made.push(rightId)
           next.push(
             {
@@ -1817,6 +1926,79 @@ export const useCompose = create<State>((set, get) => ({
     get().mark()
     set({ ...normalize(data), playhead: 0, selected: [], missing: [], opened: get().opened + 1 })
     save(get())
+  },
+
+  placeClip(id, patch) {
+    const clip = get().findClip(id)?.clip
+    if (!clip) return
+    if (!isAnimated(clip)) {
+      get().updateClip(id, patch)
+      return
+    }
+    const local = get().playhead - clip.start
+    const keys = clip.keys ?? []
+    const near = keys.find((key) => Math.abs(key.t - local) < KEY_NEAR)
+    const base = placeAt(clip, local)
+    // В ключ идут только место и размер: остальное — свойства самого клипа.
+    const merged = {
+      x: patch.x ?? base.x,
+      y: patch.y ?? base.y,
+      size: patch.size ?? base.size,
+      sizeY: patch.sizeY ?? base.sizeY,
+    }
+    const key: ClipKey = {
+      t: near ? near.t : local,
+      x: merged.x,
+      y: merged.y,
+      size: merged.size,
+      sizeY: merged.sizeY ?? 0,
+    }
+    get().updateClip(id, {
+      keys: near ? keys.map((item) => (item === near ? key : item)) : [...keys, key].sort((a, b) => a.t - b.t),
+    })
+  },
+
+  startKeys(id) {
+    const clip = get().findClip(id)?.clip
+    if (!clip) return
+    get().mark()
+    const local = Math.min(Math.max(get().playhead - clip.start, 0), clip.duration)
+    get().updateClip(id, {
+      keys: [{ t: local, x: clip.x, y: clip.y, size: clip.size, sizeY: clip.sizeY ?? 0 }],
+    })
+  },
+
+  addKey(id) {
+    const clip = get().findClip(id)?.clip
+    if (!clip) return
+    get().mark()
+    // Ставим ключ с тем, что сейчас видно: правка места потом ляжет в него.
+    get().placeClip(id, placeAt(clip, get().playhead - clip.start))
+  },
+
+  removeKey(id) {
+    const clip = get().findClip(id)?.clip
+    if (!clip?.keys?.length) return
+    const local = get().playhead - clip.start
+    const near = clip.keys.find((key) => Math.abs(key.t - local) < KEY_NEAR)
+    if (!near) return
+    get().mark()
+    const rest = clip.keys.filter((key) => key !== near)
+    // Последний ключ убрали — клип остаётся там, где был этот ключ.
+    get().updateClip(
+      id,
+      rest.length
+        ? { keys: rest }
+        : { keys: [], x: near.x, y: near.y, size: near.size, sizeY: near.sizeY },
+    )
+  },
+
+  stopKeys(id) {
+    const clip = get().findClip(id)?.clip
+    if (!clip) return
+    get().mark()
+    const place = placeAt(clip, get().playhead - clip.start)
+    get().updateClip(id, { keys: [], ...place })
   },
 
   partnerOf(clipId) {
