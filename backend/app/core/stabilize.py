@@ -22,7 +22,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import paths
@@ -64,13 +66,96 @@ def _name(source: str, *parts: object) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
 
 
-def target_for(source: str, smoothing: int, crop: bool) -> Path:
+def _number(params: dict[str, object], key: str, default: float, low: float, high: float) -> float:
+    try:
+        value = float(params.get(key, default))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        value = default
+    return min(high, max(low, value))
+
+
+#: Наклон на этой отметке и дальше — «без предела».
+_ANGLE_FREE = 15.0
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Настройки стабилизатора — как их выставил человек, в его шкале.
+
+    Две части: как искать тряску (``shakiness``, ``tripod`` — от них зависит
+    разметка) и как выравнивать (всё остальное — от этого зависит копия).
+    Сменили только вторую — разметку считать заново не нужно.
+    """
+
+    #: Насколько сильно трясёт: 1 — чуть, 10 — очень.
+    shakiness: int = 8
+    #: Сколько кадров сглаживать в каждую сторону.
+    smoothing: int = 18
+    #: Как на штативе: камера «замирает» на первом кадре.
+    tripod: bool = False
+    #: Приближение, чтобы спрятать края: нет, постоянное, плавно подстраивать.
+    zoom: str = "static"
+    #: Дополнительное приближение, в процентах.
+    extra_zoom: int = 0
+    #: Предел наклона в градусах; от ``_ANGLE_FREE`` и выше — без предела.
+    max_angle: float = 3.0
+    #: Открывшиеся края — кусками прошлых кадров, а не чёрным.
+    keep_edges: bool = False
+
+    @classmethod
+    def from_params(cls, params: dict[str, object]) -> "Settings":
+        zoom = str(params.get("zoom", ""))
+        if zoom not in {"off", "static", "adaptive"}:
+            # Проекты с прежней галочкой «Приблизить».
+            zoom = "static" if _number(params, "crop", 1, 0, 1) >= 0.5 else "off"
+        return cls(
+            shakiness=int(_number(params, "shakiness", 8, 1, 10)),
+            smoothing=int(_number(params, "smoothing", 18, 1, 100)),
+            tripod=_number(params, "tripod", 0, 0, 1) >= 0.5,
+            zoom=zoom,
+            extra_zoom=int(_number(params, "extraZoom", 0, 0, 40)),
+            max_angle=round(_number(params, "maxAngle", 3, 0, _ANGLE_FREE), 1),
+            keep_edges=_number(params, "keepEdges", 0, 0, 1) >= 0.5,
+        )
+
+    def detect(self) -> str:
+        """Фильтр поиска тряски, без пути к разметке."""
+        # Поля помельче и допуск к малоконтрастным местам: тряска находится
+        # увереннее, и копию меньше «водит». Проверено на ролике с тряской и
+        # наклоном: рывки вдвое слабее, чем с обычными настройками фильтра.
+        return (
+            f"vidstabdetect=shakiness={self.shakiness}:accuracy=15:stepsize=4:mincontrast=0.2"
+            + (":tripod=1" if self.tripod else "")
+        )
+
+    def transform(self) -> str:
+        """Фильтр выравнивания, без пути к разметке."""
+        optzoom = {"off": 0, "static": 1, "adaptive": 2}[self.zoom]
+        # Ошибочно найденный наклон «водит» и гнёт картинку сильнее, чем
+        # исходная тряска, поэтому по умолчанию он ограничен тремя градусами.
+        angle = -1 if self.max_angle >= _ANGLE_FREE else math.radians(self.max_angle)
+        parts = [
+            f"smoothing={self.smoothing}",
+            f"optzoom={optzoom}",
+            "zoomspeed=0.2",
+            f"zoom={self.extra_zoom}",
+            f"maxangle={angle:.4f}",
+            f"crop={'keep' if self.keep_edges else 'black'}",
+            "interpol=bicubic",
+        ]
+        if self.tripod:
+            parts.append("tripod=1")
+        return ":".join(parts)
+
+
+def target_for(source: str, settings: Settings) -> Path:
     """Где лежит (или будет лежать) ровная копия с этими настройками."""
-    return _folder() / f"{_name(source, 'v2', smoothing, int(crop))}.mp4"
+    return _folder() / f"{_name(source, 'v3', settings)}.mp4"
 
 
-def _marks_for(source: str) -> Path:
-    return _folder() / f"{_name(source, 'marks-v2')}.trf"
+def _marks_for(source: str, settings: Settings) -> Path:
+    # Разметка зависит только от того, как искали тряску.
+    return _folder() / f"{_name(source, 'marks-v3', settings.shakiness, settings.tripod)}.trf"
 
 
 def _escaped(path: Path) -> str:
@@ -118,18 +203,18 @@ async def _run(args: list[str], total: float, base: float, share: float, key: st
                 await process.wait()
 
 
-async def _make(source: str, smoothing: int, crop: bool) -> None:
-    target = target_for(source, smoothing, crop)
+async def _make(source: str, settings: Settings) -> None:
+    target = target_for(source, settings)
     key = str(target)
     info = await probe(source)
     total = info.duration or 0.0
-    marks = _marks_for(source)
+    marks = _marks_for(source, settings)
 
     # Разметка тряски — одна на файл, какие бы настройки потом ни выбрали.
     # Если она уже есть, считать осталось только копию — и её доля шкалы
     # вся от нуля до конца: прежде полоса в этом случае сразу вставала на
     # середину, как будто половина уже сделана.
-    lock = _locks.setdefault(source, asyncio.Lock())
+    lock = _locks.setdefault(str(marks), asyncio.Lock())
     fresh = not marks.exists()
     async with lock:
         if not marks.exists():
@@ -139,12 +224,7 @@ async def _make(source: str, smoothing: int, crop: bool) -> None:
                 [
                     binaries.ffmpeg(), "-hide_banner", "-nostdin", "-y",
                     "-progress", "pipe:1", "-nostats", "-i", source,
-                    # Поля помельче и допуск к малоконтрастным местам: тряска
-                    # находится увереннее, и копию меньше «водит». Проверено на
-                    # ролике с тряской и наклоном: рывки вдвое слабее прежних.
-                    "-vf",
-                    "vidstabdetect=shakiness=8:accuracy=15:stepsize=4:mincontrast=0.2"
-                    f":result={_escaped(partial)}",
+                    "-vf", f"{settings.detect()}:result={_escaped(partial)}",
                     "-an", "-f", "null", "-",
                 ],
                 total, 0.0, 0.5, key,
@@ -163,12 +243,7 @@ async def _make(source: str, smoothing: int, crop: bool) -> None:
             binaries.ffmpeg(), "-hide_banner", "-nostdin", "-y",
             "-progress", "pipe:1", "-nostats", "-i", source,
             "-vf",
-            f"vidstabtransform=input={_escaped(marks)}:smoothing={smoothing}"
-            # Наклон ограничен тремя градусами: ошибочно найденный наклон
-            # «водит» и гнёт картинку сильнее, чем исходная тряска. Края,
-            # которые открылись после сдвига, — чёрные, а не куски прошлых
-            # кадров: те смазывались и дёргались.
-            f":optzoom={1 if crop else 0}:maxangle=0.05:crop=black:interpol=bicubic"
+            f"vidstabtransform=input={_escaped(marks)}:{settings.transform()}"
             ",unsharp=5:5:0.8:3:3:0.4",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p",
             # Звук тоже копируем: ролик без отдельной звуковой дорожки на
@@ -182,8 +257,8 @@ async def _make(source: str, smoothing: int, crop: bool) -> None:
     _progress[key] = 1.0
 
 
-def _start(source: str, smoothing: int, crop: bool) -> asyncio.Task[None]:
-    key = str(target_for(source, smoothing, crop))
+def _start(source: str, settings: Settings) -> asyncio.Task[None]:
+    key = str(target_for(source, settings))
     running = _tasks.get(key)
     if running and not running.done():
         return running
@@ -197,7 +272,7 @@ def _start(source: str, smoothing: int, crop: bool) -> asyncio.Task[None]:
 
     async def job() -> None:
         try:
-            await _make(source, smoothing, crop)
+            await _make(source, settings)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — причину покажем в карточке
@@ -212,26 +287,26 @@ def _start(source: str, smoothing: int, crop: bool) -> asyncio.Task[None]:
     return task
 
 
-def ready(source: str, smoothing: int, crop: bool) -> Path | None:
+def ready(source: str, settings: Settings) -> Path | None:
     """Готовая ровная копия или ``None``. Если её нет — начинает считать."""
     try:
-        target = target_for(source, smoothing, crop)
+        target = target_for(source, settings)
     except OSError:
         return None
     if target.exists():
         return target
     if str(target) not in _errors:
-        _start(source, smoothing, crop)
+        _start(source, settings)
     return None
 
 
-async def wait(source: str, smoothing: int, crop: bool) -> Path:
+async def wait(source: str, settings: Settings) -> Path:
     """Ждёт ровную копию — для готового файла, который без неё собирать нельзя."""
-    target = target_for(source, smoothing, crop)
+    target = target_for(source, settings)
     if target.exists():
         return target
     _errors.pop(str(target), None)
-    await asyncio.shield(_start(source, smoothing, crop))
+    await asyncio.shield(_start(source, settings))
     if not target.exists():
         raise RuntimeError(
             "Не удалось стабилизировать ролик: " + _errors.get(str(target), "причина неизвестна")
@@ -239,10 +314,10 @@ async def wait(source: str, smoothing: int, crop: bool) -> Path:
     return target
 
 
-def status(source: str, smoothing: int, crop: bool) -> dict[str, object]:
+def status(source: str, settings: Settings) -> dict[str, object]:
     """Для карточки эффекта: готово, считается (и сколько) или ошибка."""
     try:
-        target = target_for(source, smoothing, crop)
+        target = target_for(source, settings)
     except OSError:
         return {"state": "missing"}
     key = str(target)

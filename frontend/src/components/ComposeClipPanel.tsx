@@ -204,9 +204,39 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
         <div className={`space-y-2.5 border-t border-line-soft px-3 py-2.5 ${effect.on ? '' : 'opacity-50'}`}>
           {kind.params.map((param) => {
             const value = effect.params[param.key] ?? param.default
+            if (param.kind === 'choice') {
+              return (
+                <div key={param.key} className="space-y-1" title={param.hint}>
+                  <span className="block text-[11.5px] text-ink-dim">{param.label}</span>
+                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-3/40 p-0.5">
+                    {(param.options ?? []).map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        title={option.hint}
+                        onClick={() =>
+                          updateEffect(clipId, effect.id, { params: { [param.key]: option.value } })
+                        }
+                        className={`rounded-md py-1 text-[11px] transition-colors ${
+                          String(value) === option.value
+                            ? 'bg-surface-3 text-ink shadow-sm'
+                            : 'text-ink-faint hover:text-ink-dim'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            }
             if (param.kind === 'check') {
               return (
-                <label key={param.key} className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-dim">
+                <label
+                  key={param.key}
+                  title={param.hint}
+                  className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-dim"
+                >
                   <input
                     type="checkbox"
                     checked={Number(value) >= 0.5}
@@ -233,8 +263,8 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
               )
             }
             return (
+              <div key={param.key} title={param.hint}>
               <SliderNumber
-                key={param.key}
                 stacked
                 label={param.label}
                 value={Number(value)}
@@ -246,6 +276,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                 marks={param.marks}
                 onChange={(next) => updateEffect(clipId, effect.id, { params: { [param.key]: next } })}
               />
+              </div>
             )
           })}
         </div>
@@ -266,8 +297,8 @@ function StabilizeState({ clipId, effect }: { clipId: string; effect: ClipEffect
   const bumpRefresh = useCompose((state) => state.bumpRefresh)
   const [answer, setAnswer] = useState<{ state: string; progress?: number; error?: string } | null>(null)
   const source = clip?.source ?? ''
-  const smoothing = Math.round(Number(effect.params.smoothing ?? 15))
-  const crop = Number(effect.params.crop ?? 1) >= 0.5
+  // Все настройки одной строкой: сменилась любая — это другая копия.
+  const settings = JSON.stringify(effect.params)
 
   useEffect(() => {
     if (!source) return
@@ -276,7 +307,7 @@ function StabilizeState({ clipId, effect }: { clipId: string; effect: ClipEffect
     let last = ''
     const ask = async () => {
       try {
-        const next = await api.stabilizeStatus(source, smoothing, crop)
+        const next = await api.stabilizeStatus(source, JSON.parse(settings))
         if (!alive) return
         setAnswer(next)
         // Только что досчиталось — кадр надо собрать по ровной копии.
@@ -294,7 +325,7 @@ function StabilizeState({ clipId, effect }: { clipId: string; effect: ClipEffect
       alive = false
       if (timer) clearTimeout(timer)
     }
-  }, [source, smoothing, crop, bumpRefresh])
+  }, [source, settings, bumpRefresh])
 
   if (!answer || answer.state === 'ready') return null
   return (

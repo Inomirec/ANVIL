@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from ..models import ClipEffect, ComposeClip
+from . import stabilize
 
 #: Цвет для хромакея — только «#rrggbb», иначе в команду попало бы что угодно.
 _HEX = re.compile(r"#?[0-9a-fA-F]{6}")
@@ -171,16 +172,13 @@ def blurred_fill(clip: ComposeClip) -> tuple[float, float] | None:
     return None
 
 
-def stabilizer(clip: ComposeClip) -> tuple[int, bool] | None:
-    """Настройки стабилизатора: плавность и приближение, или ``None``."""
+def stabilizer(clip: ComposeClip) -> "stabilize.Settings | None":
+    """Настройки стабилизатора или ``None``, если его нет или он выключен."""
     if clip.kind != "video":
         return None
     for effect in clip.effects:
         if effect.on and effect.type == "stabilize":
-            return (
-                int(_number(effect, "smoothing", 15, 3, 60)),
-                _number(effect, "crop", 1, 0, 1) >= 0.5,
-            )
+            return stabilize.Settings.from_params(effect.params)
     return None
 
 

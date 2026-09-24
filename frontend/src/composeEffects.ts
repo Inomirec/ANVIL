@@ -14,8 +14,12 @@ export type EffectTarget = 'video' | 'audio'
 export interface EffectParam {
   key: string
   label: string
-  /** Ползунок, выбор цвета или галочка (1 — включено, 0 — нет). */
-  kind?: 'slider' | 'color' | 'check'
+  /** Ползунок, выбор цвета, галочка (1 — включено, 0 — нет) или выбор из нескольких. */
+  kind?: 'slider' | 'color' | 'check' | 'choice'
+  /** Варианты для выбора из нескольких. */
+  options?: { value: string; label: string; hint?: string }[]
+  /** Пояснение при наведении. */
+  hint?: string
   min?: number
   max?: number
   step?: number
@@ -116,8 +120,70 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Убрать тряску камеры. Ролик один раз обсчитывается в фоне — это занимает время',
     params: [
-      { key: 'smoothing', label: 'Плавность', min: 3, max: 60, default: 18, marks: [{ value: 5, label: 'слабо' }, { value: 18, label: 'обычно' }, { value: 35, label: 'плавно' }, { value: 55, label: 'очень' }] },
-      { key: 'crop', label: 'Приблизить, чтобы спрятать края', kind: 'check', default: 1 },
+      {
+        key: 'shakiness',
+        label: 'Насколько сильно трясёт',
+        min: 1,
+        max: 10,
+        default: 8,
+        hint: 'Чем выше, тем резче тряска, которую программа ищет. Меняется долго: ролик изучается заново',
+        marks: [{ value: 2, label: 'чуть' }, { value: 5, label: 'средне' }, { value: 8, label: 'обычно' }, { value: 10, label: 'очень' }],
+      },
+      {
+        key: 'smoothing',
+        label: 'Плавность',
+        min: 3,
+        max: 60,
+        default: 18,
+        hint: 'Сколько кадров сглаживать. Мало — камера двигается как была, только без мелкой дрожи; много — плывёт плавно',
+        marks: [{ value: 5, label: 'слабо' }, { value: 18, label: 'обычно' }, { value: 35, label: 'плавно' }, { value: 55, label: 'очень' }],
+      },
+      {
+        key: 'tripod',
+        label: 'Как на штативе',
+        kind: 'check',
+        default: 0,
+        hint: 'Камера «замирает» на первом кадре — для съёмки с одного места. Плавность тогда не действует',
+      },
+      {
+        key: 'zoom',
+        label: 'Приблизить, чтобы спрятать края',
+        kind: 'choice',
+        default: 'static',
+        options: [
+          { value: 'off', label: 'Нет', hint: 'Без приближения: по краям видны чёрные полосы' },
+          { value: 'static', label: 'Постоянно', hint: 'Одно приближение на весь ролик — ровно столько, чтобы края не показывались' },
+          { value: 'adaptive', label: 'Плавно', hint: 'Приближение подстраивается по ходу ролика: где тряска слабее, кадр шире' },
+        ],
+      },
+      {
+        key: 'extraZoom',
+        label: 'Приблизить ещё',
+        min: 0,
+        max: 40,
+        unit: '%',
+        default: 0,
+        hint: 'Дополнительно к приближению выше — если по краям всё ещё что-то видно',
+        marks: [{ value: 0, label: 'нет' }, { value: 5, label: '+5%' }, { value: 15, label: '+15%' }],
+      },
+      {
+        key: 'maxAngle',
+        label: 'Предел наклона',
+        min: 0,
+        max: 15,
+        step: 0.5,
+        unit: '°',
+        default: 3,
+        hint: 'Насколько можно наклонять кадр, выравнивая его. Если картинку «водит» и гнёт — уменьшите',
+        marks: [{ value: 0, label: 'не наклонять' }, { value: 3, label: 'обычно' }, { value: 15, label: 'без предела' }],
+      },
+      {
+        key: 'keepEdges',
+        label: 'Заполнять края прошлыми кадрами',
+        kind: 'check',
+        default: 0,
+        hint: 'Вместо чёрного по краям — кусок предыдущих кадров. Бывает незаметнее, бывает смазывается',
+      },
     ],
   },
   {

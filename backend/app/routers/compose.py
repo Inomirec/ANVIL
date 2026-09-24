@@ -386,11 +386,11 @@ async def stabilize_status(request: StabilizeRequest) -> dict[str, object]:
         path = fsutil.safe_path(request.source)
     except (PermissionError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
-    smoothing = max(3, min(60, request.smoothing))
-    answer = stabilize.status(str(path), smoothing, request.crop)
+    settings = stabilize.Settings.from_params(request.params)
+    answer = stabilize.status(str(path), settings)
     if answer["state"] == "idle":
-        stabilize.ready(str(path), smoothing, request.crop)
-        answer = stabilize.status(str(path), smoothing, request.crop)
+        stabilize.ready(str(path), settings)
+        answer = stabilize.status(str(path), settings)
     return answer
 
 

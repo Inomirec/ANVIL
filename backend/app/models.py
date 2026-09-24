@@ -469,11 +469,10 @@ class ComposeFindRequest(BaseModel):
 
 
 class StabilizeRequest(BaseModel):
-    """Готова ли ровная копия ролика с такими настройками."""
+    """Готова ли ровная копия ролика с такими настройками стабилизатора."""
 
     source: str
-    smoothing: int = 15
-    crop: bool = True
+    params: dict[str, float | str] = Field(default_factory=dict)
 
 
 class ComposeFrameRequest(ComposeModel):

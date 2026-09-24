@@ -880,7 +880,7 @@ async def prepare(
                 # Для окна просмотра — что есть: копия готова — берём её, нет —
                 # показываем исходник, а копия тем временем считается в фоне.
                 # Готовому файлу ждать приходится: см. ``stabilize_all``.
-                ready = stabilize.ready(str(path), *steady)
+                ready = stabilize.ready(str(path), steady)
                 clip.stable_source = str(ready) if ready else ""
             if effects.needs_size(clip) and not clip.source_width:
                 try:
@@ -922,7 +922,7 @@ async def stabilize_all(project: ComposeProject) -> None:
         for clip in track.clips:
             steady = effects.stabilizer(clip)
             if steady and not clip.stable_source:
-                clip.stable_source = str(await stabilize.wait(clip.source, *steady))
+                clip.stable_source = str(await stabilize.wait(clip.source, steady))
 
 
 def check_sources(sources: list[str]) -> dict[str, list[str]]:
