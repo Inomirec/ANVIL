@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Camera,
+  ChevronLeft,
+  ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Maximize2,
@@ -15,6 +17,7 @@ import {
 } from 'lucide-react'
 import { api, mediaUrl } from '../lib/api'
 import { humanSize, timecode } from '../lib/format'
+import { cutTimes, frameCode, useScenes } from '../lib/scenes'
 import type { FileInfo, FilmstripInfo } from '../lib/types'
 import { useStore } from '../store'
 import { Timeline, type Fades } from './Timeline'
@@ -201,13 +204,22 @@ export function MediaEditor({
     applyFades(media, media.currentTime)
   }, [volume, muted, rate, file.path, applyFades])
 
-  const seek = useCallback((value: number) => {
-    const media = mediaRef.current
-    if (!media) return
-    const target = Math.min(Math.max(value, 0), media.duration || value)
-    media.currentTime = target
-    setTime(target)
-  }, [])
+  // Игла стоит на кадре, а не между кадрами: так можно попасть ровно в
+  // последний кадр сцены. Плееру отдаём чуть позже начала кадра — ровно на
+  // границе он иногда показывает предыдущий.
+  const fps = isVideo ? file.media?.fps || 30 : 100
+  const frameOf = useCallback((value: number) => Math.floor(value * fps + 1e-3) / fps, [fps])
+  const seek = useCallback(
+    (value: number) => {
+      const media = mediaRef.current
+      if (!media) return
+      const end = media.duration || value
+      const target = Math.min(Math.max(Math.round(value * fps) / fps, 0), end)
+      media.currentTime = Math.min(target + 0.25 / fps, end)
+      setTime(target)
+    },
+    [fps],
+  )
 
   const togglePlay = useCallback(() => {
     const media = mediaRef.current
@@ -233,29 +245,52 @@ export function MediaEditor({
     (delta: number) => {
       const media = mediaRef.current
       if (!media) return
-      seek(media.currentTime + delta)
+      seek(frameOf(media.currentTime) + delta)
     },
-    [seek],
+    [seek, frameOf],
+  )
+
+  // Склейки ролика: Shift со стрелкой шагает к соседней смене сцены.
+  const scenes = useScenes(isVideo ? file.path : null, isVideo)
+  const toScene = useCallback(
+    (forward: boolean) => {
+      const media = mediaRef.current
+      if (!media) return
+      const here = frameOf(media.currentTime)
+      const half = 0.5 / fps
+      const points = [
+        0,
+        ...(scenes ? cutTimes(scenes) : []).map((at) => Math.ceil(at * fps - 1e-3) / fps),
+        ...(trim.in !== null ? [trim.in] : []),
+        ...(trim.out !== null ? [trim.out] : []),
+        media.duration || duration,
+      ].sort((a, b) => a - b)
+      const next = forward
+        ? points.find((at) => at > here + half)
+        : [...points].reverse().find((at) => at < here - half)
+      if (next !== undefined) seek(next)
+    },
+    [scenes, fps, frameOf, seek, trim.in, trim.out, duration],
   )
 
   const setIn = useCallback(() => {
     const media = mediaRef.current
     if (!media) return
-    const value = media.currentTime
+    const value = frameOf(media.currentTime)
     const total = media.duration || duration
     // Если новая метка начала оказалась правее конца — отодвигаем конец в хвост,
     // иначе выделение схлопнулось бы в ноль.
     const end = trim.out !== null && trim.out <= value ? total : trim.out
     onTrimChange({ in: value, out: end ?? total })
-  }, [onTrimChange, trim.out, duration])
+  }, [onTrimChange, trim.out, duration, frameOf])
 
   const setOut = useCallback(() => {
     const media = mediaRef.current
     if (!media) return
-    const value = media.currentTime
+    const value = frameOf(media.currentTime)
     const start = trim.in !== null && trim.in >= value ? 0 : trim.in
     onTrimChange({ in: start ?? 0, out: value })
-  }, [onTrimChange, trim.in])
+  }, [onTrimChange, trim.in, frameOf])
 
   /** Сохраняет текущий кадр картинкой как есть — для вопросов-угадаек. */
   const grabFrame = useCallback(async () => {
@@ -278,6 +313,16 @@ export function MediaEditor({
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+      // Стрелки: на кадр; со Shift — к соседней склейке или метке; с Ctrl —
+      // на 5 секунд.
+      if ((event.code === 'ArrowLeft' || event.code === 'ArrowRight') && !event.altKey && !event.metaKey) {
+        event.preventDefault()
+        const forward = event.code === 'ArrowRight'
+        if (event.ctrlKey) nudge(forward ? 5 : -5)
+        else if (event.shiftKey) toScene(forward)
+        else nudge((forward ? 1 : -1) / fps)
+        return
+      }
       if (event.ctrlKey || event.metaKey || event.altKey) return
 
       switch (event.code) {
@@ -303,14 +348,6 @@ export function MediaEditor({
         case 'KeyM':
           setMuted((value) => !value)
           break
-        case 'ArrowLeft':
-          event.preventDefault()
-          nudge(event.shiftKey ? -1 / 30 : -5)
-          break
-        case 'ArrowRight':
-          event.preventDefault()
-          nudge(event.shiftKey ? 1 / 30 : 5)
-          break
         case 'Home':
           seek(0)
           break
@@ -321,7 +358,7 @@ export function MediaEditor({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [togglePlay, setIn, setOut, nudge, seek, duration, grabFrame])
+  }, [togglePlay, setIn, setOut, nudge, seek, duration, grabFrame, toScene, fps])
 
   const onTimeUpdate = () => {
     const media = mediaRef.current
@@ -331,7 +368,7 @@ export function MediaEditor({
       media.currentTime = trim.in ?? 0
       return
     }
-    setTime(media.currentTime)
+    setTime(frameOf(media.currentTime))
     applyFades(media, media.currentTime)
   }
 
@@ -429,6 +466,8 @@ export function MediaEditor({
           peaksLoading={peaksLoading}
           strip={strip}
           stripLoading={stripLoading}
+          scenes={scenes}
+          fps={isVideo ? fps : undefined}
           hasVideo={isVideo}
           hasAudio={file.media?.hasAudio ?? !isVideo}
           fades={fades}
@@ -444,9 +483,14 @@ export function MediaEditor({
         <IconButton onClick={() => seek(0)} title="В начало (Home)">
           <SkipBack size={16} />
         </IconButton>
-        <IconButton onClick={() => nudge(-5)} title="Назад 5 с (←)">
+        <IconButton onClick={() => nudge(-5)} title="Назад 5 с (Ctrl+←)">
           <ChevronsLeft size={16} />
         </IconButton>
+        {isVideo && (
+          <IconButton onClick={() => nudge(-1 / fps)} title="Кадр назад (←). Shift+← — к предыдущей смене сцены">
+            <ChevronLeft size={16} />
+          </IconButton>
+        )}
         <button
           type="button"
           onClick={togglePlay}
@@ -455,7 +499,12 @@ export function MediaEditor({
         >
           {playing ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
         </button>
-        <IconButton onClick={() => nudge(5)} title="Вперёд 5 с (→)">
+        {isVideo && (
+          <IconButton onClick={() => nudge(1 / fps)} title="Кадр вперёд (→). Shift+→ — к следующей смене сцены">
+            <ChevronRight size={16} />
+          </IconButton>
+        )}
+        <IconButton onClick={() => nudge(5)} title="Вперёд 5 с (Ctrl+→)">
           <ChevronsRight size={16} />
         </IconButton>
         <IconButton onClick={() => seek(duration)} title="В конец (End)">
@@ -463,7 +512,10 @@ export function MediaEditor({
         </IconButton>
 
         <span className="ml-2 font-mono text-[12px] tabular-nums text-ink-dim">
-          {timecode(time, true)} <span className="text-ink-faint">/ {timecode(duration)}</span>
+          <span title={isVideo ? 'Минуты, секунды и номер кадра в секунде' : undefined}>
+            {isVideo ? frameCode(time, fps) : timecode(time, true)}
+          </span>{' '}
+          <span className="text-ink-faint">/ {timecode(duration)}</span>
         </span>
 
         <div className="mx-2 h-5 w-px bg-line" />
@@ -582,7 +634,7 @@ export function MediaEditor({
           <span className="text-warn">без звуковой дорожки</span>
         )}
         <span className="ml-auto text-ink-faint/70">
-          Пробел — играть · I / O — метки · L — зациклить · S — кадр · уголки дорожек тянут затухание
+          Пробел — играть · ← → — кадр · Shift+← → — смена сцены · I / O — метки · L — зациклить · S — кадр · уголки дорожек тянут затухание
         </span>
       </div>
     </div>

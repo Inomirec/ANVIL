@@ -127,6 +127,23 @@ def _window(clip: ComposeClip, at: float, span: float) -> tuple[float, float, fl
     return seek, take, offset
 
 
+def _still_seek(clip: ComposeClip, at: float, fps: int) -> float:
+    """Откуда читать ролик ради одного кадра под иглой.
+
+    В готовом файле кадр монтажа показывает последний кадр ролика, который
+    успел начаться к этому моменту (``fps`` округляет время кадра до
+    ближайшего кадра монтажа). Чтение с ``-ss`` же отдаёт первый кадр *после*
+    момента — и на склейке окно просмотра показывало уже новую сцену, когда в
+    файле была ещё прежняя. Поэтому ищем начало нужного кадра сами, по сетке
+    кадров ролика.
+    """
+    rate = clip.source_fps
+    skip = max(0.0, at - clip.start)
+    limit = clip.source_in + (skip + 0.5 / max(fps, 1)) * clip.speed
+    frame = max(0, math.ceil(limit * rate - 1e-6) - 1)
+    return max(clip.source_in, frame / rate - 0.25 / rate, 0.0)
+
+
 def fit_filter(width: int, height: int, fps: int) -> str:
     """Вписать чужой кадр в кадр проекта, добив поля чёрным.
 
@@ -783,8 +800,10 @@ def build_segment(
             # Стабилизированный ролик читаем из ровной копии: времена в ней те
             # же, что в исходнике, поэтому и обрезка, и разрез на месте.
             source = clip.stable_source or clip.source
+            if still and not clip.reverse and clip.source_fps > 0:
+                seek = _still_seek(clip, at, fps)
             # Из файла берём столько, сколько пройдёт за окно с этой скоростью.
-            inputs += ["-ss", f"{seek:.3f}", "-t", f"{take * clip.speed:.3f}", "-i", source]
+            inputs += ["-ss", f"{seek:.4f}", "-t", f"{take * clip.speed:.3f}", "-i", source]
 
         if clip.kind != "audio":
             fades = video_fades(clip, at, take, moment=at if still else None)
@@ -1005,6 +1024,12 @@ async def prepare(
                     stream = info.video
                     if stream and stream.width and stream.height:
                         clip.source_width, clip.source_height = stream.width, stream.height
+                except (RuntimeError, OSError):
+                    pass
+            if clip.kind == "video" and not clip.source_fps:
+                try:
+                    stream = (await probe(path)).video
+                    clip.source_fps = (stream.fps or 0.0) if stream else 0.0
                 except (RuntimeError, OSError):
                     pass
             if clip.kind == "image":

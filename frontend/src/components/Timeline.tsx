@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Magnet, Maximize, ZoomIn, ZoomOut } from 'lucide-react'
 import { timecode } from '../lib/format'
-import type { FilmstripInfo } from '../lib/types'
+import type { FilmstripInfo, SceneInfo } from '../lib/types'
+import { SceneStrip } from './SceneStrip'
 
 type Drag =
   | { kind: 'playhead' }
@@ -59,6 +60,8 @@ export function Timeline({
   peaksLoading,
   strip,
   stripLoading,
+  scenes,
+  fps,
   hasVideo = true,
   hasAudio = true,
   fades,
@@ -78,6 +81,10 @@ export function Timeline({
   peaksLoading?: boolean
   strip?: FilmstripInfo | null
   stripLoading?: boolean
+  /** Кадры по сценам: если пришли, лента рисуется по ним. */
+  scenes?: SceneInfo | null
+  /** Кадров в секунду: метки и игла встают на кадры. */
+  fps?: number
   hasVideo?: boolean
   hasAudio?: boolean
   fades?: Fades
@@ -91,6 +98,22 @@ export function Timeline({
   const [drag, setDrag] = useState<Drag>(null)
   const [hover, setHover] = useState<number | null>(null)
   const [zoom, setZoom] = useState(1)
+  // Ширина дорожки в пикселях: ленте по сценам нужно знать, сколько плиток
+  // помещается.
+  const [trackWidth, setTrackWidth] = useState(0)
+  useEffect(() => {
+    const track = trackRef.current
+    if (!track) return
+    const measure = () => setTrackWidth(track.getBoundingClientRect().width)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(track)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [])
   const [viewStart, setViewStart] = useState(0)
 
   const safeDuration = duration > 0 ? duration : 1
@@ -148,9 +171,11 @@ export function Timeline({
       if (!track) return 0
       const rect = track.getBoundingClientRect()
       const ratio = clamp((clientX - rect.left) / rect.width, 0, 1)
-      return start + ratio * span
+      const time = start + ratio * span
+      // На кадр, а не между кадрами — и игла, и метки.
+      return fps ? Math.min(Math.round(time * fps) / fps, safeDuration) : time
     },
-    [start, span],
+    [start, span, fps, safeDuration],
   )
 
   /** Меняет масштаб, оставляя иглу в центре — размечают именно по ней. */
@@ -386,7 +411,11 @@ export function Timeline({
             editable={Boolean(onFadesChange)}
             onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'video', side })}
           >
-            {strip ? (
+            {scenes && trackWidth > 0 ? (
+              <div className="relative h-full w-full">
+                <SceneStrip info={scenes} from={start} to={end} width={trackWidth} height={STRIP_HEIGHT} />
+              </div>
+            ) : strip ? (
               <FilmStrip strip={strip} height={STRIP_HEIGHT} view={{ start, span, total: safeDuration }} />
             ) : (
               <div className="h-full w-full animate-pulse-soft bg-surface-3/50" />
@@ -448,6 +477,18 @@ export function Timeline({
           <div
             className="pointer-events-none absolute inset-y-0 w-px bg-ink/25"
             style={{ left: `${toRatio(hover) * 100}%` }}
+          />
+        )}
+
+        {/* Черта на каждом кадре — когда приблизили так, что кадр шире
+            нескольких пикселей. */}
+        {fps && trackWidth > 0 && trackWidth / span / fps >= 6 && (
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 h-2"
+            style={{
+              backgroundImage: `repeating-linear-gradient(to right, rgba(255,255,255,0.35) 0 1px, transparent 1px ${trackWidth / span / fps}px)`,
+              backgroundPositionX: `${-((start * fps) % 1) * (trackWidth / span / fps)}px`,
+            }}
           />
         )}
 

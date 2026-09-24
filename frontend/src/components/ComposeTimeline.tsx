@@ -28,13 +28,15 @@ import {
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
-import type { FilmstripInfo } from '../lib/types'
+import { cutTimes, frameCode, scenesOf, useScenes } from '../lib/scenes'
+import { SceneStrip } from './SceneStrip'
 import {
   clipEdges,
   magnets,
   dbToGain,
   gainToDb,
   MAX_DB,
+  MAX_SCALE,
   MAX_TRACKS,
   MIN_CLIP_SECONDS,
   MIN_DB,
@@ -167,6 +169,7 @@ export function ComposeTimeline({
   const playhead = useCompose((state) => state.playhead)
   const selected = useCompose((state) => state.selected)
   const scale = useCompose((state) => state.scale)
+  const fps = useCompose((state) => state.fps) || 30
   const toast = useStore((state) => state.toast)
   const renderIn = useCompose((state) => state.renderIn)
   const renderOut = useCompose((state) => state.renderOut)
@@ -549,6 +552,39 @@ export function ComposeTimeline({
       if (tag === 'INPUT' || tag === 'TEXTAREA' || editable) return
       const key = event.key.toLowerCase()
 
+      // Стрелки — на кадр, со Shift — к соседней склейке или краю клипа,
+      // Home и End — к началу и концу монтажа. Так и ставят иглу на
+      // последний кадр сцены: Shift+→ к склейке, затем ← на кадр назад.
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+        const state = useCompose.getState()
+        const frame = 1 / (state.fps || 30)
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          event.preventDefault()
+          const forward = event.key === 'ArrowRight'
+          if (!event.shiftKey) {
+            state.setPlayhead(state.playhead + (forward ? frame : -frame))
+            return
+          }
+          const points = editPoints(state.tracks, state.fps || 30)
+          const here = state.playhead
+          const next = forward
+            ? points.find((at) => at > here + frame / 2)
+            : [...points].reverse().find((at) => at < here - frame / 2)
+          if (next !== undefined) state.setPlayhead(next)
+          return
+        }
+        if (event.key === 'Home') {
+          event.preventDefault()
+          state.setPlayhead(0)
+          return
+        }
+        if (event.key === 'End') {
+          event.preventDefault()
+          state.setPlayhead(state.duration())
+          return
+        }
+      }
+
       // Ctrl+Z и Ctrl+A — то же, что и везде. Без своей обработки Ctrl+A
       // выделял всю страницу, а отменять правку было нечем.
       if (event.ctrlKey || event.metaKey) {
@@ -676,7 +712,7 @@ export function ComposeTimeline({
     }
     const state = useCompose.getState()
     keepPlayhead(
-      Math.min(400, Math.max(minScale(), state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15))),
+      Math.min(MAX_SCALE, Math.max(minScale(), state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15))),
     )
   }
   const wheelRef = useRef(onWheel)
@@ -867,7 +903,7 @@ export function ComposeTimeline({
           </IconButton>
           <IconButton
             title="Приблизить (колесо мыши)"
-            onClick={() => keepPlayhead(Math.min(400, scale * 1.4))}
+            onClick={() => keepPlayhead(Math.min(MAX_SCALE, scale * 1.4))}
           >
             <ZoomIn size={14} />
           </IconButton>
@@ -876,9 +912,9 @@ export function ComposeTimeline({
               перетаскиванию, и время вместе с ним не копировалось. */}
           <span
             className="shrink-0 cursor-text select-text font-mono text-[11px] tabular-nums text-ink-dim"
-            title="Где стоит игла: минуты, секунды и десятые"
+            title="Где стоит игла: минуты, секунды и номер кадра в секунде"
           >
-            {timecode(playhead, true)}
+            {frameCode(playhead, fps)}
           </span>
         </div>
       </div>
@@ -914,6 +950,7 @@ export function ComposeTimeline({
           <Ruler
             span={span}
             scale={scale}
+            fps={fps}
             renderIn={renderIn}
             renderOut={renderOut}
             duration={duration}
@@ -1812,10 +1849,38 @@ function clipsInside(
   return caught
 }
 
+/**
+ * Куда шагает Shift со стрелкой: края клипов и склейки внутри роликов, по
+ * возрастанию. Склейка файла переводится во время монтажа с учётом обрезки,
+ * скорости и «задом наперёд»; известны они, когда лента кадров уже пришла.
+ */
+function editPoints(tracks: ComposeTrack[], fps: number): number[] {
+  const points = new Set<number>(clipEdges(tracks))
+  for (const track of tracks) {
+    for (const clip of track.clips) {
+      if (clip.kind !== 'video') continue
+      const info = scenesOf(clip.source)
+      if (!info) continue
+      const speed = speedOf(clip)
+      const from = clip.sourceIn
+      const to = clip.sourceIn + clip.duration * speed
+      for (const cut of cutTimes(info)) {
+        if (cut <= from || cut >= to) continue
+        // Кадр монтажа, с которого в готовом файле уже новая сцена: сборка
+        // ставит кадр ролика на ближайший кадр монтажа.
+        const at = clip.start + (clip.reverse ? to - cut : cut - from) / speed
+        points.add(Math.round(at * fps) / fps)
+      }
+    }
+  }
+  return [...points].sort((a, b) => a - b)
+}
+
 /** Линейка с делениями и метками отрезка сборки. */
 function Ruler({
   span,
   scale,
+  fps,
   renderIn,
   renderOut,
   duration,
@@ -1823,15 +1888,22 @@ function Ruler({
 }: {
   span: number
   scale: number
+  fps: number
   renderIn: number | null
   renderOut: number | null
   duration: number
   onSeek: (at: number) => void
 }) {
-  const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+  // На сильном приближении деления идут кадрами: 1, 2, 5, 10 кадров.
+  const frame = 1 / fps
+  const steps = [frame, 2 * frame, 5 * frame, 10 * frame, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
   const step = steps.find((value) => value * scale >= 70) ?? 900
+  const inFrames = step < 1
   const marks: number[] = []
-  for (let at = 0; at <= span; at += step) marks.push(at)
+  for (let index = 0; index * step <= span; index++) marks.push(index * step)
+  // Черта на каждом кадре — когда кадр шире нескольких пикселей. Рисуется
+  // фоном, а не тысячей делений.
+  const frameWidth = scale / fps
 
   const from = renderIn ?? 0
   const to = renderOut ?? duration
@@ -1851,11 +1923,20 @@ function Ruler({
           style={{ left: from * scale, width: Math.max((to - from) * scale, 2) }}
         />
       )}
+      {frameWidth >= 5 && (
+        <div
+          className="pointer-events-none absolute bottom-0 left-0 h-1.5"
+          style={{
+            width: span * scale,
+            backgroundImage: `repeating-linear-gradient(to right, rgba(255,255,255,0.22) 0 1px, transparent 1px ${frameWidth}px)`,
+          }}
+        />
+      )}
       {marks.map((at) => (
         <div key={at} className="absolute top-0 h-full" style={{ left: at * scale }}>
           <div className="h-2 w-px bg-line" />
           <span className="ml-1 font-mono text-[9.5px] tabular-nums text-ink-faint">
-            {timecode(at)}
+            {inFrames ? frameCode(at, fps) : timecode(at)}
           </span>
         </div>
       ))}
@@ -1869,30 +1950,7 @@ function Ruler({
 // держим в памяти: один файл на таймлайне встречается несколько раз (разрезали
 // ролик — стало три клипа), и запрашивать одно и то же по разу на клип незачем.
 
-const stripCache = new Map<string, FilmstripInfo | null>()
 const waveCache = new Map<string, number[] | null>()
-
-function useStrip(path: string, enabled: boolean): FilmstripInfo | null {
-  const [strip, setStrip] = useState<FilmstripInfo | null>(() => stripCache.get(path) ?? null)
-  useEffect(() => {
-    if (!enabled || stripCache.has(path)) {
-      setStrip(stripCache.get(path) ?? null)
-      return
-    }
-    let alive = true
-    api
-      .filmstrip(path)
-      .then((data) => {
-        stripCache.set(path, data)
-        if (alive) setStrip(data)
-      })
-      .catch(() => stripCache.set(path, null))
-    return () => {
-      alive = false
-    }
-  }, [path, enabled])
-  return strip
-}
 
 /**
  * Точек волны просим по длине файла, а не поровну на все.
@@ -1925,30 +1983,6 @@ function useWave(path: string, enabled: boolean, seconds: number): number[] | nu
     }
   }, [path, enabled, seconds])
   return peaks
-}
-
-/** Кадры ролика внутри клипа, с учётом обрезанных краёв. */
-function StripFill({ clip, strip }: { clip: ComposeClip; strip: FilmstripInfo }) {
-  const whole = clip.sourceDuration || clip.duration
-  // Лента нарисована на весь файл, а клип показывает его кусок: растягиваем
-  // ленту во столько раз, во сколько кусок короче файла, и сдвигаем к началу
-  // куска.
-  const stretch = (whole / (clip.duration * speedOf(clip))) * 100
-  const shift = (clip.sourceIn / whole) * 100
-  return (
-    <div className="absolute inset-0 overflow-hidden opacity-55">
-      <div
-        className="h-full origin-left"
-        style={{
-          width: `${stretch}%`,
-          transform: `translateX(-${shift}%)`,
-          backgroundImage: `url(${strip.url})`,
-          backgroundSize: 'auto 100%',
-          backgroundRepeat: 'repeat-x',
-        }}
-      />
-    </div>
-  )
 }
 
 /** Звуковая волна внутри клипа. */
@@ -2014,7 +2048,9 @@ function ClipBox({
   // Мелкому клипу лента кадров и волна не нужны — там нечего разглядывать,
   // а запрос стоит времени.
   const detailed = box > 40
-  const strip = useStrip(clip.source, detailed && clip.kind === 'video')
+  // Кадры по сценам: первая плитка каждой сцены — её первый кадр, ровно
+  // там, где на клипе склейка.
+  const scenes = useScenes(clip.source, detailed && clip.kind === 'video')
   const peaks = useWave(clip.source, detailed && sound, clip.sourceDuration || clip.duration)
   const thumb = `/api/library/thumbnail?path=${encodeURIComponent(clip.source)}`
 
@@ -2060,8 +2096,16 @@ function ClipBox({
           <div className="absolute inset-0 bg-ok/12" />
           {peaks && <WaveFill clip={clip} peaks={peaks} />}
         </>
-      ) : strip ? (
-        <StripFill clip={clip} strip={strip} />
+      ) : scenes ? (
+        <SceneStrip
+          info={scenes}
+          from={clip.sourceIn}
+          to={clip.sourceIn + clip.duration * speedOf(clip)}
+          reverse={Boolean(clip.reverse)}
+          width={box}
+          height={height - 14}
+          className="opacity-55"
+        />
       ) : (
         <div
           className="absolute inset-0 bg-cover bg-center opacity-45"

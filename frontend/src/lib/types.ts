@@ -259,6 +259,21 @@ export interface Waveform {
   hasAudio: boolean
 }
 
+/** Склейки ролика и кадры по сценам (`/api/library/scenes`). */
+export interface SceneInfo {
+  url: string
+  tileWidth: number
+  tileHeight: number
+  /** Кадров в ряду сетки. */
+  columns: number
+  /** Кадров в секунду у самого ролика. */
+  fps: number
+  /** Время каждого кадра сетки, по порядку. */
+  times: number[]
+  /** Номера кадров сетки, с которых начинается новая сцена. */
+  cuts: number[]
+}
+
 export interface FilmstripInfo {
   url: string
   frames: number

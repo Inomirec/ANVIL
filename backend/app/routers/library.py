@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from .. import config
-from ..core import filmstrip, fsutil, thumbs, trash, waveform
+from ..core import filmstrip, fsutil, scenes, thumbs, trash, waveform
 from ..core.events import bus
 from ..core.probe import moves, probe
 from ..models import PathRequest, PathsRequest, RenameRequest
@@ -230,6 +230,45 @@ async def video_filmstrip_image(path: str, frames: int = filmstrip.DEFAULT_FRAME
         raise HTTPException(404, "Лента кадров недоступна")
     return FileResponse(
         strip.path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/scenes")
+async def video_scenes(path: str) -> dict[str, Any]:
+    """Склейки ролика и кадры по сценам — для ленты на клипе и шага по сценам."""
+    try:
+        target = fsutil.safe_path(path)
+    except (PermissionError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if fsutil.media_kind(target) != "video":
+        raise HTTPException(400, "Сцены есть только у видео")
+    try:
+        found = await scenes.build(target)
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(500, f"Не удалось найти сцены: {exc}") from exc
+    if not found:
+        raise HTTPException(404, "У файла нет видеодорожки")
+    return {
+        **found.as_json(),
+        # Имя картинки меняется вместе с файлом — старую браузер не возьмёт.
+        "url": f"/api/library/scenes/image?path={quote(str(target))}&v={found.sprite.stem[:12]}",
+    }
+
+
+@router.get("/scenes/image")
+async def video_scenes_image(path: str) -> FileResponse:
+    """Сетка кадров по сценам одной картинкой."""
+    try:
+        target = fsutil.safe_path(path)
+    except (PermissionError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    found = scenes.cached(target)
+    if not found:
+        raise HTTPException(404, "Кадры ещё не готовы")
+    return FileResponse(
+        found.sprite,
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400"},
     )

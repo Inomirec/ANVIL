@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .. import __version__
-from ..core import appwindow, binaries, filmstrip, jobs, pipeline, presets, thumbs, updates, waveform
+from ..core import appwindow, binaries, filmstrip, jobs, pipeline, presets, scenes, thumbs, updates, waveform
 from ..core.events import bus
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -186,5 +186,5 @@ async def events() -> StreamingResponse:
 async def clear_thumbnails() -> dict:
     """Чистит миниатюры, ленты кадров и разобранные звуковые волны."""
     return {
-        "removed": thumbs.clear_cache() + waveform.clear_cache() + filmstrip.clear_cache()
+        "removed": thumbs.clear_cache() + waveform.clear_cache() + filmstrip.clear_cache() + scenes.clear_cache()
     }

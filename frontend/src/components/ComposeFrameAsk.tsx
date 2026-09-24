@@ -29,6 +29,17 @@ export function ComposeFrameAsk({
 }) {
   const size = question ? sourceFrame(question.width, question.height) : null
   const shrunk = question && Math.max(question.width, question.height) > SOURCE_SIZE_LIMIT
+  // Форма та же — полей не будет, меняется только чёткость: файл уменьшится
+  // или растянется до кадра монтажа.
+  const sameShape =
+    question && Math.abs(question.width / question.height - current.width / current.height) < 0.01
+  const consequence = !question
+    ? ''
+    : !sameShape
+      ? 'Если оставить как есть, по краям файла будут чёрные поля.'
+      : question.width > current.width
+        ? 'Форма та же, но готовое видео будет меньше и не такое чёткое, как файл.'
+        : 'Форма та же, но файл растянется до кадра монтажа и станет мягче.'
 
   return (
     <Modal open={Boolean(question)} onClose={onKeep} title="Размер кадра">
@@ -36,8 +47,7 @@ export function ComposeFrameAsk({
         <div className="space-y-4">
           <p className="text-[13px] leading-relaxed text-ink-dim">
             У файла «{question.name}» размер {question.width}×{question.height}, а у монтажа сейчас{' '}
-            {current.width}×{current.height}. Если оставить как есть, по краям файла будут чёрные
-            поля.
+            {current.width}×{current.height}. {consequence}
           </p>
           {shrunk && (
             <p className="text-[12px] leading-relaxed text-ink-faint">

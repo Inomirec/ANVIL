@@ -485,6 +485,12 @@ export function speedOf(clip: ComposeClip): number {
 /** Насколько близко к ключу считается «на ключе» — кадр при 25 кадрах. */
 export const KEY_NEAR = 0.04
 
+/**
+ * Самое сильное приближение таймлайна, пикселей на секунду. При 30 кадрах в
+ * секунду это полсотни пикселей на кадр — по кадру можно попасть мышью.
+ */
+export const MAX_SCALE = 1500
+
 /** Анимирован ли клип: у него есть ключи. Пока — ролики и картинки. */
 export function isAnimated(clip: ComposeClip): boolean {
   return (clip.kind === 'video' || clip.kind === 'image') && (clip.keys?.length ?? 0) > 0
@@ -1152,13 +1158,16 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   setPlayhead(at) {
-    set({ playhead: Math.max(0, at) })
+    // Игла стоит на кадре, а не между ними: иначе ключ или разрез ложатся в
+    // середину кадра, и попасть в последний кадр сцены нельзя.
+    const fps = get().fps || 30
+    set({ playhead: Math.max(0, Math.round(at * fps) / fps) })
   },
 
   setScale(scale) {
     // Нижний предел здесь только страховочный: настоящий считает таймлайн —
     // он знает и длину монтажа, и ширину окна, а хранилище нет.
-    set({ scale: Math.min(400, Math.max(0.05, scale)) })
+    set({ scale: Math.min(MAX_SCALE, Math.max(0.05, scale)) })
   },
 
   // Как человеку удобно смотреть — не часть монтажа, поэтому в файл проекта
