@@ -124,6 +124,30 @@ def _audio_effect(effect: ClipEffect) -> str:
     return ""
 
 
+def crop_filter(clip: ComposeClip) -> str:
+    """Обрезка: отрезанное прозрачное, оставшееся на своём месте.
+
+    Не просто ``crop``: тот уменьшил бы картинку, и при вписывании в кадр
+    оставшаяся часть растянулась бы на всё место клипа. Человек тянет край
+    рамки и ждёт, что отрежется край, а не что картинка прыгнет. Поэтому
+    после обрезки картинка добивается прозрачными полями до прежнего размера
+    — ровно на том месте, где отрезали. Обрезка идёт после поворота и
+    отражения: режут то, что видят.
+    """
+    left, top = clip.crop_left, clip.crop_top
+    right, bottom = clip.crop_right, clip.crop_bottom
+    if max(left, top, right, bottom) < 1e-3:
+        return ""
+    keep_w = max(0.05, 1 - left - right)
+    keep_h = max(0.05, 1 - top - bottom)
+    return (
+        f"crop=w=iw*{keep_w:.5f}:h=ih*{keep_h:.5f}:x=iw*{left:.5f}:y=ih*{top:.5f},"
+        "format=yuva420p,"
+        f"pad=w=ceil(iw/{keep_w:.5f}/2)*2:h=ceil(ih/{keep_h:.5f}/2)*2"
+        f":x=ow*{left:.5f}:y=oh*{top:.5f}:color=black@0"
+    )
+
+
 def video_chain(clip: ComposeClip, *, preview: bool = False) -> str:
     """Фильтры картинки клипа — с запятой в конце или пустая строка.
 
@@ -148,6 +172,9 @@ def video_chain(clip: ComposeClip, *, preview: bool = False) -> str:
         parts.append("hflip")
     if clip.flip_v:
         parts.append("vflip")
+    crop = crop_filter(clip)
+    if crop:
+        parts.append(crop)
     for effect in clip.effects:
         if effect.on:
             chunk = _video_effect(effect, clip, preview)

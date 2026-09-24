@@ -47,6 +47,7 @@ import {
   useCompose,
   MAX_SPEED,
   MIN_SPEED,
+  isCropped,
   speedOf,
   type ComposeClip,
   type ComposeTrack,
@@ -1599,6 +1600,10 @@ function ClipMenu({
               {item('Отразить по горизонтали', '', () => state.flipClips(pick(state, clipId), 'h'))}
               {item('Отразить по вертикали', '', () => state.flipClips(pick(state, clipId), 'v'))}
               {item('Повернуть на 90°', '', () => state.rotateClips(pick(state, clipId)))}
+              {item('Обрезать…', '', () => {
+                state.select([clipId])
+                state.setCropping(clipId)
+              })}
             </>
           )}
           {clip.kind !== 'image' &&
@@ -2166,6 +2171,7 @@ function ClipBox({
             clip.flipH ||
             clip.flipV ||
             Boolean(clip.rotate) ||
+            isCropped(clip) ||
             clip.reverse) && (
             <span className="shrink-0 rounded bg-accent/30 px-1 font-mono text-[9px] leading-[13px] text-white">
               fx

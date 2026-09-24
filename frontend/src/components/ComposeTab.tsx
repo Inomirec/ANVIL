@@ -37,6 +37,7 @@ import {
   TRACK_HEIGHT,
 } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
+import { ComposeCropBox } from './ComposeCropBox'
 import { ComposeProjects } from './ComposeProjects'
 import { ComposeMissing } from './ComposeMissing'
 import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
@@ -202,6 +203,12 @@ export function ComposeTab() {
   const [missingOpen, setMissingOpen] = useState(false)
   const opened = useCompose((state) => state.opened)
   const refresh = useCompose((state) => state.refresh)
+  const cropping = useCompose((state) => state.cropping)
+  // Выделение ушло с клипа — и обрезка его закончена: рамка обрезки без
+  // выделенного клипа только путала бы.
+  useEffect(() => {
+    if (cropping && !selected.includes(cropping)) useCompose.getState().setCropping(null)
+  }, [cropping, selected])
   const missingAlert = useCompose((state) => state.missingAlert)
   useEffect(() => {
     if (missingAlert) setMissingOpen(true)
@@ -307,12 +314,18 @@ export function ComposeTab() {
       const view = useCompose.getState()
       // Надпись, которую правят в кадре, рисует само окно — живьём, на каждую
       // букву. Программе её рисовать незачем: получилось бы две.
-      const shownTracks = liveTextId
-        ? view.tracks.map((track) => ({
-            ...track,
-            clips: track.clips.filter((clip) => clip.id !== liveTextId),
-          }))
-        : view.tracks
+      // Обрезаемый клип показываем целиком: отрезаемое затемняет рамка
+      // обрезки, и видно, что уходит, а что остаётся.
+      const shownTracks = view.tracks.map((track) => ({
+        ...track,
+        clips: track.clips
+          .filter((clip) => clip.id !== liveTextId)
+          .map((clip) =>
+            clip.id === view.cropping
+              ? { ...clip, cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 }
+              : clip,
+          ),
+      }))
       // Кроме правящейся надписи в кадре ничего нет — собирать нечего: просто
       // чёрный кадр под ней, без сообщения «пусто» за буквами.
       if (!shownTracks.some((track) => track.clips.length)) {
@@ -363,7 +376,7 @@ export function ComposeTab() {
     }
     // Размер кадра тоже: без него после смены формы окно показывало кадр
     // прежней формы, пока не сдвинешь иглу.
-  }, [playhead, clips, tracks, player.playing, liveTextId, width, height, refresh])
+  }, [playhead, clips, tracks, player.playing, liveTextId, width, height, refresh, cropping])
 
   // Открыли проект (или программа подняла прошлый монтаж) — сразу чёрный
   // кадр вместо кадра прежнего проекта: иначе ошибку о пропавшем файле
@@ -919,7 +932,11 @@ export function ComposeTab() {
                 <ComposeGrid kind={grid} />
 
                 {!player.playing && placing && placing.kind !== 'text' && (
-                  <ComposeFrameBox clip={placing} grid={grid} />
+                  cropping === placing.id ? (
+                    <ComposeCropBox clip={placing} />
+                  ) : (
+                    <ComposeFrameBox clip={placing} grid={grid} />
+                  )
                 )}
                 {!player.playing && liveText && (
                   <ComposeTextOverlay clip={liveText} grid={grid} />

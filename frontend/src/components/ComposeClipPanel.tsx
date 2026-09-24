@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, FlipHorizontal2, FlipVertical2, Gauge, Plus, RotateCw, Undo2, X } from 'lucide-react'
-import { speedOf, useCompose, type ClipEffect, type ComposeClip } from '../composeStore'
+import { ChevronDown, Crop, FlipHorizontal2, FlipVertical2, Gauge, Plus, RotateCw, Undo2, X } from 'lucide-react'
+import { isCropped, speedOf, useCompose, type ClipEffect, type ComposeClip } from '../composeStore'
 import {
   EFFECTS,
   effectKind,
@@ -33,6 +33,8 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
   const visual = clip.kind === 'audio' ? partner : clip
   const sound = clip.kind === 'audio' ? clip : partner
   const [picking, setPicking] = useState(false)
+  const cropping = useCompose((state) => state.cropping)
+  const setCropping = useCompose((state) => state.setCropping)
 
   const parts: { clip: ComposeClip; target: EffectTarget; title: string }[] = []
   if (visual && targetOf(visual.kind)) parts.push({ clip: visual, target: 'video', title: 'Картинка' })
@@ -50,10 +52,26 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
 
       {(visual ?? sound) && <Transforms clip={(visual ?? sound)!} />}
 
-      <Button tone="primary" className="w-full" onClick={() => setPicking(true)}>
-        <Plus size={15} />
-        Добавить эффект
-      </Button>
+      <div className="flex flex-col gap-2">
+        <Button tone="primary" onClick={() => setPicking(true)}>
+          <Plus size={15} />
+          Добавить эффект
+        </Button>
+        {visual && (visual.kind === 'video' || visual.kind === 'image') && (
+          <Button
+            tone={cropping === visual.id ? 'primary' : 'subtle'}
+            onClick={() => setCropping(cropping === visual.id ? null : visual.id)}
+            title={
+              cropping === visual.id
+                ? 'Закончить обрезку (Enter)'
+                : 'Обрезать края картинки прямо в окне просмотра'
+            }
+          >
+            <Crop size={15} />
+            {cropping === visual.id ? 'Готово' : 'Обрезать'}
+          </Button>
+        )}
+      </div>
 
       {parts.map((part) => (
         <div key={part.clip.id} className="space-y-2">
@@ -114,6 +132,16 @@ function Transforms({ clip }: { clip: ComposeClip }) {
       label: `Скорость ×${Math.round(speedOf(clip) * 100) / 100}`,
       icon: <Gauge size={12} />,
       off: () => state.resetSpeed(clip.id),
+    })
+  }
+  if (isCropped(clip)) {
+    marks.push({
+      label: 'Обрезано',
+      icon: <Crop size={12} />,
+      off: () => {
+        state.mark()
+        state.updateClip(clip.id, { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 })
+      },
     })
   }
   if (clip.reverse) {

@@ -62,6 +62,12 @@ export interface ComposeClip {
   rotate?: number
   /** Играть задом наперёд. */
   reverse?: boolean
+  /** Обрезка — сколько отрезать с каждой стороны, в долях картинки. Отрезанное
+   *  прозрачно, оставшееся стоит на своём месте. */
+  cropLeft?: number
+  cropTop?: number
+  cropRight?: number
+  cropBottom?: number
   /** Скорость: 2 — вдвое быстрее, 0.5 — вдвое медленнее. Из файла берётся
    *  ``duration * speed`` секунд. */
   speed?: number
@@ -439,6 +445,16 @@ export function speedOf(clip: ComposeClip): number {
 }
 
 /** Пределы скорости — как у сервера. */
+/** Обрезан ли клип хоть с одной стороны. */
+export function isCropped(clip: ComposeClip): boolean {
+  return Boolean(
+    (clip.cropLeft ?? 0) > 1e-3 ||
+      (clip.cropTop ?? 0) > 1e-3 ||
+      (clip.cropRight ?? 0) > 1e-3 ||
+      (clip.cropBottom ?? 0) > 1e-3,
+  )
+}
+
 export const MIN_SPEED = 0.25
 export const MAX_SPEED = 4
 
@@ -476,6 +492,9 @@ interface State extends Saved {
    *  досчиталась ровная копия после стабилизатора. */
   refresh: number
   bumpRefresh: () => void
+  /** Клип, который сейчас обрезают в окне просмотра, или ``null``. */
+  cropping: string | null
+  setCropping: (id: string | null) => void
   /** Файлы монтажа, которых нет на месте: такие клипы помечены на дорожке. */
   missing: string[]
   setMissing: (paths: string[]) => void
@@ -895,6 +914,19 @@ export const useCompose = create<State>((set, get) => ({
   })(),
   headWidth: recall('sgh.composeHead', 150),
   refresh: 0,
+  cropping: null,
+  setCropping: (id) => {
+    if (id) {
+      // Рамку обрезки видно, только когда клип под иглой: иначе режешь
+      // вслепую. Игла вне клипа — переводим её в его середину.
+      const clip = get().findClip(id)?.clip
+      const { playhead } = get()
+      if (clip && (playhead < clip.start || playhead >= clip.start + clip.duration)) {
+        set({ playhead: clip.start + clip.duration / 2 })
+      }
+    }
+    set({ cropping: id })
+  },
   bumpRefresh: () => set({ refresh: get().refresh + 1 }),
   missing: [],
   missingAlert: 0,

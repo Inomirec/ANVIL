@@ -351,6 +351,12 @@ class ComposeClip(ComposeModel):
     rotate: int = Field(default=0, ge=0, le=270)
     #: Играть задом наперёд — и картинку, и звук.
     reverse: bool = False
+    #: Обрезка: сколько отрезать с каждой стороны, в долях картинки. Отрезанное
+    #: становится прозрачным, оставшееся стоит на своём месте и своего размера.
+    crop_left: float = Field(default=0.0, ge=0.0, le=0.95)
+    crop_top: float = Field(default=0.0, ge=0.0, le=0.95)
+    crop_right: float = Field(default=0.0, ge=0.0, le=0.95)
+    crop_bottom: float = Field(default=0.0, ge=0.0, le=0.95)
     #: Скорость: 2 — вдвое быстрее, 0.5 — вдвое медленнее. ``duration`` —
     #: место на таймлайне, а из файла берётся ``duration * speed`` секунд.
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
