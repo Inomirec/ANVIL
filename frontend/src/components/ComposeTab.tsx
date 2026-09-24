@@ -38,6 +38,7 @@ import {
 } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeProjects } from './ComposeProjects'
+import { ComposeMissing } from './ComposeMissing'
 import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
 import { ComposeTextPanel } from './ComposeTextPanel'
 import { ComposeFillPanel } from './ComposeFillPanel'
@@ -195,6 +196,8 @@ export function ComposeTab() {
 
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
   const [frameError, setFrameError] = useState<string | null>(null)
+  const [missingOpen, setMissingOpen] = useState(false)
+  const opened = useCompose((state) => state.opened)
   const [busy, setBusy] = useState(false)
   // Чем кодировать готовый файл. Запоминаем: настраивают это редко, а
   // собирают часто.
@@ -350,6 +353,52 @@ export function ComposeTab() {
     // Размер кадра тоже: без него после смены формы окно показывало кадр
     // прежней формы, пока не сдвинешь иглу.
   }, [playhead, clips, tracks, player.playing, liveTextId, width, height])
+
+  // Открыли проект (или программа подняла прошлый монтаж) — сразу чёрный
+  // кадр вместо кадра прежнего проекта: иначе ошибку о пропавшем файле
+  // человек читал поверх чужой картинки и думал, что речь о ней. Потом
+  // проверяем файлы: пропавшие — окно со старыми путями, найденные вне
+  // рабочих папок — добавляем папку сами, как при перетаскивании.
+  useEffect(() => {
+    setFrameUrl((old) => {
+      if (old) URL.revokeObjectURL(old)
+      return null
+    })
+    setFrameError(null)
+    if (opened) player.stop()
+    const sources = [
+      ...new Set(
+        useCompose
+          .getState()
+          .tracks.flatMap((track) => track.clips)
+          .filter((clip) => clip.kind !== 'color' && clip.kind !== 'text' && clip.source)
+          .map((clip) => clip.source),
+      ),
+    ]
+    if (!sources.length) {
+      useCompose.getState().setMissing([])
+      return
+    }
+    let alive = true
+    void (async () => {
+      try {
+        const check = await api.composeCheck(sources)
+        const folders = [...new Set(check.outside.map(parentDir))]
+        for (const folder of folders) await api.addWorkspace(folder)
+        if (folders.length) await useStore.getState().refreshSettings()
+        if (!alive) return
+        useCompose.getState().setMissing(check.missing)
+        if (check.missing.length) setMissingOpen(true)
+      } catch {
+        /* проверка не удалась — ошибки покажет сам кадр */
+      }
+    })()
+    return () => {
+      alive = false
+    }
+    // Только на открытие проекта и первый показ вкладки, не на каждую правку.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened])
 
   // Картинку держим ровно до следующей: иначе браузер копит их в памяти.
   useEffect(() => () => {
@@ -824,9 +873,12 @@ export function ComposeTab() {
                   <img src={frameUrl} alt="" className="h-full w-full object-contain" />
                 )}
                 {!player.playing && frameError && (
-                  <p className="absolute inset-0 flex items-center justify-center p-4 text-center text-[12px] leading-snug text-danger">
-                    {frameError}
-                  </p>
+                  // Текст ошибки выделяется: его переписывают или ищут по нему.
+                  <div className="absolute inset-0 flex items-center justify-center p-4">
+                    <p className="cursor-text select-text whitespace-pre-line break-all text-center text-[12px] leading-snug text-danger">
+                      {frameError}
+                    </p>
+                  </div>
                 )}
 
                 {/* Рамка выбранного клипа: за неё его двигают и меняют
@@ -844,7 +896,7 @@ export function ComposeTab() {
               </div>
 
                 {player.error && (
-                  <p className="absolute inset-x-0 bottom-0 bg-danger/85 px-3 py-1.5 text-center text-[11px] text-white">
+                  <p className="absolute inset-x-0 bottom-0 cursor-text select-text whitespace-pre-line break-all bg-danger/85 px-3 py-1.5 text-center text-[11px] text-white">
                     {player.error}
                   </p>
                 )}
@@ -1064,6 +1116,7 @@ export function ComposeTab() {
       </aside>
 
       <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
+      <ComposeMissing open={missingOpen} onClose={() => setMissingOpen(false)} />
 
       <ComposeFrameAsk
         question={frameQuestion}

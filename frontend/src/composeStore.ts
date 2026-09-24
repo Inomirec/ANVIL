@@ -440,6 +440,14 @@ interface State extends Saved {
   selected: string[]
   /** Что человек выбрал сам, до того как выделение разошлось по группам. */
   picked: string[]
+  /** Файлы монтажа, которых нет на месте: такие клипы помечены на дорожке. */
+  missing: string[]
+  setMissing: (paths: string[]) => void
+  /** Подставляет новый путь вместо пропавшего во всех клипах с этим файлом. */
+  relink: (from: string, to: string) => void
+  /** Растёт при каждом открытии проекта: окно просмотра по нему сбрасывает
+   *  кадр прежнего проекта и заново проверяет файлы. */
+  opened: number
   /** Под каким именем открыт проект — чтобы сохранять поверх него. */
   projectName: string
   setProjectName: (name: string) => void
@@ -823,6 +831,8 @@ export const useCompose = create<State>((set, get) => ({
     }
   })(),
   headWidth: recall('sgh.composeHead', 150),
+  missing: [],
+  opened: 0,
 
   setQuality(quality) {
     const { shape, turned } = get()
@@ -1631,7 +1641,34 @@ export const useCompose = create<State>((set, get) => ({
    */
   loadProject(data) {
     get().mark()
-    set({ ...normalize(data), playhead: 0, selected: [] })
+    set({ ...normalize(data), playhead: 0, selected: [], missing: [], opened: get().opened + 1 })
+    save(get())
+  },
+
+  setMissing(paths) {
+    set({ missing: paths })
+  },
+
+  relink(from, to) {
+    get().mark()
+    const oldName = from.split(/[\\/]/).pop()
+    const newName = to.split(/[\\/]/).pop() ?? to
+    set((state) => ({
+      tracks: state.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) =>
+          clip.source === from
+            ? {
+                ...clip,
+                source: to,
+                // Подпись на клипе — имя файла, если человек её не менял.
+                name: clip.name === oldName ? newName : clip.name,
+              }
+            : clip,
+        ),
+      })),
+      missing: state.missing.filter((path) => path !== from),
+    }))
     save(get())
   },
 

@@ -795,8 +795,11 @@ export function ComposeTimeline({
       </div>
 
       {/* Слева названия дорожек, справа само полотно. Прокручиваются они
-          вместе по высоте, а вбок — только полотно. */}
-      <div ref={vscroll} className="flex min-h-0 flex-1 overflow-y-auto" onWheel={onWheel}>
+          вместе по высоте, а вбок — только полотно. `items-start` обязателен:
+          иначе полотно растягивается лишь на видимую высоту, прокручивается
+          по высоте само (вбок-прокрутка тянет за собой и вертикальную), и
+          когда дорожки перестают влезать, названия и дорожки разъезжаются. */}
+      <div ref={vscroll} className="flex min-h-0 flex-1 items-start overflow-y-auto" onWheel={onWheel}>
         <TrackHeads
           tracks={tracks}
           width={headWidth}
@@ -1761,6 +1764,9 @@ function ClipBox({
 }) {
   const sound = clip.kind === 'audio'
   const solid = clip.kind === 'color'
+  // Файла на месте нет: клип остаётся, но помечен — чтобы было видно, что
+  // именно не соберётся, и можно было удалить его или указать новое место.
+  const lost = useCompose((state) => state.missing.includes(clip.source))
   // Сжатая дорожка: подписи и уголки в неё не помещаются.
   const short = height < TRACK_HEIGHT
   // У звука линия показывает громкость, у картинки — насколько она видна.
@@ -1830,6 +1836,12 @@ function ClipBox({
       )}
       {!solid && clip.kind !== 'text' && (
         <div className="absolute inset-0 bg-gradient-to-b from-surface-3/55 to-surface-3/80" />
+      )}
+      {lost && (
+        <div
+          className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(239,68,68,0.35)_0_6px,transparent_6px_12px)]"
+          title={`Файл не найден: ${clip.source}`}
+        />
       )}
 
       {/* Затухания: затемнённые треугольники по краям, как в монтажках. */}

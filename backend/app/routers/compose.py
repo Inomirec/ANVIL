@@ -18,6 +18,8 @@ from .. import paths
 from ..core import binaries, compose, fonts, fsutil, pipeline, trash
 from ..models import (
     ComposeBuildRequest,
+    ComposeCheckRequest,
+    ComposeFindRequest,
     ComposeDraftRequest,
     ComposeFrameRequest,
     ComposeProjectFile,
@@ -38,7 +40,7 @@ async def frame(request: ComposeFrameRequest) -> Response:
     секунды, потому что в команду попадают только клипы под иглой.
     """
     try:
-        project = await compose.prepare(request.project)
+        project = await compose.prepare(request.project, skip_missing=True)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -109,7 +111,7 @@ async def draft(request: ComposeDraftRequest) -> dict:
     пересобирать одно и то же незачем.
     """
     try:
-        project = await compose.prepare(request.project)
+        project = await compose.prepare(request.project, skip_missing=True)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -351,6 +353,18 @@ async def font_file(name: str, bold: bool = False, italic: bool = False) -> File
     kind = "font/otf" if path.lower().endswith(".otf") else "font/ttf"
     # Файл шрифта не меняется, пока он установлен, — пусть окно держит его.
     return FileResponse(path, media_type=kind, headers={"Cache-Control": "max-age=3600"})
+
+
+@router.post("/check")
+async def check(request: ComposeCheckRequest) -> dict[str, list[str]]:
+    """Какие файлы монтажа пропали — для окна при открытии проекта."""
+    return await asyncio.to_thread(compose.check_sources, request.sources)
+
+
+@router.post("/find-near")
+async def find_near(request: ComposeFindRequest) -> dict[str, dict[str, str]]:
+    """Ищет остальные пропавшие файлы в папке, где нашёлся один из них."""
+    return {"found": await asyncio.to_thread(compose.find_near, request.folder, request.sources)}
 
 
 @router.post("/snapshot")

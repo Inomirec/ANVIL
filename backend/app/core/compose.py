@@ -775,25 +775,32 @@ def build_frame(project: ComposeProject, output: Path, at: float, width: int) ->
     )
 
 
-async def prepare(project: ComposeProject) -> ComposeProject:
+async def prepare(project: ComposeProject, *, skip_missing: bool = False) -> ComposeProject:
     """Проверяет файлы монтажа и выясняет, у кого из них есть звук.
 
     Зовётся перед каждой сборкой. Проверка путей — та же, что у остальной
     программы: за пределы рабочих папок монтаж не выходит. Наличие звука
     нужно знать заранее — ffmpeg падает, если попросить дорожку, которой нет,
     а ответы ffprobe кэшируются, так что дважды один файл не читается.
+
+    ``skip_missing`` — для просмотра: пропавший файл просто не рисуется, а
+    остальной монтаж виден. Человек может отложить поиск файла и работать
+    дальше; о пропаже ему уже сказало окно при открытии проекта. Готовый
+    файл так не собирается: молча выкинуть кусок монтажа из результата нельзя.
     """
     missing: list[str] = []
     for track in project.tracks:
+        kept = []
         for clip in track.clips:
             # У сплошного фона и у надписи файла нет — и проверять нечего.
             if clip.kind in {"color", "text"}:
                 clip.has_audio = False
+                kept.append(clip)
                 continue
             try:
                 path = fsutil.safe_path(clip.source)
             except (PermissionError, FileNotFoundError, ValueError):
-                missing.append(Path(clip.source).name)
+                missing.append(clip.source)
                 continue
             clip.source = str(path)
             if clip.kind == "image":
@@ -803,10 +810,51 @@ async def prepare(project: ComposeProject) -> ComposeProject:
                     clip.has_audio = (await probe(path)).has_audio
                 except (RuntimeError, OSError):
                     clip.has_audio = False
+            kept.append(clip)
+        track.clips = kept
 
-    if missing:
-        names = ", ".join(sorted(set(missing))[:5])
-        raise FileNotFoundError(
-            f"Файлы монтажа не найдены или лежат вне рабочих папок: {names}"
-        )
+    if missing and not skip_missing:
+        # Полный путь, а не одно имя: по имени непонятно, где файл лежал и что
+        # искать, а одинаковые имена бывают в разных папках.
+        shown = sorted(set(missing))
+        listed = "\n".join(shown[:5]) + (f"\n…и ещё {len(shown) - 5}" if len(shown) > 5 else "")
+        raise FileNotFoundError(f"Файлы монтажа не найдены или лежат вне рабочих папок:\n{listed}")
     return project
+
+
+def check_sources(sources: list[str]) -> dict[str, list[str]]:
+    """Какие файлы монтажа пропали, а какие лежат вне рабочих папок.
+
+    Пропавшие человек ищет сам — окно при открытии проекта. Найденные вне
+    рабочих папок программа добавляет в них сама: файл на месте, и отбивать
+    его ошибкой незачем (так же, как при перетаскивании на таймлайн).
+    """
+    missing: list[str] = []
+    outside: list[str] = []
+    for source in dict.fromkeys(sources):
+        try:
+            fsutil.safe_path(source)
+        except PermissionError:
+            if Path(source).is_file():
+                outside.append(source)
+            else:
+                missing.append(source)
+        except (FileNotFoundError, ValueError):
+            missing.append(source)
+    return {"missing": missing, "outside": outside}
+
+
+def find_near(folder: str, sources: list[str]) -> dict[str, str]:
+    """Ищет пропавшие файлы по имени в папке, где нашёлся один из них.
+
+    Файлы проекта обычно переезжают вместе, и если один нашёлся в новой папке,
+    остальные, скорее всего, лежат там же. Смотрим только саму папку: обход
+    вглубь на большом диске занял бы секунды, а угадывал бы редко.
+    """
+    base = Path(folder)
+    found: dict[str, str] = {}
+    for source in sources:
+        candidate = base / Path(source.replace("\\", "/")).name
+        if candidate.is_file():
+            found[source] = str(candidate)
+    return found

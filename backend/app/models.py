@@ -237,6 +237,12 @@ class PathRequest(BaseModel):
     path: str
 
 
+class PickFileRequest(BaseModel):
+    """В какой папке открыть окно выбора файла."""
+
+    directory: str | None = None
+
+
 class PathsRequest(BaseModel):
     paths: list[str]
 
@@ -412,6 +418,19 @@ class ComposeProject(ComposeModel):
             (clip.end for track in self.tracks for clip in track.clips),
             default=0.0,
         )
+
+
+class ComposeCheckRequest(BaseModel):
+    """Пути файлов монтажа — проверить, на месте ли они."""
+
+    sources: list[str]
+
+
+class ComposeFindRequest(BaseModel):
+    """Где искать пропавшие файлы и какие именно."""
+
+    folder: str
+    sources: list[str]
 
 
 class ComposeFrameRequest(ComposeModel):

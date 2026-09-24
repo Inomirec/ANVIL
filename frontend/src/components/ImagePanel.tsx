@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Play } from 'lucide-react'
 import { api } from '../lib/api'
-import { humanSize, parentDir, plural } from '../lib/format'
+import { parentDir, plural } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
 import { strokesToPng } from '../lib/paint'
 import type { FileInfo, ImageOptions, ImagePreview, Preset } from '../lib/types'
@@ -95,7 +95,6 @@ export function ImagePanel({
   const movingUnsupported = animated && options.format !== 'webp'
   const [showPreview, setShowPreview] = useState(() => loadPrefs().imagePreview ?? true)
   const [preview, setPreview] = useState<ImagePreview | null>(null)
-  const [previewBusy, setPreviewBusy] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
 
   // Пресет не хранится отдельно: он вычисляется из настроек. Иначе подсветка
@@ -153,7 +152,6 @@ export function ImagePanel({
 
     const mine = ++requestId.current
     const timer = setTimeout(() => {
-      setPreviewBusy(true)
       api
         .imagePreview({ source: file.path, image: { ...options, ...editPayload } })
         .then((result) => {
@@ -167,9 +165,6 @@ export function ImagePanel({
           setPreview(null)
           setPreviewError(error.message)
           onPreview(null)
-        })
-        .finally(() => {
-          if (mine === requestId.current) setPreviewBusy(false)
         })
     }, 350)
 
@@ -276,7 +271,6 @@ export function ImagePanel({
     }
   }
 
-  const ratio = preview && preview.size ? file.size / preview.size : 0
 
   const formatLabel = FORMATS.find((item) => item.value === options.format)?.label ?? options.format
   const sizeLabel = SIZES.find((item) => item.value === String(options.max_dimension))?.label
@@ -371,43 +365,19 @@ export function ImagePanel({
           />
         </Section>
 
+        {/* Вес результата виден на самой картинке — на кнопке «После» над ней,
+            поэтому отдельного окошка «было → стало» здесь нет. Остаётся только
+            ошибка просчёта: её больше показать негде. */}
         <Section
-          title="Что получится"
+          title="Остальные настройки"
           id="image.result"
-          summary={
-            <>
-              {preview && showPreview && <span>{humanSize(preview.size)}</span>}
-              {deleteOriginal && <DeleteMark />}
-            </>
-          }
+          summary={deleteOriginal ? <DeleteMark /> : undefined}
         >
-          <div className="rounded-xl bg-surface-2 px-3 py-2.5 ring-1 ring-line-soft">
-            {!showPreview ? (
-              <p className="text-[12px] text-ink-faint">Превью выключено.</p>
-            ) : previewError ? (
-              <p className="text-[12px] text-danger">{previewError}</p>
-            ) : preview ? (
-              <>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-[12px] text-ink-faint">{humanSize(file.size)} →</span>
-                  <span className="text-[18px] font-medium text-ink">
-                    {humanSize(preview.size)}
-                  </span>
-                  {ratio >= 1.05 && (
-                    <span className="text-[11px] text-ink-faint">
-                      в {ratio.toFixed(1).replace('.0', '')} раза меньше
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1 text-[11px] leading-snug text-ink-faint">
-                  {preview.width}×{preview.height} px
-                  {previewBusy ? ' · считаю…' : ' · кнопка «До / после» над картинкой'}
-                </p>
-              </>
-            ) : (
-              <p className="text-[12px] text-ink-faint">Считаю…</p>
-            )}
-          </div>
+          {showPreview && previewError && (
+            <p className="rounded-xl bg-surface-2 px-3 py-2.5 text-[12px] text-danger ring-1 ring-line-soft">
+              {previewError}
+            </p>
+          )}
 
           <Toggle
             checked={showPreview}

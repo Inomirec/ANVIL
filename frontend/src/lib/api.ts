@@ -103,6 +103,15 @@ export const api = {
   browse: (path?: string | null) =>
     request<BrowseResponse>(`/api/settings/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   pickFolder: () => post<{ supported: boolean; path: string | null }>('/api/settings/pick-folder'),
+  /** Окно Windows для выбора файла — открывается в папке ``directory``. */
+  pickFile: (directory?: string | null) =>
+    post<{ supported: boolean; path: string | null }>('/api/settings/pick-file', { directory }),
+  /** Какие файлы монтажа пропали и какие лежат вне рабочих папок. */
+  composeCheck: (sources: string[]) =>
+    post<{ missing: string[]; outside: string[] }>('/api/compose/check', { sources }),
+  /** Ищет пропавшие файлы в папке, где нашёлся один из них. */
+  composeFindNear: (folder: string, sources: string[]) =>
+    post<{ found: Record<string, string> }>('/api/compose/find-near', { folder, sources }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/settings/reveal', { path }),
 
   library: (params: { root?: string; kind?: string; search?: string; recursive?: boolean }) => {

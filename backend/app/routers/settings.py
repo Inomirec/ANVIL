@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import string
@@ -16,7 +17,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from .. import config
 from ..core import binaries, download, fsutil
 from ..core.events import bus
-from ..models import PathRequest, SettingsPatch
+from ..models import PathRequest, PickFileRequest, SettingsPatch
 from ..paths import data_dir, default_workspace
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -132,7 +133,31 @@ async def pick_folder() -> dict[str, Any]:
     if not windows:
         return {"supported": False, "path": None}
 
-    result = windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+    # Окно выбора держит вызов, пока человек не нажмёт «ОК». Прямо в
+    # обработчике это остановило бы весь сервер на всё это время.
+    result = await asyncio.to_thread(windows[0].create_file_dialog, webview.FOLDER_DIALOG)
+    if not result:
+        return {"supported": True, "path": None}
+    return {"supported": True, "path": str(result[0])}
+
+
+@router.post("/pick-file")
+async def pick_file(payload: PickFileRequest) -> dict[str, Any]:
+    """Нативный диалог выбора файла — например, чтобы найти пропавший файл
+    проекта. Открывается в папке, где файл лежал раньше, если она есть."""
+    try:
+        import webview  # type: ignore[import-not-found]
+    except ImportError:
+        return {"supported": False, "path": None}
+
+    windows = getattr(webview, "windows", [])
+    if not windows:
+        return {"supported": False, "path": None}
+
+    start = payload.directory if payload.directory and Path(payload.directory).is_dir() else ""
+    result = await asyncio.to_thread(
+        windows[0].create_file_dialog, webview.OPEN_DIALOG, directory=start
+    )
     if not result:
         return {"supported": True, "path": None}
     return {"supported": True, "path": str(result[0])}
