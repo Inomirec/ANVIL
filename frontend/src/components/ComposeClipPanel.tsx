@@ -1,31 +1,19 @@
 import { useEffect, useState } from 'react'
 import {
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Crop,
-  Diamond,
   FlipHorizontal2,
   FlipVertical2,
   Gauge,
+  Move,
   Plus,
   RotateCw,
   SquareDashed,
-  Timer,
   Undo2,
   X,
 } from 'lucide-react'
-import {
-  isAnimated,
-  isCropped,
-  KEY_NEAR,
-  newMask,
-  speedOf,
-  useCompose,
-  type ClipEffect,
-  type ClipMask,
-  type ComposeClip,
-} from '../composeStore'
+import { isCropped, newMask, speedOf, useCompose, type ClipEffect, type ClipMask, type ComposeClip } from '../composeStore'
+import { shownAt, valueAt } from '../composeAnim'
 import {
   EFFECTS,
   effectKind,
@@ -34,20 +22,22 @@ import {
   type EffectTarget,
 } from '../composeEffects'
 import { api } from '../lib/api'
+import { AnimClock, PlaceFields } from './ComposeAnimUi'
 import { ColorSquare, SliderNumber } from './ComposeTextPanel'
 import { Button, Modal } from './ui'
 
 /**
- * Правая колонка, пока выбран один файл на таймлайне: его эффекты.
+ * Правая колонка, пока выбран один файл на таймлайне: его место в кадре,
+ * обрезка, маска и эффекты.
  *
- * Эффекты добавляются кнопкой — окно выбора открывается посреди экрана, — и
- * встают сюда списком. У каждого: галочка «включён» (выключенный помнит свои
- * настройки), сворачивание до одного названия и крестик. Ролик со звуком —
- * это два клипа, картинка и звук, поэтому и списков два: звуковые эффекты
- * ложатся на звук ролика, остальные — на картинку.
+ * Каждый раздел — карточка, которая сворачивается до заголовка: у маски
+ * настроек много, и места в колонке на всё не хватает. Нажатие по карточке
+ * выбирает её — на таймлайне видны ключи именно её, а кнопки ключей под
+ * окном просмотра работают с ней.
  *
- * Отражение, поворот и «задом наперёд» включаются из меню по правой кнопке;
- * здесь видно, что они включены, и их можно снять.
+ * Добавить эффект, обрезку или маску — кнопками внизу колонки (`ClipAddBar`),
+ * над настройками сборки. Ролик со звуком — это два клипа, картинка и звук,
+ * поэтому и списков эффектов два.
  */
 export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
   const partnerOf = useCompose((state) => state.partnerOf)
@@ -57,21 +47,18 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
   const partner = partnerOf(clip.id)
   const visual = clip.kind === 'audio' ? partner : clip
   const sound = clip.kind === 'audio' ? clip : partner
-  const [picking, setPicking] = useState(false)
   const cropping = useCompose((state) => state.cropping)
-  const setCropping = useCompose((state) => state.setCropping)
-  const masking = useCompose((state) => state.masking)
-  const setMasking = useCompose((state) => state.setMasking)
 
   const parts: { clip: ComposeClip; target: EffectTarget; title: string }[] = []
   if (visual && targetOf(visual.kind)) parts.push({ clip: visual, target: 'video', title: 'Картинка' })
   if (sound) parts.push({ clip: sound, target: 'audio', title: 'Звук' })
   const both = parts.length > 1
+  const picture = visual && (visual.kind === 'video' || visual.kind === 'image') ? visual : null
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div>
-        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Эффекты</h3>
+        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Клип</h3>
         <p className="mt-1 truncate text-[12.5px] text-ink" title={clip.source}>
           {clip.name}
         </p>
@@ -79,83 +66,190 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
 
       {(visual ?? sound) && <Transforms clip={(visual ?? sound)!} />}
 
-      <div className="flex flex-col gap-2">
-        <Button tone="primary" onClick={() => setPicking(true)}>
-          <Plus size={15} />
-          Добавить эффект
-        </Button>
-        {visual && (visual.kind === 'video' || visual.kind === 'image') && (
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              tone={cropping === visual.id ? 'primary' : 'subtle'}
-              onClick={() => setCropping(cropping === visual.id ? null : visual.id)}
-              title={
-                cropping === visual.id
-                  ? 'Закончить обрезку (Enter)'
-                  : 'Обрезать края картинки прямо в окне просмотра'
-              }
-            >
-              <Crop size={15} />
-              {cropping === visual.id ? 'Готово' : 'Обрезать'}
-            </Button>
-            <Button
-              tone={masking === visual.id ? 'primary' : 'subtle'}
-              onClick={() => {
-                if (masking === visual.id) {
-                  setMasking(null)
-                  return
-                }
-                if (!visual.mask) {
-                  const state = useCompose.getState()
-                  state.mark()
-                  state.updateClip(visual.id, { mask: newMask(visual) })
-                }
-                setMasking(visual.id)
-              }}
-              title={
-                masking === visual.id
-                  ? 'Закончить с маской (Enter)'
-                  : 'Прямоугольник или овал: показать только часть картинки или применить эффекты только к ней'
-              }
-            >
-              <SquareDashed size={15} />
-              {masking === visual.id ? 'Готово' : 'Маска'}
-            </Button>
-          </div>
-        )}
-      </div>
+      {picture && (
+        <Card id="place" title="Место в кадре" icon={<Move size={13} />} focusGroup="position">
+          <PlaceFields clip={picture} />
+        </Card>
+      )}
 
-      {visual?.mask && <MaskCard clip={visual} mask={visual.mask} />}
+      {picture && (isCropped(picture) || cropping === picture.id) && <CropCard clip={picture} />}
 
-      {visual && (visual.kind === 'video' || visual.kind === 'image') && <KeysCard clip={visual} />}
+      {picture?.mask && <MaskCard clip={picture} mask={picture.mask} />}
 
       {parts.map((part) => (
         <div key={part.clip.id} className="space-y-2">
-          {both && (
-            <h4 className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+          {both && (part.clip.effects ?? []).length > 0 && (
+            <h4 className="pt-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
               {part.title}
             </h4>
           )}
-          {(part.clip.effects ?? []).length === 0 ? (
-            both && <p className="text-[11.5px] text-ink-faint">Пока без эффектов</p>
-          ) : (
-            (part.clip.effects ?? []).map((effect) => (
-              <EffectCard key={effect.id} clipId={part.clip.id} effect={effect} />
-            ))
-          )}
+          {(part.clip.effects ?? []).map((effect) => (
+            <EffectCard key={effect.id} clipId={part.clip.id} effect={effect} />
+          ))}
         </div>
       ))}
-
-      <EffectPicker
-        open={picking}
-        onClose={() => setPicking(false)}
-        parts={parts.map((part) => ({ clip: part.clip, target: part.target }))}
-      />
     </div>
   )
 }
 
-/** Отражение, поворот и «задом наперёд» — видно, что включено, и можно снять. */
+/**
+ * Кнопки внизу колонки: добавить эффект, обрезать, маска.
+ *
+ * Стоят над настройками сборки и нарочно неброские: раньше большая яркая
+ * кнопка эффекта наверху колонки забирала на себя всё внимание.
+ */
+export function ClipAddBar({ clip }: { clip: ComposeClip }) {
+  const partnerOf = useCompose((state) => state.partnerOf)
+  useCompose((state) => state.tracks)
+  const cropping = useCompose((state) => state.cropping)
+  const setCropping = useCompose((state) => state.setCropping)
+  const masking = useCompose((state) => state.masking)
+  const setMasking = useCompose((state) => state.setMasking)
+  const [picking, setPicking] = useState(false)
+  const partner = partnerOf(clip.id)
+  const visual = clip.kind === 'audio' ? partner : clip
+  const sound = clip.kind === 'audio' ? clip : partner
+  const parts: { clip: ComposeClip; target: EffectTarget }[] = []
+  if (visual && targetOf(visual.kind)) parts.push({ clip: visual, target: 'video' })
+  if (sound) parts.push({ clip: sound, target: 'audio' })
+  const picture = visual && (visual.kind === 'video' || visual.kind === 'image') ? visual : null
+  const small =
+    'flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line-soft px-2 text-[11.5px] transition-colors'
+  const idle = 'bg-surface-2 text-ink-dim hover:border-line hover:text-ink'
+  const busy = 'border-accent/60 bg-accent/15 text-accent-soft'
+  return (
+    <div className="flex gap-1.5">
+      <button type="button" className={`${small} ${idle}`} onClick={() => setPicking(true)} title="Добавить эффект">
+        <Plus size={13} />
+        Эффект
+      </button>
+      {picture && (
+        <button
+          type="button"
+          className={`${small} ${cropping === picture.id ? busy : idle}`}
+          onClick={() => setCropping(cropping === picture.id ? null : picture.id)}
+          title={
+            cropping === picture.id
+              ? 'Закончить обрезку (Enter)'
+              : 'Обрезать края картинки прямо в окне просмотра. Под иглой встанет ключ: поставите второй в другом месте — обрезка будет меняться между ними'
+          }
+        >
+          <Crop size={13} />
+          {cropping === picture.id ? 'Готово' : 'Обрезать'}
+        </button>
+      )}
+      {picture && (
+        <button
+          type="button"
+          className={`${small} ${masking === picture.id ? busy : idle}`}
+          onClick={() => {
+            if (masking === picture.id) {
+              setMasking(null)
+              return
+            }
+            if (!picture.mask) {
+              const state = useCompose.getState()
+              state.mark()
+              state.updateClip(picture.id, { mask: newMask(picture) })
+            }
+            setMasking(picture.id)
+          }}
+          title={
+            masking === picture.id
+              ? 'Закончить с маской (Enter)'
+              : 'Овал, прямоугольник или своя форма: показать только часть картинки или применить эффекты только к ней'
+          }
+        >
+          <SquareDashed size={13} />
+          {masking === picture.id ? 'Готово' : 'Маска'}
+        </button>
+      )}
+      <EffectPicker open={picking} onClose={() => setPicking(false)} parts={parts} />
+    </div>
+  )
+}
+
+/** Свёрнута ли карточка — помним между запусками, по виду карточки. */
+function useFolded(id: string): [boolean, (value: boolean) => void] {
+  const key = `sgh.card.${id}`
+  const [folded, setFolded] = useState(() => {
+    try {
+      return localStorage.getItem(key) === '1'
+    } catch {
+      return false
+    }
+  })
+  return [
+    folded,
+    (value: boolean) => {
+      setFolded(value)
+      try {
+        localStorage.setItem(key, value ? '1' : '0')
+      } catch {
+        /* не запомнилось — не беда */
+      }
+    },
+  ]
+}
+
+/**
+ * Карточка раздела: заголовок со стрелкой сворачивания, справа — действия.
+ * Нажатие по карточке выбирает её группу ключей.
+ */
+function Card({
+  id,
+  title,
+  icon,
+  focusGroup,
+  actions,
+  tone = 'line',
+  children,
+}: {
+  id: string
+  title: string
+  icon?: React.ReactNode
+  focusGroup?: string
+  actions?: React.ReactNode
+  tone?: 'line' | 'warn' | 'accent'
+  children: React.ReactNode
+}) {
+  const [folded, setFolded] = useFolded(id)
+  const focus = useCompose((state) => state.animFocus)
+  const setAnimFocus = useCompose((state) => state.setAnimFocus)
+  const chosen = focusGroup !== undefined && focus === focusGroup
+  const ring = chosen
+    ? 'ring-accent/70'
+    : tone === 'warn'
+      ? 'ring-warn/35'
+      : tone === 'accent'
+        ? 'ring-accent/35'
+        : 'ring-line-soft'
+  return (
+    <div
+      className={`rounded-xl bg-surface-2 ring-1 ${ring}`}
+      onMouseDown={() => {
+        if (focusGroup && focus !== focusGroup && !focus?.startsWith('size')) setAnimFocus(focusGroup)
+      }}
+    >
+      <div className="flex items-center gap-1.5 px-2 py-1.5">
+        <button
+          type="button"
+          onClick={() => setFolded(!folded)}
+          title={folded ? 'Развернуть' : 'Свернуть'}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
+          <ChevronDown size={13} className={`shrink-0 text-ink-faint transition-transform ${folded ? '-rotate-90' : ''}`} />
+          {icon && <span className="shrink-0 text-ink-faint">{icon}</span>}
+          <span className="truncate text-[12.5px] font-medium text-ink">{title}</span>
+        </button>
+        {actions}
+      </div>
+      {!folded && <div className="space-y-2.5 border-t border-line-soft px-3 py-2.5">{children}</div>}
+    </div>
+  )
+}
+
+/** Отражение, поворот, скорость и «задом наперёд» — видно, что включено, и можно снять. */
 function Transforms({ clip }: { clip: ComposeClip }) {
   const state = useCompose()
   const marks: { label: string; icon: React.ReactNode; off: () => void }[] = []
@@ -190,16 +284,6 @@ function Transforms({ clip }: { clip: ComposeClip }) {
       off: () => state.resetSpeed(clip.id),
     })
   }
-  if (isCropped(clip)) {
-    marks.push({
-      label: 'Обрезано',
-      icon: <Crop size={12} />,
-      off: () => {
-        state.mark()
-        state.updateClip(clip.id, { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 })
-      },
-    })
-  }
   if (clip.reverse) {
     marks.push({
       label: 'Задом наперёд',
@@ -232,107 +316,90 @@ function Transforms({ clip }: { clip: ComposeClip }) {
 }
 
 /**
- * Анимация места и размера — ключами.
+ * Обрезка: сколько отрезано с каждой стороны, кнопка правки в кадре.
  *
- * Как в монтажных программах: ставишь иглу, двигаешь клип рамкой в кадре —
- * в этом месте появляется ключ; между ключами клип плавно едет и меняет
- * размер. Ключи видно ромбиками на клипе в таймлайне. Здесь — включить,
- * поставить или убрать ключ под иглой и перейти к соседнему.
+ * Обрезка всегда держится на ключах: нажали «Обрезать» — под иглой встал
+ * ключ. Один ключ — одна обрезка на весь клип. Поставили иглу в другое место
+ * и поправили — там второй ключ, и между ними обрезка плавно меняется: так
+ * подстраивают кадр под разные сцены.
  */
-function KeysCard({ clip }: { clip: ComposeClip }) {
+function CropCard({ clip }: { clip: ComposeClip }) {
   const playhead = useCompose((state) => state.playhead)
-  const setPlayhead = useCompose((state) => state.setPlayhead)
-  const startKeys = useCompose((state) => state.startKeys)
-  const addKey = useCompose((state) => state.addKey)
-  const removeKey = useCompose((state) => state.removeKey)
-  const stopKeys = useCompose((state) => state.stopKeys)
-
-  if (!isAnimated(clip)) {
-    return (
-      <Button
-        onClick={() => startKeys(clip.id)}
-        title="Место и размер клипа будут меняться во времени: ставьте иглу в разные места и двигайте клип рамкой — там появятся ключи"
-      >
-        <Timer size={15} />
-        Анимировать место и размер
-      </Button>
-    )
-  }
-
-  const local = playhead - clip.start
-  const keys = [...(clip.keys ?? [])].sort((a, b) => a.t - b.t)
-  const onKey = keys.some((key) => Math.abs(key.t - local) < KEY_NEAR)
-  // Переходить можно только к ключам внутри клипа: остальные — за его краем
-  // после обрезки, и игла туда не попадёт.
-  const inside = keys.filter((key) => key.t >= -1e-3 && key.t <= clip.duration + 1e-3)
-  const before = [...inside].reverse().find((key) => key.t < local - KEY_NEAR)
-  const after = inside.find((key) => key.t > local + KEY_NEAR)
-
+  const cropping = useCompose((state) => state.cropping)
+  const setCropping = useCompose((state) => state.setCropping)
+  const removeCrop = useCompose((state) => state.removeCrop)
+  const applyValues = useCompose((state) => state.applyValues)
+  const now = shownAt(clip, playhead)
+  const side = (label: string, field: 'cropLeft' | 'cropTop' | 'cropRight' | 'cropBottom') => (
+    <SliderNumber
+      label={label}
+      value={Math.round((now[field] ?? 0) * 1000) / 10}
+      min={0}
+      max={95}
+      step={0.5}
+      unit="%"
+      reset={0}
+      onChange={(value) => applyValues(clip.id, { [field]: value / 100 })}
+    />
+  )
   return (
-    <div className="rounded-xl bg-surface-2 ring-1 ring-accent/40">
-      <div className="flex items-center gap-1.5 px-3 py-1.5">
-        <Timer size={13} className="text-accent-soft" />
-        <span className="min-w-0 flex-1 text-[12.5px] font-medium text-ink">Анимация</span>
-        <span className="text-[11px] text-ink-faint">ключей: {inside.length}</span>
-        <button
-          type="button"
-          onClick={() => stopKeys(clip.id)}
-          title="Выключить анимацию: клип останется там, где он сейчас под иглой"
-          className="rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-danger"
-        >
-          <X size={13} />
-        </button>
-      </div>
-      <div className="space-y-2 border-t border-line-soft px-3 py-2.5">
-        <div className="flex items-center gap-1">
+    <Card
+      id="crop"
+      title="Обрезка"
+      icon={<Crop size={13} />}
+      focusGroup="crop"
+      tone="accent"
+      actions={
+        <>
+          <AnimClock clip={clip} group="crop" />
           <button
             type="button"
-            disabled={!before}
-            onClick={() => before && setPlayhead(clip.start + before.t)}
-            title="К предыдущему ключу"
-            className="rounded-md p-1.5 text-ink-dim hover:bg-surface-3 disabled:opacity-30"
+            onClick={() => {
+              if (cropping === clip.id) setCropping(null)
+              removeCrop(clip.id)
+            }}
+            title="Убрать обрезку вместе с её ключами"
+            className="rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-danger"
           >
-            <ChevronLeft size={15} />
+            <X size={13} />
           </button>
-          <Button
-            tone={onKey ? 'danger' : 'subtle'}
-            className="flex-1"
-            onClick={() => (onKey ? removeKey(clip.id) : addKey(clip.id))}
-            title={onKey ? 'Убрать ключ под иглой' : 'Поставить ключ под иглой с тем, как клип стоит сейчас'}
-          >
-            <Diamond size={13} className={onKey ? 'fill-current' : ''} />
-            {onKey ? 'Убрать ключ' : 'Ключ здесь'}
-          </Button>
-          <button
-            type="button"
-            disabled={!after}
-            onClick={() => after && setPlayhead(clip.start + after.t)}
-            title="К следующему ключу"
-            className="rounded-md p-1.5 text-ink-dim hover:bg-surface-3 disabled:opacity-30"
-          >
-            <ChevronRight size={15} />
-          </button>
-        </div>
-        <p className="text-[11px] leading-snug text-ink-faint">
-          Поставьте иглу и подвиньте клип рамкой в кадре — там появится ключ.
-        </p>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {side('Слева', 'cropLeft')}
+      {side('Сверху', 'cropTop')}
+      {side('Справа', 'cropRight')}
+      {side('Снизу', 'cropBottom')}
+      <Button
+        tone={cropping === clip.id ? 'primary' : 'subtle'}
+        className="w-full"
+        onClick={() => setCropping(cropping === clip.id ? null : clip.id)}
+      >
+        <Crop size={14} />
+        {cropping === clip.id ? 'Готово' : 'Изменить в кадре'}
+      </Button>
+    </Card>
   )
 }
 
 /**
- * Маска клипа в колонке: форма, что она делает, мягкость края.
+ * Маска: форма, что видно, где действуют эффекты, мягкость края.
  *
- * Сделана как карточка эффекта — с галочкой «включена» и крестиком, — чтобы
- * вела себя так же. Место и размер задаются мышью в окне просмотра.
+ * Два переключателя видимости — «внутри» и «снаружи»: включены оба — маска
+ * ничего не прячет и нужна только эффектам; один — видна только эта часть.
+ * Эффекты клипа можно оставить только внутри маски или только снаружи —
+ * так размывают лицо, не заводя второй слой.
  */
 function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask }) {
   const updateClip = useCompose((state) => state.updateClip)
   const mark = useCompose((state) => state.mark)
   const masking = useCompose((state) => state.masking)
   const setMasking = useCompose((state) => state.setMasking)
-  const put = (patch: Partial<ClipMask>) => updateClip(clip.id, { mask: { ...mask, ...patch } })
+  const removeMask = useCompose((state) => state.removeMask)
+  const put = (patch: Partial<ClipMask>) => {
+    mark()
+    updateClip(clip.id, { mask: { ...mask, ...patch } })
+  }
   const effects = (clip.effects ?? []).some((effect) => effect.on)
 
   const choice = (
@@ -343,16 +410,16 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask }) {
   ) => (
     <div className="space-y-1">
       <span className="block text-[11.5px] text-ink-dim">{label}</span>
-      <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-3/40 p-0.5">
+      <div
+        className="grid gap-1 rounded-lg bg-surface-3/40 p-0.5"
+        style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+      >
         {options.map((option) => (
           <button
             key={option.value}
             type="button"
             title={option.hint}
-            onClick={() => {
-              mark()
-              onPick(option.value)
-            }}
+            onClick={() => onPick(option.value)}
             className={`rounded-md py-1 text-[11px] transition-colors ${
               value === option.value ? 'bg-surface-3 text-ink shadow-sm' : 'text-ink-faint hover:text-ink-dim'
             }`}
@@ -364,47 +431,90 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask }) {
     </div>
   )
 
+  const check = (label: string, hint: string, on: boolean, onToggle: (value: boolean) => void) => (
+    <label className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-dim" title={hint}>
+      <input
+        type="checkbox"
+        checked={on}
+        onChange={(event) => onToggle(event.target.checked)}
+        className="h-3.5 w-3.5 accent-[var(--color-accent)]"
+      />
+      {label}
+    </label>
+  )
+
   return (
-    <div className="rounded-xl bg-surface-2 ring-1 ring-warn/40">
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <input
-          type="checkbox"
-          checked={mask.on}
-          title={mask.on ? 'Выключить маску — настройки останутся' : 'Включить маску'}
-          onChange={(event) => {
-            mark()
-            put({ on: event.target.checked })
-          }}
-          className="ml-1 h-3.5 w-3.5 cursor-pointer accent-[var(--color-accent)]"
-        />
-        <span className={`min-w-0 flex-1 text-[12.5px] font-medium ${mask.on ? 'text-ink' : 'text-ink-faint line-through'}`}>
-          Маска
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            mark()
-            if (masking === clip.id) setMasking(null)
-            updateClip(clip.id, { mask: null })
-          }}
-          title="Убрать маску"
-          className="rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-danger"
-        >
-          <X size={13} />
-        </button>
-      </div>
-      <div className={`space-y-2.5 border-t border-line-soft px-3 py-2.5 ${mask.on ? '' : 'opacity-50'}`}>
+    <Card
+      id="mask"
+      title={mask.on ? 'Маска' : 'Маска (выключена)'}
+      icon={<SquareDashed size={13} />}
+      focusGroup="mask"
+      tone="warn"
+      actions={
+        <>
+          <input
+            type="checkbox"
+            checked={mask.on}
+            title={mask.on ? 'Выключить маску — настройки останутся' : 'Включить маску'}
+            onChange={(event) => put({ on: event.target.checked })}
+            className="h-3.5 w-3.5 cursor-pointer accent-[var(--color-accent)]"
+          />
+          <AnimClock clip={clip} group="mask" />
+          <button
+            type="button"
+            onClick={() => removeMask(clip.id)}
+            title="Убрать маску вместе с её ключами"
+            className="rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-danger"
+          >
+            <X size={13} />
+          </button>
+        </>
+      }
+    >
+      <div className={`space-y-2.5 ${mask.on ? '' : 'opacity-50'}`}>
         {choice('Форма', mask.shape, [
           { value: 'ellipse', label: 'Овал', hint: 'Овал с мягким краем — для лица' },
           { value: 'rect', label: 'Прямоугольник', hint: 'Прямоугольник — для номера, надписи, угла кадра' },
-        ], (value) => put({ shape: value as ClipMask['shape'] }))}
-        {choice('Что делает', mask.mode, [
-          { value: 'effects', label: 'Эффекты внутри', hint: 'Эффекты клипа действуют только внутри маски, остальное как было' },
-          { value: 'show', label: 'Показать внутри', hint: 'Клип виден только внутри маски, снаружи — прозрачный' },
-        ], (value) => put({ mode: value as ClipMask['mode'] }))}
-        {mask.mode === 'effects' && !effects && (
+          { value: 'custom', label: 'Своя', hint: 'Своя форма: ставьте точки прямо на картинке, замкните на первой' },
+        ], (value) => {
+          put({ shape: value as ClipMask['shape'] })
+          // Своя форма рисуется в кадре — сразу туда.
+          if (value === 'custom' && masking !== clip.id) setMasking(clip.id)
+        })}
+        {mask.shape === 'custom' && (mask.points?.length ?? 0) >= 3 && (
+          <button
+            type="button"
+            onClick={() => {
+              put({ points: [] })
+              setMasking(clip.id)
+            }}
+            className="text-[11px] text-accent-soft hover:underline"
+          >
+            Нарисовать форму заново
+          </button>
+        )}
+        <div className="space-y-1.5">
+          {check(
+            'Показывать то, что внутри маски',
+            'Выключите — внутри маски клип станет прозрачным',
+            mask.showInside,
+            (value) => put({ showInside: value }),
+          )}
+          {check(
+            'Показывать то, что снаружи маски',
+            'Выключите — снаружи маски клип станет прозрачным',
+            mask.showOutside,
+            (value) => put({ showOutside: value }),
+          )}
+        </div>
+        {choice('Эффекты клипа действуют', mask.effectsArea, [
+          { value: 'all', label: 'Везде', hint: 'Маска на эффекты не влияет' },
+          { value: 'inside', label: 'Внутри', hint: 'Эффекты — только внутри маски: так размывают лицо или номер' },
+          { value: 'outside', label: 'Снаружи', hint: 'Эффекты — везде, кроме маски' },
+        ], (value) => put({ effectsArea: value as ClipMask['effectsArea'] }))}
+        {mask.effectsArea !== 'all' && !effects && (
           <p className="text-[11px] leading-snug text-warn">
-            У клипа нет эффектов — добавьте, например, размытие: оно подействует только внутри маски.
+            У клипа нет эффектов — добавьте, например, размытие: оно подействует только там, где выбрано.
           </p>
         )}
         <SliderNumber
@@ -420,25 +530,18 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask }) {
             { value: 15, label: 'обычно' },
             { value: 50, label: 'мягко' },
           ]}
-          onChange={(next) => put({ feather: next / 100 })}
+          onChange={(next) => updateClip(clip.id, { mask: { ...mask, feather: next / 100 } })}
         />
-        <label
-          className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-dim"
-          title="Наоборот: действует всё, кроме выделенного"
+        <Button
+          tone={masking === clip.id ? 'primary' : 'subtle'}
+          className="w-full"
+          onClick={() => setMasking(masking === clip.id ? null : clip.id)}
         >
-          <input
-            type="checkbox"
-            checked={mask.invert}
-            onChange={(event) => {
-              mark()
-              put({ invert: event.target.checked })
-            }}
-            className="h-3.5 w-3.5 accent-[var(--color-accent)]"
-          />
-          Перевернуть — всё, кроме выделенного
-        </label>
+          <SquareDashed size={14} />
+          {masking === clip.id ? 'Готово' : 'Изменить в кадре'}
+        </Button>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -448,6 +551,9 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
   const removeEffect = useCompose((state) => state.removeEffect)
   const mark = useCompose((state) => state.mark)
   const kind = effectKind(effect.type)
+  const owner = useCompose((state) => state.findClip(clipId)?.clip)
+  const playhead = useCompose((state) => state.playhead)
+  const applyValues = useCompose((state) => state.applyValues)
   if (!kind) return null
   const folded = Boolean(effect.folded)
 
@@ -553,6 +659,28 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                     value={String(value)}
                     title={param.label}
                     onChange={(next) => updateEffect(clipId, effect.id, { params: { [param.key]: next } })}
+                  />
+                </div>
+              )
+            }
+            if (param.animatable && owner) {
+              // Настройка, которая меняется по ключам: значение — то, что
+              // под иглой, правка ложится в ключ, рядом часики.
+              const field = `fx.${effect.id}.${param.key}`
+              return (
+                <div key={param.key} title={param.hint}>
+                  <SliderNumber
+                    stacked
+                    label={param.label}
+                    value={valueAt(owner, field, playhead - owner.start)}
+                    min={param.min ?? 0}
+                    max={param.max ?? 100}
+                    step={param.step}
+                    unit={param.unit ?? ''}
+                    reset={Number(param.default)}
+                    marks={param.marks}
+                    aside={<AnimClock clip={owner} group={field} />}
+                    onChange={(next) => applyValues(clipId, { [field]: next })}
                   />
                 </div>
               )

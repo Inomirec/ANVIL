@@ -117,6 +117,9 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         fromY: number
         x: number
         y: number
+        /** Середина видимой части — по ней и прилипает. */
+        vx: number
+        vy: number
         w: number
         h: number
       }
@@ -148,7 +151,22 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
   // ролика место втрое выше картинки, и тянуть было бы не за что.
   const frameW = useCompose((state) => state.width)
   const frameH = useCompose((state) => state.height)
-  const { w: wide, h: tall } = clipRect(clip, frameW, frameH)
+  // Вся картинка клипа — в долях кадра…
+  const { w: imageW, h: imageH } = clipRect(clip, frameW, frameH)
+  // …а рамка идёт по видимой части: у обрезанного клипа выравнивают то, что
+  // осталось, и к сетке липнут именно его края, а не края отрезанного.
+  const cl = clip.cropLeft ?? 0
+  const ct = clip.cropTop ?? 0
+  const cr = clip.cropRight ?? 0
+  const cb = clip.cropBottom ?? 0
+  const keepW = Math.max(0.05, 1 - cl - cr)
+  const keepH = Math.max(0.05, 1 - ct - cb)
+  const wide = imageW * keepW
+  const tall = imageH * keepH
+  // Середина видимой части: сдвинута от середины картинки в сторону, где
+  // отрезано меньше.
+  const middleX = clip.x + (imageW * (cl - cr)) / 2
+  const middleY = clip.y + (imageH * (ct - cb)) / 2
 
   useEffect(() => {
     const move = (event: MouseEvent) => {
@@ -163,12 +181,12 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         // Прилипают и края клипа, и его середина: выравнивают то по краю
         // кадра, то по его центру, и заранее не угадать, что человеку нужно.
         const shiftX = stick(
-          [current.x - current.w / 2, current.x, current.x + current.w / 2],
+          [current.vx - current.w / 2, current.vx, current.vx + current.w / 2],
           (event.clientX - current.fromX) / current.frameW,
           guides,
         )
         const shiftY = stick(
-          [current.y - current.h / 2, current.y, current.y + current.h / 2],
+          [current.vy - current.h / 2, current.vy, current.vy + current.h / 2],
           (event.clientY - current.fromY) / current.frameH,
           guides,
         )
@@ -199,13 +217,18 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         const right = atX >= current.anchorX ? 1 : -1
         const down = atY >= current.anchorY ? 1 : -1
         const free = clip.sizeY && clip.sizeY > 0
+        // w и h — видимая часть; вся картинка больше на отрезанное.
+        const fullW = w / keepW
+        const fullH = h / keepH
+        const visibleX = current.anchorX + (right * w) / 2
+        const visibleY = current.anchorY + (down * h) / 2
         state.placeClip(
           clip.id,
           clampPlace({
-            size: free ? w : rectToSize(w, h),
-            sizeY: free ? h : 0,
-            x: current.anchorX + (right * w) / 2,
-            y: current.anchorY + (down * h) / 2,
+            size: free ? fullW : rectToSize(fullW, fullH),
+            sizeY: free ? fullH : 0,
+            x: visibleX - (fullW * (cl - cr)) / 2,
+            y: visibleY - (fullH * (ct - cb)) / 2,
           }),
         )
         return
@@ -240,7 +263,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', drop)
     }
-  }, [clip.id, clip.x, clip.y, clip.size, clip.sizeY, tall, grid])
+  }, [clip.id, clip.x, clip.y, clip.size, clip.sizeY, tall, grid, keepW, keepH, cl, cr, ct, cb])
 
   const frame = () => {
     const area = box.current?.parentElement?.getBoundingClientRect()
@@ -249,8 +272,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
 
   // У анимированного клипа это ложится в ключ под иглой, как и любая правка
   // рамкой: см. ``placeClip``.
-  const reset = () =>
-    useCompose.getState().placeClip(clip.id, { size: 1, sizeY: 0, x: 0.5, y: 0.5 })
+  const reset = () => useCompose.getState().resetPlace(clip.id)
 
   /**
    * Ручки стоят вплотную к углам рамки, но внутри неё.
@@ -305,8 +327,8 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       // картинку тусклее, пока клип выделен. Хватает пунктирной рамки.
       className="absolute cursor-move border border-dashed border-accent-soft/90"
       style={{
-        left: `${(clip.x - wide / 2) * 100}%`,
-        top: `${(clip.y - tall / 2) * 100}%`,
+        left: `${(middleX - wide / 2) * 100}%`,
+        top: `${(middleY - tall / 2) * 100}%`,
         width: `${wide * 100}%`,
         height: `${tall * 100}%`,
       }}
@@ -327,6 +349,8 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
           fromY: event.clientY,
           x: clip.x,
           y: clip.y,
+          vx: middleX,
+          vy: middleY,
           w: wide,
           h: tall,
         }
@@ -342,8 +366,8 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
               frameW,
               frameH,
               // Противоположный уголок: он и остаётся на месте.
-              anchorX: clip.x + (corner.x === 0 ? wide / 2 : -wide / 2),
-              anchorY: clip.y + (corner.y === 0 ? tall / 2 : -tall / 2),
+              anchorX: middleX + (corner.x === 0 ? wide / 2 : -wide / 2),
+              anchorY: middleY + (corner.y === 0 ? tall / 2 : -tall / 2),
               ratio: tall / wide,
             }
           },

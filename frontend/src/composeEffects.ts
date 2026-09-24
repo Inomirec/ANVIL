@@ -27,6 +27,9 @@ export interface EffectParam {
   default: number | string
   /** Рекомендованные значения — подписи под шкалой. */
   marks?: { value: number; label: string }[]
+  /** Может меняться по ключам — рядом с ползунком часики. Тот же список на
+   *  сервере (``ANIMATABLE`` в ``core/effects.py``). */
+  animatable?: boolean
 }
 
 export interface EffectKind {
@@ -46,10 +49,10 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Яркость, контраст, насыщенность и теплота цвета',
     params: [
-      { key: 'brightness', label: 'Яркость', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'темнее' }, { value: 0, label: '0' }, { value: 40, label: 'светлее' }] },
-      { key: 'contrast', label: 'Контраст', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'мягче' }, { value: 0, label: '0' }, { value: 30, label: 'сочнее' }] },
-      { key: 'saturation', label: 'Насыщенность', min: -100, max: 100, default: 0, marks: [{ value: -60, label: 'бледнее' }, { value: 0, label: '0' }, { value: 40, label: 'ярче' }] },
-      { key: 'temperature', label: 'Теплее / холоднее', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'холоднее' }, { value: 0, label: '0' }, { value: 40, label: 'теплее' }] },
+      { animatable: true, key: 'brightness', label: 'Яркость', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'темнее' }, { value: 0, label: '0' }, { value: 40, label: 'светлее' }] },
+      { animatable: true, key: 'contrast', label: 'Контраст', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'мягче' }, { value: 0, label: '0' }, { value: 30, label: 'сочнее' }] },
+      { animatable: true, key: 'saturation', label: 'Насыщенность', min: -100, max: 100, default: 0, marks: [{ value: -60, label: 'бледнее' }, { value: 0, label: '0' }, { value: 40, label: 'ярче' }] },
+      { animatable: true, key: 'temperature', label: 'Теплее / холоднее', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'холоднее' }, { value: 0, label: '0' }, { value: 40, label: 'теплее' }] },
     ],
   },
   {
@@ -57,14 +60,14 @@ export const EFFECTS: EffectKind[] = [
     name: 'Чёрно-белое',
     target: 'video',
     hint: 'Убрать цвет — целиком или частично',
-    params: [{ key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'наполовину' }, { value: 100, label: 'полностью' }] }],
+    params: [{ animatable: true, key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'наполовину' }, { value: 100, label: 'полностью' }] }],
   },
   {
     type: 'blur',
     name: 'Размытие',
     target: 'video',
     hint: 'Размыть весь клип целиком',
-    params: [{ key: 'strength', label: 'Сила', min: 1, max: 80, default: 10, marks: [{ value: 5, label: 'чуть' }, { value: 22, label: 'заметно' }, { value: 50, label: 'сильно' }] }],
+    params: [{ animatable: true, key: 'strength', label: 'Сила', min: 1, max: 80, default: 10, marks: [{ value: 5, label: 'чуть' }, { value: 22, label: 'заметно' }, { value: 50, label: 'сильно' }] }],
   },
   {
     type: 'denoise',
@@ -78,7 +81,7 @@ export const EFFECTS: EffectKind[] = [
     name: 'Пикселизация',
     target: 'video',
     hint: 'Крупные квадраты вместо картинки',
-    params: [{ key: 'size', label: 'Размер квадрата', min: 2, max: 80, unit: 'px', default: 30, marks: [{ value: 6, label: 'мелко' }, { value: 30, label: 'обычно' }, { value: 70, label: 'крупно' }] }],
+    params: [{ animatable: true, key: 'size', label: 'Размер квадрата', min: 2, max: 80, unit: 'px', default: 30, marks: [{ value: 6, label: 'мелко' }, { value: 30, label: 'обычно' }, { value: 70, label: 'крупно' }] }],
   },
   {
     type: 'chromakey',

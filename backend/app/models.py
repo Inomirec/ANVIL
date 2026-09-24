@@ -284,40 +284,40 @@ class ClipEffect(ComposeModel):
     params: dict[str, float | str] = Field(default_factory=dict)
 
 
-class ClipKey(ComposeModel):
-    """Ключ анимации: где и какого размера клип в момент ``t``.
+class AnimKey(ComposeModel):
+    """Ключ анимации одного показателя: значение ``v`` в момент ``t``.
 
-    ``t`` — секунды от начала клипа на таймлайне. Между ключами клип плавно
-    переходит от одного положения к другому.
+    ``t`` — секунды от начала клипа на таймлайне. Бывает и меньше нуля, и
+    больше длины клипа: после обрезки или разреза ключи остаются на тех же
+    кадрах ролика и продолжают задавать движение.
     """
 
-    #: Может быть и меньше нуля, и больше длины клипа: после обрезки или
-    #: разреза ключи остаются на тех же кадрах ролика и продолжают задавать
-    #: движение, даже если сами оказались за краем клипа.
     t: float
-    x: float = Field(default=0.5, ge=-1.0, le=2.0)
-    y: float = Field(default=0.5, ge=-1.0, le=2.0)
-    size: float = Field(default=1.0, gt=0.0, le=4.0)
-    size_y: float = Field(default=0.0, ge=0.0, le=4.0)
+    v: float
 
 
 class ClipMask(ComposeModel):
-    """Маска клипа: где он виден или где действуют его эффекты.
+    """Маска клипа: форма, где клип виден и где действуют его эффекты.
 
     Место — в долях картинки клипа (уже повёрнутой и отражённой): середина
-    ``x``/``y`` и размер ``w``/``h``. Мягкость края — доля меньшей стороны
-    маски. ``mode``: ``show`` — клип виден только внутри, ``effects`` —
-    эффекты действуют только внутри, остальное как есть.
+    ``x``/``y`` и размер ``w``/``h``. Своя форма — точки ``points`` в долях
+    этого прямоугольника. Мягкость края — доля меньшей стороны маски.
+
+    ``show_inside`` / ``show_outside`` — что остаётся видно: внутри маски,
+    снаружи или и то и другое. ``effects_area`` — где действуют эффекты
+    клипа: везде, только внутри или только снаружи.
     """
 
-    shape: Literal["rect", "ellipse"] = "rect"
+    shape: Literal["rect", "ellipse", "custom"] = "rect"
     x: float = Field(default=0.5, ge=-1.0, le=2.0)
     y: float = Field(default=0.5, ge=-1.0, le=2.0)
     w: float = Field(default=0.5, gt=0.0, le=3.0)
     h: float = Field(default=0.5, gt=0.0, le=3.0)
+    points: list[tuple[float, float]] = Field(default_factory=list, max_length=200)
     feather: float = Field(default=0.1, ge=0.0, le=1.0)
-    invert: bool = False
-    mode: Literal["show", "effects"] = "show"
+    show_inside: bool = True
+    show_outside: bool = False
+    effects_area: Literal["all", "inside", "outside"] = "all"
     on: bool = True
 
 
@@ -388,8 +388,9 @@ class ComposeClip(ComposeModel):
     rotate: int = Field(default=0, ge=0, le=270)
     #: Играть задом наперёд — и картинку, и звук.
     reverse: bool = False
-    #: Ключи анимации места и размера. Пусто — клип стоит, как задан.
-    keys: list[ClipKey] = Field(default_factory=list)
+    #: Ключи анимации по показателям: ``{"x": [...], "cropLeft": [...]}``.
+    #: Нет ключей у показателя — он стоит, как задан в самом клипе.
+    anim: dict[str, list[AnimKey]] = Field(default_factory=dict)
     #: Маска — прямоугольник или овал. ``None`` — маски нет.
     mask: ClipMask | None = None
     #: Готовая картинка маски: рисует сервер перед сборкой.

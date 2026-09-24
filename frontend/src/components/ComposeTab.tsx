@@ -30,13 +30,7 @@ import {
   type ComposeTrack,
 } from '../composeStore'
 import { useStore } from '../store'
-import {
-  COMPACT_HEIGHT,
-  ComposeTimeline,
-  RULER_HEIGHT,
-  TOOLBAR_HEIGHT,
-  TRACK_HEIGHT,
-} from './ComposeTimeline'
+import { ComposeTimeline, heightOf, RULER_HEIGHT, TOOLBAR_HEIGHT } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeCropBox } from './ComposeCropBox'
 import { ComposeMaskBox } from './ComposeMaskBox'
@@ -45,7 +39,9 @@ import { ComposeMissing } from './ComposeMissing'
 import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
 import { ComposeTextPanel } from './ComposeTextPanel'
 import { ComposeFillPanel } from './ComposeFillPanel'
-import { ComposeClipPanel } from './ComposeClipPanel'
+import { ClipAddBar, ComposeClipPanel } from './ComposeClipPanel'
+import { KeyButtons } from './ComposeAnimUi'
+import { CROP_FIELDS, withoutGroup } from '../composeAnim'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderSettings,
@@ -328,7 +324,14 @@ export function ComposeTab() {
           .filter((clip) => clip.id !== liveTextId)
           .map((clip) =>
             clip.id === view.cropping
-              ? { ...clip, cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 }
+              ? {
+                  ...clip,
+                  cropLeft: 0,
+                  cropTop: 0,
+                  cropRight: 0,
+                  cropBottom: 0,
+                  anim: withoutGroup(clip.anim, CROP_FIELDS),
+                }
               : clip,
           ),
       }))
@@ -615,7 +618,7 @@ export function ComposeTab() {
     TOOLBAR_HEIGHT +
       RULER_HEIGHT +
       12 +
-      tracks.length * (compact ? COMPACT_HEIGHT : TRACK_HEIGHT),
+      tracks.reduce((sum, track) => sum + heightOf(track, compact), 0),
   )
 
   // Клип, который сейчас двигают по кадру: рамка появляется, когда среди
@@ -862,6 +865,11 @@ export function ComposeTab() {
                 >
                   <Camera size={14} />
                 </IconButton>
+
+                {/* Ключи выбранного раздела (обрезка, положение, маска…) —
+                    только когда они уже есть: до первого ключа кнопки ни к
+                    чему. */}
+                {pickedVisual.length === 1 && <KeyButtons clip={pickedVisual[0]} />}
               </div>
             )}
 
@@ -949,7 +957,7 @@ export function ComposeTab() {
                   )
                 )}
                 {!player.playing && liveText && (
-                  <ComposeTextOverlay clip={liveText} grid={grid} />
+                  <ComposeTextOverlay clip={shownAt(liveText, playhead)} grid={grid} />
                 )}
 
               </div>
@@ -1094,6 +1102,9 @@ export function ComposeTab() {
             чем кодировать, как назвать и куда положить. Раньше это лежало
             вперемешку с настройками кадра и читалось как чужое. */}
         <div className="space-y-2 border-t border-line-soft px-4 py-3">
+          {/* Добавить эффект, обрезку, маску — неброско, над сборкой: большая
+              кнопка наверху колонки забирала на себя всё внимание. */}
+          {mediaClip && !textClip && !fillClip && <ClipAddBar clip={mediaClip} />}
           <div>
             <button
               type="button"

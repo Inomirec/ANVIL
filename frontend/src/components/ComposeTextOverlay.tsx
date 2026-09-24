@@ -166,7 +166,9 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
         (event.clientY - held.fromY) / area.height,
         guides,
       )
-      useCompose.getState().updateClip(clip.id, {
+      // Через ключи: у надписи с часиками положения правка ляжет в ключ
+      // под иглой.
+      useCompose.getState().applyValues(clip.id, {
         x: Math.min(2, Math.max(-1, held.x + shiftX)),
         y: Math.min(2, Math.max(-1, held.y + shiftY)),
       })

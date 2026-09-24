@@ -29,6 +29,7 @@ import {
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
 import { cutTimes, frameCode, scenesOf, useScenes } from '../lib/scenes'
+import { groupOf, hasKeys, hasPlaceKeys, keyTimes } from '../composeAnim'
 import { SceneStrip } from './SceneStrip'
 import {
   clipEdges,
@@ -49,7 +50,6 @@ import {
   useCompose,
   MAX_SPEED,
   MIN_SPEED,
-  isAnimated,
   isCropped,
   newMask,
   speedOf,
@@ -73,11 +73,30 @@ const FADE_CORNER = 18
 const PLAYHEAD_SNAP = 6
 /** Сдвиг, после которого нажатие считается протяжкой, а не щелчком. */
 const DRAG_START = 4
-/** Высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
+/** Обычная высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
 export const TRACK_HEIGHT = 74
-export const AUDIO_HEIGHT = 74
 /** Сжатые дорожки: когда их много, а места мало. Клавиша «Ё». */
 export const COMPACT_HEIGHT = 26
+/** Пределы своей высоты дорожки: её тянут за верхний или нижний край колонки. */
+export const TRACK_MIN = 40
+export const TRACK_MAX = 260
+
+/** Высота дорожки: своя, если задана, а в сжатом виде — у всех одна. */
+export function heightOf(track: ComposeTrack, compact: boolean): number {
+  if (compact) return COMPACT_HEIGHT
+  return Math.min(TRACK_MAX, Math.max(TRACK_MIN, track.height ?? TRACK_HEIGHT))
+}
+
+/** Номер дорожки по высоте от верха первой дорожки; −1 — выше всех. */
+function rowAtOffset(tracks: ComposeTrack[], compact: boolean, offset: number): number {
+  if (offset < 0) return -1
+  let top = 0
+  for (let index = 0; index < tracks.length; index++) {
+    top += heightOf(tracks[index], compact)
+    if (offset < top) return index
+  }
+  return tracks.length
+}
 /** Ширина колонки с названиями дорожек по умолчанию и её пределы. */
 export const HEAD_DEFAULT = 150
 const HEAD_MIN = 24
@@ -199,7 +218,7 @@ export function ComposeTimeline({
   const setCompact = useCompose((state) => state.setCompact)
   const headWidth = useCompose((state) => state.headWidth)
   const setHeadWidth = useCompose((state) => state.setHeadWidth)
-  const rowHeight = compact ? COMPACT_HEIGHT : TRACK_HEIGHT
+  const heightFor = (track: ComposeTrack) => heightOf(track, compact)
 
   const [dropAt, setDropAt] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
@@ -244,15 +263,15 @@ export function ComposeTimeline({
     [scale],
   )
 
-  /** Номер дорожки под курсором. Строки одной высоты, поэтому просто делим. */
+  /** Номер дорожки под курсором. У каждой дорожки своя высота — складываем. */
   const rowAt = useCallback(
     (clientY: number) => {
       const box = canvas.current?.getBoundingClientRect()
       if (!box) return 0
-      const inside = clientY - box.top - RULER_HEIGHT
-      return Math.floor(inside / rowHeight)
+      const state = useCompose.getState()
+      return rowAtOffset(state.tracks, state.compact, clientY - box.top - RULER_HEIGHT)
     },
-    [rowHeight],
+    [],
   )
 
   /**
@@ -527,7 +546,7 @@ export function ComposeTimeline({
           const to = Math.max(area.x1, area.x2) / state.scale
           const top = Math.min(area.y1, area.y2)
           const bottom = Math.max(area.y1, area.y2)
-          state.select(clipsInside(state.tracks, from, to, top, bottom))
+          state.select(clipsInside(state.tracks, from, to, top, bottom, state.compact))
         }
       }
       setMarquee(null)
@@ -930,7 +949,7 @@ export function ComposeTimeline({
           width={headWidth}
           onWidth={setHeadWidth}
           onMoveTrack={moveTrack}
-          rowHeight={rowHeight}
+          compact={compact}
           onRename={renameTrack}
           onLevel={setTrackLevel}
           onMenu={(event, id) => {
@@ -964,7 +983,7 @@ export function ComposeTimeline({
             <div
               key={track.id}
               className="relative border-b border-line-soft"
-              style={{ height: rowHeight }}
+              style={{ height: heightFor(track) }}
               onMouseDown={(event) => {
                 if (event.button !== 0 || event.target !== event.currentTarget) return
                 const box = canvas.current?.getBoundingClientRect()
@@ -1038,7 +1057,7 @@ export function ComposeTimeline({
                   key={clip.id}
                   clip={clip}
                   scale={scale}
-                  height={rowHeight}
+                  height={heightFor(track)}
                   active={selected.includes(clip.id)}
                   onGrab={(event, where) => {
                     const state = useCompose.getState()
@@ -1110,7 +1129,7 @@ export function ComposeTimeline({
                   style={{
                     left: zone.from * scale,
                     width: Math.max((zone.to - zone.from) * scale, 2),
-                    height: rowHeight - 12,
+                    height: heightFor(track) - 12,
                   }}
                 >
                   <svg className="h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -1171,6 +1190,11 @@ export function ComposeTimeline({
           onAdd={addTrack}
           onFill={() => addColor('#101018', trackMenu.id, trackMenu.at)}
           onText={() => addText(trackMenu.id, trackMenu.at)}
+          onPaste={
+            useCompose.getState().hasCopy()
+              ? () => useCompose.getState().pasteClips(trackMenu.at)
+              : undefined
+          }
           tracks={tracks}
         />
       )}
@@ -1194,16 +1218,16 @@ function TrackHeads({
   tracks,
   width,
   onWidth,
-  rowHeight,
   onRename,
   onLevel,
   onMenu,
   onMoveTrack,
+  compact,
 }: {
   tracks: ComposeTrack[]
   width: number
   onWidth: (value: number) => void
-  rowHeight: number
+  compact: boolean
   onRename: (id: string, name: string) => void
   onLevel: (id: string, level: number) => void
   onMenu: (event: React.MouseEvent, id: string) => void
@@ -1266,7 +1290,7 @@ function TrackHeads({
     const move = (event: MouseEvent) => {
       const held = carry.current
       if (!held) return
-      const row = Math.floor((event.clientY - held.top) / rowHeight)
+      const row = rowAtOffset(tracks, compact, event.clientY - held.top)
       setDropRow(Math.min(tracks.length - 1, Math.max(0, row)))
     }
     const drop = () => {
@@ -1282,13 +1306,53 @@ function TrackHeads({
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', drop)
     }
-  }, [dragging, dropRow, rowHeight, tracks.length, onMoveTrack])
+  }, [dragging, dropRow, compact, tracks, onMoveTrack])
 
   const roomy = width >= NAME_FROM
-  // В сжатых дорожках ползунок встаёт рядом с названием, поэтому места ему
-  // нужно больше: иначе от названия остаётся пара букв.
-  const narrow = rowHeight < TRACK_HEIGHT
-  const withLevel = width >= (narrow ? LEVEL_NARROW_FROM : LEVEL_FROM)
+
+  // Высоту дорожки тянут за верхний или нижний край её колонки: вверх за
+  // верхний — дорожка выше, вниз — ниже; за нижний — наоборот. Двойное
+  // нажатие по краю возвращает обычную высоту.
+  const resize = useRef<{ id: string; from: number; height: number; side: 'top' | 'bottom' } | null>(null)
+  useEffect(() => {
+    const move = (event: MouseEvent) => {
+      const held = resize.current
+      if (!held) return
+      const moved = event.clientY - held.from
+      const next = held.side === 'top' ? held.height - moved : held.height + moved
+      useCompose
+        .getState()
+        .setTrackHeight(held.id, Math.round(Math.min(TRACK_MAX, Math.max(TRACK_MIN, next))))
+    }
+    const drop = () => {
+      resize.current = null
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', drop)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', drop)
+    }
+  }, [])
+  const edge = (track: ComposeTrack, side: 'top' | 'bottom') =>
+    compact ? null : (
+      <div
+        className={`absolute inset-x-0 z-10 h-[5px] cursor-ns-resize hover:bg-accent/40 ${
+          side === 'top' ? 'top-0' : 'bottom-0'
+        }`}
+        title="Потяните, чтобы сделать дорожку выше или ниже. Двойное нажатие — обычная высота"
+        onMouseDown={(event) => {
+          if (event.button !== 0) return
+          event.preventDefault()
+          event.stopPropagation()
+          if (event.detail >= 2) {
+            useCompose.getState().setTrackHeight(track.id, undefined)
+            return
+          }
+          resize.current = { id: track.id, from: event.clientY, height: heightOf(track, false), side }
+        }}
+      />
+    )
 
   return (
     <div
@@ -1301,6 +1365,10 @@ function TrackHeads({
       {tracks.map((track) => {
         const colour = trackColor(tracks, track.id)
         const sound = track.kind === 'audio'
+        // В низких дорожках ползунок встаёт рядом с названием, поэтому места
+        // ему нужно больше: иначе от названия остаётся пара букв.
+        const narrow = heightOf(track, compact) < 56
+        const withLevel = width >= (narrow ? LEVEL_NARROW_FROM : LEVEL_FROM)
         return (
           <div
             key={track.id}
@@ -1311,7 +1379,7 @@ function TrackHeads({
                 ? 'ring-1 ring-inset ring-accent'
                 : ''
             }`}
-            style={{ height: rowHeight }}
+            style={{ height: heightOf(track, compact) }}
             onContextMenu={(event) => onMenu(event, track.id)}
             // Переставляют дорожку, потянув за любое место колонки: за номер,
             // за название, за пустоту рядом. Ползунок уровня — не в счёт.
@@ -1341,6 +1409,8 @@ function TrackHeads({
             >
               {trackNumber(tracks, track.id)}
             </span>
+            {edge(track, 'top')}
+            {edge(track, 'bottom')}
 
             {roomy && (
               /* В обычной высоте название и ползунок стоят друг под другом, а
@@ -1466,6 +1536,7 @@ function TrackMenu({
   onAdd,
   onFill,
   onText,
+  onPaste,
 }: {
   at: { x: number; y: number }
   where: 'lane' | 'head'
@@ -1476,6 +1547,8 @@ function TrackMenu({
   onAdd: (kind: 'video' | 'audio') => void
   onFill: () => void
   onText: () => void
+  /** Вставить скопированное туда, где нажали; нет — буфер пуст. */
+  onPaste?: () => void
 }) {
   useEffect(() => {
     const close = () => onClose()
@@ -1523,6 +1596,8 @@ function TrackMenu({
         <>
           {/* На звуковой дорожке надписи и заливке не место — они лягут на
               видеодорожку, в то же время. */}
+          {item('Вставить', () => onPaste?.(), !onPaste)}
+          <div className="my-1 h-px bg-line-soft" />
           {item('Добавить надпись сюда', onText)}
           {item('Добавить заливку сюда', onFill)}
         </>
@@ -1606,29 +1681,13 @@ function ClipMenu({
       )}
       <div className="my-1 h-px bg-line-soft" />
       {item('Копировать', 'Ctrl+C', () => state.copyClips(state.selected.length ? state.selected : [clipId]))}
-      {item('Вставить от иглы', 'Ctrl+V', () => state.pasteClips(), !state.hasCopy())}
       {item('Сгруппировать', 'G', () => state.groupClips(state.selected), !many)}
       {item('Убрать из группы', 'U', () => state.ungroupClips(state.selected), !clip.groupId)}
       <div className="my-1 h-px bg-line-soft" />
-      {clip.kind === 'audio'
-        ? item(clip.muted ? 'Вернуть звук' : 'Заглушить', '', () =>
-            state.updateClip(clipId, { muted: !clip.muted }),
-          )
-        : item('Вернуть приближение', '', () => state.updateClip(clipId, { zoom: 1 }), clip.zoom === 1)}
-      {item(
-        'Убрать затухания',
-        '',
-        () => state.updateClip(clipId, { fadeIn: 0, fadeOut: 0 }),
-        !clip.fadeIn && !clip.fadeOut,
-      )}
-      {item(
-        clip.kind === 'audio' ? 'Вернуть громкость' : 'Вернуть непрозрачность',
-        '',
-        () =>
-          state.updateClip(clipId, clip.kind === 'audio' ? { volume: 1 } : { opacity: 1 }),
-        clip.kind === 'audio' ? clip.volume === 1 : clip.opacity === 1,
-      )}
-
+      {clip.kind === 'audio' &&
+        item(clip.muted ? 'Вернуть звук' : 'Заглушить', '', () =>
+          state.updateClip(clipId, { muted: !clip.muted }),
+        )}
 
       {(clip.kind === 'video' || clip.kind === 'image' || clip.kind === 'audio') && (
         <>
@@ -1669,22 +1728,12 @@ function ClipMenu({
         <>
           <div className="my-1 h-px bg-line-soft" />
           {item(
-            'Вернуть в кадр целиком',
+            'Вернуть в исходную позицию',
             '',
             () => {
-              for (const id of pick(state, clipId)) {
-                state.updateClip(id, { size: 1, x: 0.5, y: 0.5 })
-              }
+              for (const id of pick(state, clipId)) state.resetPlace(id)
             },
-            clip.size === 1 && clip.x === 0.5 && clip.y === 0.5,
-          )}
-          {item(
-            'Поставить посередине',
-            '',
-            () => {
-              for (const id of pick(state, clipId)) state.updateClip(id, { x: 0.5, y: 0.5 })
-            },
-            clip.x === 0.5 && clip.y === 0.5,
+            clip.size === 1 && clip.x === 0.5 && clip.y === 0.5 && !clip.sizeY && !hasPlaceKeys(clip),
           )}
         </>
       )}
@@ -1832,12 +1881,13 @@ function clipsInside(
   to: number,
   top: number,
   bottom: number,
+  compact: boolean,
 ): string[] {
   const caught: string[] = []
-  // Линейка занимает верхние 24 пикселя, дорожки идут под ней.
-  let offset = 24
+  // Линейка сверху, дорожки идут под ней — каждая своей высоты.
+  let offset = RULER_HEIGHT
   for (const track of tracks) {
-    const height = track.kind === 'audio' ? AUDIO_HEIGHT : TRACK_HEIGHT
+    const height = heightOf(track, compact)
     const crossed = offset < bottom && offset + height > top
     if (crossed) {
       for (const clip of track.clips) {
@@ -2053,6 +2103,9 @@ function ClipBox({
   const scenes = useScenes(clip.source, detailed && clip.kind === 'video')
   const peaks = useWave(clip.source, detailed && sound, clip.sourceDuration || clip.duration)
   const thumb = `/api/library/thumbnail?path=${encodeURIComponent(clip.source)}`
+  // Чьи ключи показывать — группа, выбранная в колонке справа.
+  const focus = useCompose((state) => state.animFocus)
+  const focusGroup = groupOf(clip, focus)
 
   const fadeInWidth = (clip.fadeIn / clip.duration) * box
   const fadeOutWidth = (clip.fadeOut / clip.duration) * box
@@ -2104,7 +2157,6 @@ function ClipBox({
           reverse={Boolean(clip.reverse)}
           width={box}
           height={height - 14}
-          className="opacity-55"
         />
       ) : (
         <div
@@ -2112,25 +2164,28 @@ function ClipBox({
           style={{ backgroundImage: `url(${thumb})` }}
         />
       )}
+      {/* Затемнение только под подписью сверху: сплошное поверх всего клипа
+          глушило кадры, и склейки было не разглядеть. */}
       {!solid && clip.kind !== 'text' && (
-        <div className="absolute inset-0 bg-gradient-to-b from-surface-3/55 to-surface-3/80" />
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[22px] bg-gradient-to-b from-black/70 to-transparent" />
       )}
-      {/* Ключи анимации — ромбиками внизу клипа. Нажатие ставит иглу на
-          ключ: так к нему и переходят, чтобы поправить. */}
-      {isAnimated(clip) &&
-        (clip.keys ?? [])
-          .filter((key) => key.t >= -1e-3 && key.t <= clip.duration + 1e-3)
-          .map((key) => (
+      {/* Ключи — ромбиками внизу клипа, и только той группы, что выбрана в
+          колонке справа (обрезка, положение, маска…): ключи всех групп разом
+          сливались бы в кашу. Нажатие ставит иглу на ключ. */}
+      {active && focusGroup &&
+        keyTimes(clip, focusGroup)
+          .filter((t) => t >= -1e-3 && t <= clip.duration + 1e-3)
+          .map((t) => (
             <button
-              key={key.t}
+              key={t}
               type="button"
-              title={`Ключ на ${key.t.toFixed(2)} с от начала клипа — нажмите, чтобы перейти`}
+              title={`${focusGroup.label}: ключ на ${t.toFixed(2)} с от начала клипа — нажмите, чтобы перейти`}
               onMouseDown={(event) => {
                 event.stopPropagation()
-                useCompose.getState().setPlayhead(clip.start + key.t)
+                useCompose.getState().setPlayhead(clip.start + t)
               }}
-              className="absolute bottom-0.5 z-10 h-2.5 w-2.5 -translate-x-1/2 rotate-45 border border-base bg-accent-soft hover:bg-white"
-              style={{ left: Math.min(Math.max(key.t * scale, 5), box - 5) }}
+              className="absolute bottom-0.5 z-10 h-3 w-3 -translate-x-1/2 rotate-45 border border-base bg-accent-soft hover:bg-white"
+              style={{ left: Math.min(Math.max(t * scale, 6), box - 6) }}
             />
           ))}
       {lost && (
@@ -2245,7 +2300,7 @@ function ClipBox({
             Boolean(clip.rotate) ||
             isCropped(clip) ||
             Boolean(clip.mask?.on) ||
-            isAnimated(clip) ||
+            hasKeys(clip) ||
             clip.reverse) && (
             <span className="shrink-0 rounded bg-accent/30 px-1 font-mono text-[9px] leading-[13px] text-white">
               fx

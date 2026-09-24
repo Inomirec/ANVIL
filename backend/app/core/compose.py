@@ -32,7 +32,7 @@ from pathlib import Path
 
 from .. import paths
 from ..models import ComposeClip, ComposeProject
-from . import binaries, effects, fonts, fsutil, stabilize
+from . import anim, binaries, effects, fonts, fsutil, stabilize
 from .probe import probe
 
 #: Черновой кодек: быстрее всего, что есть. Черновик живёт секунды и нужен
@@ -197,39 +197,13 @@ def zoom_filter(clip: ComposeClip, width: int, height: int) -> str:
     return f",scale={big_w}:{big_h}:flags=lanczos,crop={width}:{height}"
 
 
+#: Показатели места и размера клипа в кадре.
+PLACE_FIELDS = ("x", "y", "size", "sizeY")
+
+
 def animated(clip: ComposeClip) -> bool:
-    """Двигается ли клип по ключам. Пока — ролики и картинки."""
-    return clip.kind in {"video", "image"} and len(clip.keys) >= 1
-
-
-def _ease(s: str) -> str:
-    """Плавный разгон и торможение между ключами: 3s² − 2s³."""
-    return f"({s})*({s})*(3-2*({s}))"
-
-
-def key_expression(clip: ComposeClip, field: str, moment: str) -> str:
-    """Значение поля ключей в момент ``moment`` (секунды от начала клипа).
-
-    До первого ключа — как в первом, после последнего — как в последнем,
-    между — плавный переход. Та же кривая в окне программы
-    (``placeAt`` в ``composeStore.ts``), поэтому рамка идёт вровень с кадром.
-    """
-    keys = sorted(clip.keys, key=lambda key: key.t)
-
-    def value(key: object) -> float:
-        raw = getattr(key, field)
-        if field == "size_y" and raw <= 0:
-            return getattr(key, "size")
-        return raw
-
-    expression = f"{value(keys[-1]):.5f}"
-    for left, right in reversed(list(zip(keys, keys[1:]))):
-        span = max(right.t - left.t, 1e-3)
-        # Время ключа — в скобках: оно бывает и меньше нуля (см. ClipKey).
-        progress = _ease(f"({moment}-({left.t:.4f}))/{span:.4f}")
-        segment = f"{value(left):.5f}+({value(right) - value(left):.5f})*{progress}"
-        expression = f"if(lt({moment},({right.t:.4f})),{segment},{expression})"
-    return f"if(lt({moment},({keys[0].t:.4f})),{value(keys[0]):.5f},{expression})"
+    """Меняются ли место или размер клипа по ключам."""
+    return clip.kind in {"video", "image", "color"} and anim.animated(clip, *PLACE_FIELDS)
 
 
 def animated_place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: float) -> str:
@@ -239,8 +213,23 @@ def animated_place_filter(clip: ComposeClip, width: int, height: int, fps: int, 
     ключи — от начала клипа; ``skip`` — сколько клипа прошло до куска.
     """
     moment = f"(t+{skip:.4f})"
-    size = key_expression(clip, "size", moment)
-    tall = key_expression(clip, "size_y", moment)
+    size = anim.expression(clip, "size", moment)
+    tall = anim.expression(clip, "sizeY", moment)
+    if clip.kind == "color":
+        if clip.fill_image:
+            # Картинка заливки нарисована под размер без ключей — вместе с
+            # запасом под тень растягиваем её в той же пропорции.
+            base_w = max(clip.size, 1e-3)
+            base_h = max(clip.size_y if clip.size_y > 0 else clip.size, 1e-3)
+            return (
+                f"format=rgba,scale=w='max(2,trunc(iw*({size})/{base_w:.5f}/2)*2)'"
+                f":h='max(2,trunc(ih*({tall})/{base_h:.5f}/2)*2)':eval=frame,setsar=1,fps={fps}"
+            )
+        # У сплошного цвета формы нет — он занимает место целиком.
+        return (
+            f"scale=w='max(2,trunc({width}*({size})/2)*2)':h='max(2,trunc({height}*({tall})/2)*2)'"
+            f":eval=frame,setsar=1,fps={fps}"
+        )
     return (
         f"scale=w='max(2,trunc({width}*({size})/2)*2)':h='max(2,trunc({height}*({tall})/2)*2)'"
         f":force_original_aspect_ratio=decrease:eval=frame:flags=bicubic,setsar=1,fps={fps}"
@@ -279,7 +268,7 @@ def clip_box(clip: ComposeClip, width: int, height: int) -> tuple[int, int]:
     return _even_near(width * clip.size), _even_near(height * tall)
 
 
-def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
+def place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: float = 0.0) -> str:
     """Во весь кадр или своим размером в своём месте.
 
     Нетронутый клип вписывается в кадр как обычно — с чёрными полями, если
@@ -293,7 +282,7 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int) -> str:
     """
     if clip.kind == "text":
         # Слой уже размером с кадр — подгонять нечего, остаётся написать.
-        return f"{text_filter(clip, width, height)},setsar=1,fps={fps}"
+        return f"{text_filter(clip, width, height, skip)},setsar=1,fps={fps}"
 
     if not is_placed(clip):
         return fit_filter(width, height, fps) + zoom_filter(clip, width, height)
@@ -368,7 +357,7 @@ def text_file(text: str) -> Path:
     return target
 
 
-def text_filter(clip: ComposeClip, width: int, height: int) -> str:
+def text_filter(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -> str:
     """Фильтр, рисующий надпись клипа на прозрачном слое.
 
     Размеры считаем от высоты кадра, а не в пикселях: тот же монтаж,
@@ -409,14 +398,18 @@ def text_filter(clip: ComposeClip, width: int, height: int) -> str:
 
     # Куда встанет надпись. x и y клипа — это её середина в долях кадра, так
     # же как у картинок: человек двигает текст той же рамкой.
-    middle_x = f"w*{clip.x:.5f}"
+    # По ключам место меняется формулой от времени: слой надписи начинается
+    # с начала прочитанного куска, ``skip`` — сколько клипа прошло до него.
+    moment = f"(t+{skip:.4f})"
+    middle_x = f"w*({anim.expression(clip, 'x', moment)})"
+    middle_y = f"h*({anim.expression(clip, 'y', moment)})"
     if clip.align == "left":
-        parts.append(f"x={middle_x}")
+        parts.append(f"x='{middle_x}'")
     elif clip.align == "right":
-        parts.append(f"x={middle_x}-text_w")
+        parts.append(f"x='{middle_x}-text_w'")
     else:
-        parts.append(f"x={middle_x}-text_w/2")
-    parts.append(f"y=h*{clip.y:.5f}-text_h/2")
+        parts.append(f"x='{middle_x}-text_w/2'")
+    parts.append(f"y='{middle_y}-text_h/2'")
     return "drawtext=" + ":".join(parts)
 
 
@@ -557,20 +550,22 @@ async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
 
 
 async def _render_mask(clip: ComposeClip) -> Path:
-    """Чёрно-белая картинка маски размером с кадр клипа, из кэша по форме."""
-    width, height = effects.mask_size(clip)
-    expression = effects.mask_expression(clip)
-    key = hashlib.sha1(f"{width}x{height}|{expression}".encode("utf-8")).hexdigest()[:20]
+    """Картинка формы маски — из кэша по форме (``effects.shape_render``)."""
+    (width, height), expression, blur = effects.shape_render(clip)
+    key = hashlib.sha1(f"{width}x{height}|{expression}|{blur:.2f}".encode("utf-8")).hexdigest()[:20]
     folder = paths.data_dir() / "masks"
     folder.mkdir(parents=True, exist_ok=True)
-    target = folder / f"{key}.png"
+    target = folder / f"s-{key}.png"
     if target.exists():
         return target
     partial = target.with_suffix(".part.png")
+    chain = f"geq=lum='{expression}'"
+    if blur > 0.3:
+        chain += f",gblur=sigma={blur:.2f}"
     process = await asyncio.create_subprocess_exec(
         binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:d=1,format=gray",
-        "-vf", f"geq=lum='{expression}'", "-frames:v", "1", str(partial),
+        "-vf", chain, "-frames:v", "1", str(partial),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
         creationflags=binaries.CREATE_NO_WINDOW,
@@ -812,16 +807,22 @@ def build_segment(
             # маски свой вход, а её номер станет известен, когда соберутся все
             # клипы, поэтому пока стоит метка, её заменят в конце.
             pre_label = f"[{index}:v]"
-            pre_chain = effects.video_chain(clip, preview=preview)
-            if effects.has_mask(clip) and clip.mask_image:
-                masks.append(clip.mask_image)
-                chain.append(effects.mask_graph(
-                    clip, pre_label, f"@MASK{len(masks) - 1}@", f"k{index}", f"[pre{index}]",
-                    preview=preview,
+            timing = effects.Timing(
+                skip=max(0.0, at - clip.start), take=take, fps=fps, tag=f"k{index}"
+            )
+            if clip.kind in {"video", "image"} and effects.needs_graph(clip):
+                shape = ""
+                if effects.has_mask(clip) and clip.mask_image:
+                    masks.append(clip.mask_image)
+                    shape = f"@MASK{len(masks) - 1}@"
+                chain.append(effects.clip_graph(
+                    clip, pre_label, f"[pre{index}]", f"k{index}",
+                    shape=shape, preview=preview, timing=timing,
                 ))
                 pre_label = f"[pre{index}]"
-                crop = effects.crop_filter(clip)
-                pre_chain = crop + "," if crop else ""
+                pre_chain = ""
+            else:
+                pre_chain = effects.video_chain(clip, preview=preview, timing=timing)
             fill = effects.blurred_fill(clip) if clip.kind in {"video", "image"} else None
             if fill:
                 # Размытый фон: под клипом он сам же, растянутый на всё своё
@@ -846,7 +847,7 @@ def build_segment(
                 placement = (
                     animated_place_filter(clip, width, height, fps, max(0.0, at - clip.start))
                     if animated(clip)
-                    else place_filter(clip, width, height, fps)
+                    else place_filter(clip, width, height, fps, max(0.0, at - clip.start))
                 )
                 chain.append(
                     f"{pre_label}{pre_chain}{placement}"
@@ -892,8 +893,8 @@ def build_segment(
             # Время фона — от начала отрезка; ключи — от начала клипа.
             moment = f"(t+{at - clip.start:.4f})"
             place = (
-                f":x='W*({key_expression(clip, 'x', moment)})-w/2'"
-                f":y='H*({key_expression(clip, 'y', moment)})-h/2':eval=frame"
+                f":x='W*({anim.expression(clip, 'x', moment)})-w/2'"
+                f":y='H*({anim.expression(clip, 'y', moment)})-h/2':eval=frame"
             )
         elif is_placed(clip):
             box_w, box_h = clip_box(clip, width, height)
@@ -1000,6 +1001,8 @@ async def prepare(
     for track in project.tracks:
         kept = []
         for clip in track.clips:
+            # Ключи, которые ничего не меняют, — обычные значения клипа.
+            anim.settle(clip)
             # У сплошного фона и у надписи файла нет — и проверять нечего.
             if clip.kind in {"color", "text"}:
                 clip.has_audio = False

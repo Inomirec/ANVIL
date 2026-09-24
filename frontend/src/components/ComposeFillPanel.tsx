@@ -1,3 +1,4 @@
+import { PlaceFields } from './ComposeAnimUi'
 import { useState } from 'react'
 import { EFFECT_PIXELS, effectDefaults, useCompose, type ComposeClip } from '../composeStore'
 import { ColorSquare, EffectSection, SliderNumber } from './ComposeTextPanel'
@@ -52,6 +53,10 @@ export function ComposeFillPanel({ clip }: { clip: ComposeClip }) {
   return (
     <div className="space-y-3.5">
       <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Заливка</h3>
+
+      {/* Место и размер числами, с часиками: заливку можно двигать и
+          растягивать по ходу видео. */}
+      <PlaceFields clip={clip} />
 
       <div className="flex items-center gap-2">
         <ColorSquare value={colour} title="Цвет заливки" onChange={(value) => put({ color: value })} />

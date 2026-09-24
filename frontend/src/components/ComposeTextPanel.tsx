@@ -1,3 +1,4 @@
+import { PlaceFields } from './ComposeAnimUi'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlignCenter,
@@ -272,6 +273,7 @@ export function SliderNumber({
   onChange,
   stacked = false,
   marks,
+  aside,
 }: {
   label: string
   value: number
@@ -286,6 +288,8 @@ export function SliderNumber({
   stacked?: boolean
   /** Рекомендованные значения — подписи под шкалой, нажатие ставит значение. */
   marks?: { value: number; label: string }[]
+  /** Что стоит справа от подписи — например, часики ключей. */
+  aside?: React.ReactNode
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const apply = () => {
@@ -380,7 +384,10 @@ export function SliderNumber({
   if (!stacked) return row
   return (
     <div className="space-y-1">
-      <span className="block text-[11.5px] text-ink-dim">{label}</span>
+      <div className="flex items-center gap-1">
+        <span className="block min-w-0 flex-1 text-[11.5px] text-ink-dim">{label}</span>
+        {aside}
+      </div>
       {row}
     </div>
   )
@@ -530,6 +537,9 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
   return (
     <div className="space-y-3.5">
       <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Надпись</h3>
+
+      {/* Положение числами, с часиками: надпись можно вести по кадру. */}
+      <PlaceFields clip={clip} size={false} />
 
       <TextBox
         value={v.text}

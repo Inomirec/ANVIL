@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { clipRect, useCompose, type ComposeClip } from '../composeStore'
+import { clipRect, shownAt, useCompose, type ComposeClip } from '../composeStore'
 
 /**
  * Обрезка клипа прямо в окне просмотра.
@@ -64,8 +64,10 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
       // Курсор в долях самой картинки клипа.
       const atX = (event.clientX - area.left) / area.width
       const atY = (event.clientY - area.top) / area.height
-      const now = state.findClip(clip.id)?.clip
-      if (!now) return
+      const found = state.findClip(clip.id)?.clip
+      if (!found) return
+      // Обрезка под иглой — у неё могут быть ключи.
+      const now = shownAt(found, state.playhead)
       const l = now.cropLeft ?? 0
       const t = now.cropTop ?? 0
       const r = now.cropRight ?? 0
@@ -77,7 +79,7 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
         const dy = (event.clientY - current.fromY) / area.height
         const shiftX = Math.min(current.r, Math.max(-current.l, dx))
         const shiftY = Math.min(current.b, Math.max(-current.t, dy))
-        state.updateClip(clip.id, {
+        state.applyValues(clip.id, {
           cropLeft: current.l + shiftX,
           cropRight: current.r - shiftX,
           cropTop: current.t + shiftY,
@@ -86,19 +88,24 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
         return
       }
 
-      const patch: Partial<ComposeClip> = {}
+      const patch: Record<string, number> = {}
       for (const side of current.sides) {
         if (side === 'l') patch.cropLeft = Math.min(1 - r - MIN_KEEP, Math.max(0, stickTo(atX)))
         if (side === 'r') patch.cropRight = Math.min(1 - l - MIN_KEEP, Math.max(0, 1 - stickTo(atX)))
         if (side === 't') patch.cropTop = Math.min(1 - b - MIN_KEEP, Math.max(0, stickTo(atY)))
         if (side === 'b') patch.cropBottom = Math.min(1 - t - MIN_KEEP, Math.max(0, 1 - stickTo(atY)))
       }
-      state.updateClip(clip.id, patch)
+      // Правка ложится в ключ под иглой: так обрезку подстраивают под
+      // разные сцены.
+      state.applyValues(clip.id, patch)
     }
     const drop = () => {
       drag.current = null
     }
     const keys = (event: KeyboardEvent) => {
+      // Enter в поле числа — это ввод числа, а не «готово».
+      const target = event.target as HTMLElement | null
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
       if (event.key === 'Enter' || event.key === 'Escape') {
         event.preventDefault()
         setCropping(null)
@@ -166,7 +173,7 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
         }}
         title="Обрезка: тяните края и уголки. За середину — сдвинуть окно обрезки. Двойное нажатие — убрать обрезку. Enter или Esc — готово"
         onDoubleClick={() =>
-          useCompose.getState().updateClip(clip.id, { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 })
+          useCompose.getState().applyValues(clip.id, { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 })
         }
         onMouseDown={(event) => {
           if (!start(event)) return

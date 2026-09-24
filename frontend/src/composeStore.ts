@@ -1,4 +1,22 @@
 import { create } from 'zustand'
+import {
+  CROP_FIELDS,
+  groupOf,
+  groupValues,
+  hasKeys,
+  KEY_NEAR,
+  MASK_FIELDS,
+  rekey,
+  shownAt,
+  withKey,
+  withoutGroup,
+  withoutKey,
+  withoutPrefix,
+  withValues,
+  type Anim,
+} from './composeAnim'
+
+export { KEY_NEAR, shownAt } from './composeAnim'
 
 /**
  * Состояние вкладки «Монтаж».
@@ -13,35 +31,26 @@ import { create } from 'zustand'
 export type ClipKind = 'video' | 'image' | 'audio' | 'color' | 'text'
 
 /**
- * Ключ анимации: где и какого размера клип в момент ``t``.
- *
- * ``t`` — секунды от начала клипа. Бывает и меньше нуля, и больше длины
- * клипа: после обрезки и разреза ключи остаются на тех же кадрах ролика.
- */
-export interface ClipKey {
-  t: number
-  x: number
-  y: number
-  size: number
-  sizeY: number
-}
-
-/**
  * Маска клипа: где он виден или где действуют его эффекты.
  *
  * Место — в долях картинки клипа: середина ``x``/``y``, размер ``w``/``h``.
  * ``feather`` — мягкость края, доля меньшей стороны маски.
  */
 export interface ClipMask {
-  shape: 'rect' | 'ellipse'
+  /** Овал, прямоугольник или своя форма — точки ``points``. */
+  shape: 'rect' | 'ellipse' | 'custom'
   x: number
   y: number
   w: number
   h: number
+  /** Своя форма: точки в долях прямоугольника маски, по порядку обхода. */
+  points?: [number, number][]
   feather: number
-  invert: boolean
-  /** ``show`` — клип виден только внутри, ``effects`` — эффекты только внутри. */
-  mode: 'show' | 'effects'
+  /** Что видно: то, что внутри маски, и то, что снаружи. */
+  showInside: boolean
+  showOutside: boolean
+  /** Где действуют эффекты клипа: везде, только внутри или только снаружи. */
+  effectsArea: 'all' | 'inside' | 'outside'
   on: boolean
 }
 
@@ -97,8 +106,8 @@ export interface ComposeClip {
   reverse?: boolean
   /** Маска — прямоугольник или овал. */
   mask?: ClipMask | null
-  /** Ключи анимации места и размера. Меньше двух — клип стоит на месте. */
-  keys?: ClipKey[]
+  /** Ключи анимации по показателям (см. ``composeAnim.ts``). */
+  anim?: Anim
   /** Обрезка — сколько отрезать с каждой стороны, в долях картинки. Отрезанное
    *  прозрачно, оставшееся стоит на своём месте. */
   cropLeft?: number
@@ -238,6 +247,9 @@ export interface ComposeTrack {
    * то, что на ней лежит. Умножается на то же самое у каждого клипа.
    */
   level: number
+  /** Своя высота дорожки в пикселях; нет — обычная. У каждой своя: звуку
+   *  хочется видеть волну подробно, видео — кадры покрупнее. */
+  height?: number
 }
 
 /**
@@ -482,83 +494,11 @@ export function speedOf(clip: ComposeClip): number {
 }
 
 /** Пределы скорости — как у сервера. */
-/** Насколько близко к ключу считается «на ключе» — кадр при 25 кадрах. */
-export const KEY_NEAR = 0.04
-
 /**
  * Самое сильное приближение таймлайна, пикселей на секунду. При 30 кадрах в
  * секунду это полсотни пикселей на кадр — по кадру можно попасть мышью.
  */
 export const MAX_SCALE = 1500
-
-/** Анимирован ли клип: у него есть ключи. Пока — ролики и картинки. */
-export function isAnimated(clip: ComposeClip): boolean {
-  return (clip.kind === 'video' || clip.kind === 'image') && (clip.keys?.length ?? 0) > 0
-}
-
-/**
- * Место и размер клипа в момент ``local`` (секунды от начала клипа).
- *
- * Та же кривая, что у сервера (``key_expression`` в ``compose.py``): плавный
- * разгон и торможение между ключами. Иначе рамка в окне просмотра и кадр
- * расходились бы между ключами.
- */
-export function placeAt(
-  clip: ComposeClip,
-  local: number,
-): { x: number; y: number; size: number; sizeY: number } {
-  const keys = [...(clip.keys ?? [])].sort((a, b) => a.t - b.t)
-  const own = { x: clip.x, y: clip.y, size: clip.size, sizeY: clip.sizeY ?? 0 }
-  if (!keys.length || !isAnimated(clip)) return own
-  const tall = (key: ClipKey) => (key.sizeY > 0 ? key.sizeY : key.size)
-  const pick = (key: ClipKey) => ({ x: key.x, y: key.y, size: key.size, sizeY: key.sizeY })
-  if (local <= keys[0].t) return pick(keys[0])
-  const last = keys[keys.length - 1]
-  if (local >= last.t) return pick(last)
-  for (let index = 0; index < keys.length - 1; index++) {
-    const left = keys[index]
-    const right = keys[index + 1]
-    if (local < right.t) {
-      const s = (local - left.t) / Math.max(right.t - left.t, 1e-3)
-      const e = s * s * (3 - 2 * s)
-      const mix = (a: number, b: number) => a + (b - a) * e
-      const anyFree = left.sizeY > 0 || right.sizeY > 0
-      return {
-        x: mix(left.x, right.x),
-        y: mix(left.y, right.y),
-        size: mix(left.size, right.size),
-        sizeY: anyFree ? mix(tall(left), tall(right)) : 0,
-      }
-    }
-  }
-  return pick(last)
-}
-
-/** Клип таким, каким он стоит в кадре под иглой: для рамок в окне просмотра. */
-export function shownAt(clip: ComposeClip, playhead: number): ComposeClip {
-  return isAnimated(clip) ? { ...clip, ...placeAt(clip, playhead - clip.start) } : clip
-}
-
-/**
- * Ключи после правки клипа, так чтобы они остались на тех же кадрах ролика.
- *
- * Кадр ролика — это ``sourceIn + t * speed``; обрезали левый край или
- * поменяли скорость — ``t`` пересчитывается под новые ``sourceIn`` и
- * ``speed``. У картинки своих кадров нет — ключи держатся за время
- * таймлайна: сдвинулось начало — сдвигаются и они.
- */
-export function rekey(clip: ComposeClip, next: { start: number; sourceIn: number; speed: number }): ClipKey[] | undefined {
-  if (!clip.keys?.length) return clip.keys
-  if (clip.kind === 'image') {
-    const shift = next.start - clip.start
-    return clip.keys.map((key) => ({ ...key, t: key.t - shift }))
-  }
-  const speed = clip.speed ?? 1
-  return clip.keys.map((key) => ({
-    ...key,
-    t: (clip.sourceIn + key.t * speed - next.sourceIn) / next.speed,
-  }))
-}
 
 /** Маска по умолчанию — посередине, в половину картинки. */
 export function newMask(clip: ComposeClip): ClipMask {
@@ -569,23 +509,61 @@ export function newMask(clip: ComposeClip): ClipMask {
     y: 0.5,
     w: 0.4,
     h: 0.4,
+    points: [],
     feather: 0.15,
-    invert: false,
     // Есть эффекты — маску, скорее всего, кладут, чтобы размыть или
-    // запикселить кусок; нет — чтобы показать только часть картинки.
-    mode: effects ? 'effects' : 'show',
+    // запикселить кусок: видно всё, эффекты — внутри. Нет — чтобы показать
+    // только часть картинки.
+    showInside: true,
+    showOutside: effects,
+    effectsArea: effects ? 'inside' : 'all',
     on: true,
   }
 }
 
-/** Обрезан ли клип хоть с одной стороны. */
+/** Маска прежних версий: режим и «перевернуть» — в нынешние переключатели. */
+function migrateMask(mask: ClipMask | null | undefined): ClipMask | null | undefined {
+  if (!mask) return mask
+  const old = mask as ClipMask & { mode?: 'show' | 'effects'; invert?: boolean }
+  if (old.showInside !== undefined) return { ...mask, points: mask.points ?? [] }
+  const effects = old.mode === 'effects'
+  return {
+    shape: mask.shape,
+    x: mask.x,
+    y: mask.y,
+    w: mask.w,
+    h: mask.h,
+    points: [],
+    feather: mask.feather,
+    showInside: effects ? true : !old.invert,
+    showOutside: effects ? true : Boolean(old.invert),
+    effectsArea: effects ? (old.invert ? 'outside' : 'inside') : 'all',
+    on: mask.on,
+  }
+}
+
+/** Ключи прежних версий — один список на место и размер сразу. */
+function migrateKeys(clip: ComposeClip): Anim | undefined {
+  const old = (clip as ComposeClip & { keys?: { t: number; x: number; y: number; size: number; sizeY: number }[] }).keys
+  if (!old?.length) return clip.anim
+  const anim: Anim = { ...(clip.anim ?? {}) }
+  for (const field of ['x', 'y', 'size', 'sizeY'] as const) {
+    anim[field] = old.map((key) => ({ t: key.t, v: key[field] }))
+  }
+  return anim
+}
+
+/** Обрезан ли клип хоть с одной стороны — хоть в одном ключе. */
 export function isCropped(clip: ComposeClip): boolean {
-  return Boolean(
-    (clip.cropLeft ?? 0) > 1e-3 ||
-      (clip.cropTop ?? 0) > 1e-3 ||
-      (clip.cropRight ?? 0) > 1e-3 ||
-      (clip.cropBottom ?? 0) > 1e-3,
-  )
+  const cut = (field: string) =>
+    ((clip as unknown as Record<string, number>)[field] ?? 0) > 1e-3 ||
+    (clip.anim?.[field] ?? []).some((key) => key.v > 1e-3)
+  return CROP_FIELDS.some(cut)
+}
+
+/** Есть ли у обрезки ключи — тогда крестик убирает и их. */
+export function cropFields(): string[] {
+  return CROP_FIELDS
 }
 
 export const MIN_SPEED = 0.25
@@ -682,18 +660,33 @@ interface State extends Saved {
   clearMarks: () => void
 
   /**
-   * Поставить клип в кадре. У анимированного клипа правка ложится в ключ под
-   * иглой — новый или тот, что уже там, — а не в сам клип.
+   * Поставить клип в кадре. Если у места или размера есть ключи, правка
+   * ложится в ключ под иглой — новый или тот, что уже там, — а не в сам клип.
    */
   placeClip: (id: string, patch: Partial<ComposeClip>) => void
-  /** Включить анимацию: первый ключ — под иглой, с нынешним местом клипа. */
-  startKeys: (id: string) => void
-  /** Поставить ключ под иглой с тем местом, что сейчас в кадре. */
-  addKey: (id: string) => void
-  /** Убрать ключ, ближайший к игле (в пределах кадра). */
-  removeKey: (id: string) => void
-  /** Выключить анимацию: клип остаётся там, где он под иглой. */
-  stopKeys: (id: string) => void
+  /**
+   * Записать значения показателей (``x``, ``cropLeft``, ``mask.w``,
+   * ``fx.<id>.<настройка>``). У группы с ключами — в ключ под иглой, у
+   * обрезки и маски ключ появляется сам при первой правке.
+   */
+  applyValues: (id: string, values: Record<string, number>) => void
+  /** Группа, чьи ключи сейчас видны на таймлайне и ставятся кнопками. */
+  animFocus: string | null
+  setAnimFocus: (group: string | null) => void
+  /** Часики группы: включить ключи (первый — под иглой) или выключить. */
+  toggleAnim: (id: string, group: string) => void
+  /** Поставить ключ группы под иглой с тем, что сейчас в кадре. */
+  keyHere: (id: string, group: string) => void
+  /** Убрать ключ группы под иглой. */
+  unkeyHere: (id: string, group: string) => void
+  /** Вернуть клип в исходную позицию: во весь кадр, посередине, без ключей. */
+  resetPlace: (id: string) => void
+  /** Убрать маску вместе с её ключами. */
+  removeMask: (id: string) => void
+  /** Убрать обрезку вместе с её ключами. */
+  removeCrop: (id: string) => void
+  /** Поставить ключ группы под иглой, если ключей у неё ещё нет. */
+  ensureKey: (id: string, group: string) => void
   /** Родная половина ролика: картинка для звука и звук для картинки. */
   partnerOf: (clipId: string) => ComposeClip | null
   addEffect: (clipId: string, type: string, params: Record<string, number | string>) => void
@@ -723,6 +716,8 @@ interface State extends Saved {
   /** Переставляет дорожку выше или ниже соседней того же вида. */
   moveTrack: (id: string, to: number) => void
   renameTrack: (id: string, name: string) => void
+  /** Своя высота дорожки; ``undefined`` — вернуть обычную. */
+  setTrackHeight: (id: string, height: number | undefined) => void
   setTrackLevel: (id: string, level: number) => void
   /** Переносит клипы на соседние дорожки: ``delta`` — на сколько вниз. */
   shiftTracks: (ids: string[], delta: number) => void
@@ -735,7 +730,8 @@ interface State extends Saved {
   /** Запомнить выбранные клипы, чтобы вставить их копию. */
   copyClips: (ids: string[]) => number
   /** Положить запомненные клипы, начиная от иглы. */
-  pasteClips: () => void
+  /** Вставить скопированное: от ``at`` или, если не задано, от иглы. */
+  pasteClips: (at?: number) => void
   /** Есть ли что вставлять. */
   hasCopy: () => boolean
   clearAll: () => void
@@ -805,7 +801,10 @@ function normalize(input: unknown): Saved {
         ratio: clip.ratio ?? 0,
         radius: clip.radius ?? 0,
         effects: clip.effects ?? [],
-        keys: clip.keys ?? [],
+        // Ключи прежних версий — место и размер одним списком.
+        anim: migrateKeys(clip) ?? {},
+        keys: undefined,
+        mask: migrateMask(clip.mask),
         // Заливкам прежних версий добираем цвета рамки и тени: без них колонка
         // показывала бы одно, а программа рисовала бы другое.
         ...(clip.kind === 'color'
@@ -1074,7 +1073,8 @@ export const useCompose = create<State>((set, get) => ({
       }
     }
     // Двигать маску и обрезать разом нельзя: рамки лежат друг на друге.
-    set({ masking: id, ...(id ? { cropping: null } : {}) })
+    set({ masking: id, ...(id ? { cropping: null, animFocus: 'mask' } : {}) })
+    if (id) get().ensureKey(id, 'mask')
   },
   cropping: null,
   setCropping: (id) => {
@@ -1087,7 +1087,11 @@ export const useCompose = create<State>((set, get) => ({
         set({ playhead: clip.start + clip.duration / 2 })
       }
     }
-    set({ cropping: id, ...(id ? { masking: null } : {}) })
+    set({ cropping: id, ...(id ? { masking: null, animFocus: 'crop' } : {}) })
+    // Нажали «Обрезать» — на таймлайне сразу ключ под иглой. Один ключ —
+    // одна обрезка на весь клип; поставят второй в другом месте — обрезка
+    // будет меняться между ними.
+    if (id) get().ensureKey(id, 'crop')
   },
   bumpRefresh: () => set({ refresh: get().refresh + 1 }),
   missing: [],
@@ -1478,7 +1482,7 @@ export const useCompose = create<State>((set, get) => ({
               family.includes(clip.id)
                 ? {
                     ...clip,
-                    keys: rekey(clip, {
+                    anim: rekey(clip, {
                       start: Math.max(0, start),
                       sourceIn: Math.max(0, sourceIn),
                       speed: speed ?? clip.speed ?? 1,
@@ -1541,7 +1545,7 @@ export const useCompose = create<State>((set, get) => ({
             groupId: clip.groupId ? `${clip.groupId}-r` : undefined,
           }
           // Ключи правой половины — от её собственного начала, на тех же кадрах.
-          right.keys = rekey(clip, { start: right.start, sourceIn: right.sourceIn, speed: speedOf(clip) })
+          right.anim = rekey(clip, { start: right.start, sourceIn: right.sourceIn, speed: speedOf(clip) })
           made.push(rightId)
           next.push(
             {
@@ -1649,6 +1653,13 @@ export const useCompose = create<State>((set, get) => ({
       tracks.splice(limited, 0, moved)
       return { tracks }
     })
+    save(get())
+  },
+
+  setTrackHeight(id, height) {
+    set((state) => ({
+      tracks: state.tracks.map((track) => (track.id === id ? { ...track, height } : track)),
+    }))
     save(get())
   },
 
@@ -1826,10 +1837,10 @@ export const useCompose = create<State>((set, get) => ({
     return clipboard.length
   },
 
-  pasteClips() {
+  pasteClips(from) {
     if (!clipboard.length) return
     get().mark()
-    const at = get().playhead
+    const at = from ?? get().playhead
     // Группы восстанавливаем заново: копии должны ходить вместе между собой,
     // а не цепляться к тем клипам, с которых их сняли.
     const groups = new Map<string, string>()
@@ -1938,76 +1949,154 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   placeClip(id, patch) {
+    const values: Record<string, number> = {}
+    for (const field of ['x', 'y', 'size', 'sizeY'] as const) {
+      const value = patch[field]
+      if (typeof value === 'number') values[field] = value
+    }
+    get().applyValues(id, values)
+  },
+
+  applyValues(id, values) {
     const clip = get().findClip(id)?.clip
     if (!clip) return
-    if (!isAnimated(clip)) {
-      get().updateClip(id, patch)
-      return
-    }
     const local = get().playhead - clip.start
-    const keys = clip.keys ?? []
-    const near = keys.find((key) => Math.abs(key.t - local) < KEY_NEAR)
-    const base = placeAt(clip, local)
-    // В ключ идут только место и размер: остальное — свойства самого клипа.
-    const merged = {
-      x: patch.x ?? base.x,
-      y: patch.y ?? base.y,
-      size: patch.size ?? base.size,
-      sizeY: patch.sizeY ?? base.sizeY,
+    // Показатели раскладываем по группам: у каждой свои ключи.
+    let next: ComposeClip = clip
+    const plain: Record<string, number> = {}
+    const touched = new Map<string, Record<string, number>>()
+    for (const [field, value] of Object.entries(values)) {
+      const groupId =
+        field === 'x' || field === 'y'
+          ? 'position'
+          : field === 'size' || field === 'sizeY'
+            ? 'size'
+            : CROP_FIELDS.includes(field)
+              ? 'crop'
+              : MASK_FIELDS.includes(field)
+                ? 'mask'
+                : field.startsWith('fx.')
+                  ? field
+                  : ''
+      const group = groupOf(clip, groupId)
+      const keyed = group && group.fields.some((name) => (clip.anim?.[name]?.length ?? 0) > 0)
+      if (group && (keyed || group.auto)) {
+        touched.set(group.id, { ...(touched.get(group.id) ?? {}), [field]: value })
+      } else {
+        plain[field] = value
+      }
     }
-    const key: ClipKey = {
-      t: near ? near.t : local,
-      x: merged.x,
-      y: merged.y,
-      size: merged.size,
-      sizeY: merged.sizeY ?? 0,
+    next = withValues(next, plain)
+    for (const [groupId, part] of touched) {
+      const group = groupOf(next, groupId)!
+      // Остальные показатели группы — какими они видны под иглой.
+      const current = groupValues(next, group, local)
+      next = { ...next, anim: withKey(next, group, local, { ...current, ...part }) }
     }
     get().updateClip(id, {
-      keys: near ? keys.map((item) => (item === near ? key : item)) : [...keys, key].sort((a, b) => a.t - b.t),
+      x: next.x,
+      y: next.y,
+      size: next.size,
+      sizeY: next.sizeY,
+      cropLeft: next.cropLeft,
+      cropTop: next.cropTop,
+      cropRight: next.cropRight,
+      cropBottom: next.cropBottom,
+      mask: next.mask,
+      effects: next.effects,
+      anim: next.anim,
     })
   },
 
-  startKeys(id) {
+  animFocus: null,
+  setAnimFocus(group) {
+    set({ animFocus: group })
+  },
+
+  toggleAnim(id, groupId) {
+    const clip = get().findClip(id)?.clip
+    const group = clip && groupOf(clip, groupId)
+    if (!clip || !group) return
+    get().mark()
+    const local = get().playhead - clip.start
+    const keyed = group.fields.some((field) => (clip.anim?.[field]?.length ?? 0) > 0)
+    if (keyed) {
+      // Выключили часики — показатель остаётся таким, каким он сейчас под
+      // иглой, и больше не меняется.
+      const now = groupValues(clip, group, local)
+      const fixed = withValues({ ...clip, anim: withoutGroup(clip.anim, group.fields) }, now)
+      get().updateClip(id, { ...fixed })
+    } else {
+      const at = Math.min(Math.max(local, 0), clip.duration)
+      get().updateClip(id, { anim: withKey(clip, group, at, groupValues(clip, group, at)) })
+    }
+    set({ animFocus: groupId })
+  },
+
+  keyHere(id, groupId) {
+    const clip = get().findClip(id)?.clip
+    const group = clip && groupOf(clip, groupId)
+    if (!clip || !group) return
+    get().mark()
+    const local = get().playhead - clip.start
+    get().updateClip(id, { anim: withKey(clip, group, local, groupValues(clip, group, local)) })
+  },
+
+  unkeyHere(id, groupId) {
+    const clip = get().findClip(id)?.clip
+    const group = clip && groupOf(clip, groupId)
+    if (!clip || !group) return
+    const local = get().playhead - clip.start
+    const anim = withoutKey(clip, group, local)
+    if (!anim) return
+    get().mark()
+    // Убрали последний ключ — показатель остаётся таким, каким был в нём.
+    const left = group.fields.some((field) => (anim[field]?.length ?? 0) > 0)
+    const fixed = left ? { ...clip, anim } : withValues({ ...clip, anim }, groupValues(clip, group, local))
+    get().updateClip(id, { ...fixed })
+  },
+
+  resetPlace(id) {
     const clip = get().findClip(id)?.clip
     if (!clip) return
     get().mark()
+    get().updateClip(id, {
+      x: 0.5,
+      y: 0.5,
+      size: 1,
+      sizeY: 0,
+      anim: withoutGroup(clip.anim, ['x', 'y', 'size', 'sizeY']),
+    })
+  },
+
+  removeMask(id) {
+    const clip = get().findClip(id)?.clip
+    if (!clip) return
+    get().mark()
+    if (get().masking === id) set({ masking: null })
+    get().updateClip(id, { mask: null, anim: withoutPrefix(clip.anim, 'mask.') })
+  },
+
+  ensureKey(id, groupId) {
+    const clip = get().findClip(id)?.clip
+    const group = clip && groupOf(clip, groupId)
+    if (!clip || !group) return
+    if (group.fields.some((field) => (clip.anim?.[field]?.length ?? 0) > 0)) return
     const local = Math.min(Math.max(get().playhead - clip.start, 0), clip.duration)
+    get().updateClip(id, { anim: withKey(clip, group, local, groupValues(clip, group, local)) })
+  },
+
+  removeCrop(id) {
+    const clip = get().findClip(id)?.clip
+    if (!clip) return
+    get().mark()
     get().updateClip(id, {
-      keys: [{ t: local, x: clip.x, y: clip.y, size: clip.size, sizeY: clip.sizeY ?? 0 }],
+      cropLeft: 0,
+      cropTop: 0,
+      cropRight: 0,
+      cropBottom: 0,
+      anim: withoutGroup(clip.anim, CROP_FIELDS),
     })
-  },
-
-  addKey(id) {
-    const clip = get().findClip(id)?.clip
-    if (!clip) return
-    get().mark()
-    // Ставим ключ с тем, что сейчас видно: правка места потом ляжет в него.
-    get().placeClip(id, placeAt(clip, get().playhead - clip.start))
-  },
-
-  removeKey(id) {
-    const clip = get().findClip(id)?.clip
-    if (!clip?.keys?.length) return
-    const local = get().playhead - clip.start
-    const near = clip.keys.find((key) => Math.abs(key.t - local) < KEY_NEAR)
-    if (!near) return
-    get().mark()
-    const rest = clip.keys.filter((key) => key !== near)
-    // Последний ключ убрали — клип остаётся там, где был этот ключ.
-    get().updateClip(
-      id,
-      rest.length
-        ? { keys: rest }
-        : { keys: [], x: near.x, y: near.y, size: near.size, sizeY: near.sizeY },
-    )
-  },
-
-  stopKeys(id) {
-    const clip = get().findClip(id)?.clip
-    if (!clip) return
-    get().mark()
-    const place = placeAt(clip, get().playhead - clip.start)
-    get().updateClip(id, { keys: [], ...place })
   },
 
   partnerOf(clipId) {
@@ -2053,6 +2142,7 @@ export const useCompose = create<State>((set, get) => ({
     if (!clip) return
     get().updateClip(clipId, {
       effects: (clip.effects ?? []).filter((effect) => effect.id !== effectId),
+      anim: withoutPrefix(clip.anim, `fx.${effectId}.`),
     })
   },
 
