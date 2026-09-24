@@ -151,7 +151,7 @@ async def draft(request: ComposeDraftRequest) -> dict:
                 await compose.prepare_fills(project, width, request.height)
                 args = compose.build_segment(
                     project, target, at=at, span=span,
-                    width=width, height=request.height,
+                    width=width, height=request.height, preview=True,
                 )
                 process = await asyncio.create_subprocess_exec(
                     *args,

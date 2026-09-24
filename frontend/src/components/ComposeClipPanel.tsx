@@ -193,6 +193,21 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
         <div className={`space-y-2.5 border-t border-line-soft px-3 py-2.5 ${effect.on ? '' : 'opacity-50'}`}>
           {kind.params.map((param) => {
             const value = effect.params[param.key] ?? param.default
+            if (param.kind === 'check') {
+              return (
+                <label key={param.key} className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-dim">
+                  <input
+                    type="checkbox"
+                    checked={Number(value) >= 0.5}
+                    onChange={(event) =>
+                      updateEffect(clipId, effect.id, { params: { [param.key]: event.target.checked ? 1 : 0 } })
+                    }
+                    className="h-3.5 w-3.5 accent-[var(--color-accent)]"
+                  />
+                  {param.label}
+                </label>
+              )
+            }
             if (param.kind === 'color') {
               return (
                 <div key={param.key} className="flex items-center gap-2">

@@ -90,6 +90,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
       // Громкость монтажа и выравнивание идут и в просмотр: иначе на слух
       // он отличался бы от готового файла.
       masterVolume: state.masterVolume,
+      loudnorm: state.loudnorm,
       tracks: state.tracks,
     }
   }, [])
@@ -303,7 +304,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const off = useCompose.subscribe((state, prev) => {
-      if (state.masterVolume === prev.masterVolume) return
+      if (state.masterVolume === prev.masterVolume && state.loudnorm === prev.loudnorm) return
       if (!playingRef.current) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {

@@ -1596,6 +1596,10 @@ function EffectsSubmenu({ clipId, onClose }: { clipId: string; onClose: () => vo
   const [open, setOpen] = useState(false)
   const [left, setLeft] = useState(false)
   const row = useRef<HTMLDivElement>(null)
+  const closing = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (closing.current) clearTimeout(closing.current)
+  }, [])
   const clip = state.findClip(clipId)?.clip
   if (!clip) return null
   const partner = state.partnerOf(clipId)
@@ -1613,15 +1617,20 @@ function EffectsSubmenu({ clipId, onClose }: { clipId: string; onClose: () => vo
       ref={row}
       className="relative"
       onMouseEnter={() => {
+        if (closing.current) clearTimeout(closing.current)
         // У правого края окна подменю раскрывается влево, иначе уйдёт за экран.
         const box = row.current?.getBoundingClientRect()
         setLeft(Boolean(box && box.right + 240 > window.innerWidth))
         setOpen(true)
       }}
-      onMouseLeave={() => setOpen(false)}
+      // Закрываем не сразу: курсор, уходящий к подменю наискосок, успевает
+      // задеть соседний пункт — и подменю пропадало, не дав себя выбрать.
+      onMouseLeave={() => {
+        closing.current = setTimeout(() => setOpen(false), 350)
+      }}
     >
       <div
-        className={`flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-left text-[12px] ${
+        className={`flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-2 text-left text-[12px] ${
           open ? 'bg-surface-3 text-ink' : 'text-ink-dim'
         }`}
       >
@@ -1629,11 +1638,13 @@ function EffectsSubmenu({ clipId, onClose }: { clipId: string; onClose: () => vo
         <ChevronRight size={12} className="text-ink-faint" />
       </div>
       {open && (
+        // Подменю стоит вплотную, а зазор между ним и строкой — прозрачный
+        // отступ самого подменю: курсор по пути не выходит «в пустоту», и
+        // подменю не закрывается.
         <div
-          className={`absolute top-[-4px] z-10 min-w-[220px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl ${
-            left ? 'right-full mr-1' : 'left-full ml-1'
-          }`}
+          className={`absolute top-[-8px] z-10 ${left ? 'right-full pr-1' : 'left-full pl-1'}`}
         >
+        <div className="min-w-[220px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl">
           {groups.map((group, index) => {
             const taken = new Set((group.clip!.effects ?? []).map((effect) => effect.type))
             return (
@@ -1669,6 +1680,7 @@ function EffectsSubmenu({ clipId, onClose }: { clipId: string; onClose: () => vo
               </div>
             )
           })}
+        </div>
         </div>
       )}
     </div>

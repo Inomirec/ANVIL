@@ -38,8 +38,37 @@ def _colour(effect: ClipEffect, key: str, default: str) -> str:
     return "0x" + value.lstrip("#")
 
 
-def _video_effect(effect: ClipEffect) -> str:
+def _delogo(effect: ClipEffect, clip: ComposeClip, preview: bool) -> str:
+    """Убрать водяной знак: закрасить прямоугольник, подобрав цвет от краёв.
+
+    Место задаётся в процентах картинки, а ffmpeg понимает только пиксели —
+    переводим по размеру файла. Повёрнутый на бок клип меняет ширину и высоту
+    местами. Прямоугольник обязан лежать внутри кадра с запасом в пиксель:
+    иначе ffmpeg отказывается собирать вовсе.
+    """
+    width, height = clip.source_width, clip.source_height
+    if clip.rotate % 180 == 90:
+        width, height = height, width
+    if width < 8 or height < 8:
+        return ""
+    w = max(4, round(width * _number(effect, "width", 20, 1, 100) / 100))
+    h = max(4, round(height * _number(effect, "height", 12, 1, 100) / 100))
+    w = min(w, width - 3)
+    h = min(h, height - 3)
+    x = round(width * _number(effect, "left", 75, 0, 100) / 100)
+    y = round(height * _number(effect, "top", 5, 0, 100) / 100)
+    x = min(max(1, x), width - w - 2)
+    y = min(max(1, y), height - h - 2)
+    # Рамку вокруг области видно только в окне программы: по ней место и
+    # подбирают, а в готовый файл она попасть не должна.
+    show = 1 if preview and _number(effect, "show", 1, 0, 1) >= 0.5 else 0
+    return f"delogo=x={x}:y={y}:w={w}:h={h}:show={show}"
+
+
+def _video_effect(effect: ClipEffect, clip: ComposeClip, preview: bool) -> str:
     kind = effect.type
+    if kind == "delogo":
+        return _delogo(effect, clip, preview)
     if kind == "color":
         # Шкалы -100…100, ноль — как было.
         bright = _number(effect, "brightness", 0, -100, 100) / 100 * 0.3
@@ -94,7 +123,7 @@ def _audio_effect(effect: ClipEffect) -> str:
     return ""
 
 
-def video_chain(clip: ComposeClip) -> str:
+def video_chain(clip: ComposeClip, *, preview: bool = False) -> str:
     """Фильтры картинки клипа — с запятой в конце или пустая строка.
 
     Сначала «задом наперёд», поворот и отражение: эффекты должны видеть кадр
@@ -117,10 +146,31 @@ def video_chain(clip: ComposeClip) -> str:
         parts.append("vflip")
     for effect in clip.effects:
         if effect.on:
-            chunk = _video_effect(effect)
+            chunk = _video_effect(effect, clip, preview)
             if chunk:
                 parts.append(chunk)
     return ",".join(parts) + "," if parts else ""
+
+
+def blurred_fill(clip: ComposeClip) -> tuple[float, float] | None:
+    """Размытый фон под клипом: насколько размыть и насколько притемнить.
+
+    Это не фильтр цепочки, а другая раскладка клипа: под ним та же картинка,
+    растянутая на всё его место и размытая. Поэтому его собирает сама сборка,
+    а здесь только настройки. ``None`` — эффекта нет или он выключен.
+    """
+    for effect in clip.effects:
+        if effect.on and effect.type == "blurfill":
+            return (
+                _number(effect, "strength", 30, 5, 80),
+                _number(effect, "dim", 20, 0, 80) / 100,
+            )
+    return None
+
+
+def needs_size(clip: ComposeClip) -> bool:
+    """Нужен ли сборке размер файла в пикселях."""
+    return any(effect.on and effect.type == "delogo" for effect in clip.effects)
 
 
 def audio_chain(clip: ComposeClip) -> str:

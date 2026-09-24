@@ -451,6 +451,7 @@ interface Saved {
   /** Громкость всего монтажа — фейдер мастер-шины. Уходит в готовый файл. */
   masterVolume: number
   /** Выровнять громкость готового файла, как при обычной обработке. */
+  loudnorm: boolean
 }
 
 interface State extends Saved {
@@ -504,6 +505,7 @@ interface State extends Saved {
   select: (ids: string[]) => void
 
   setMasterVolume: (value: number) => void
+  setLoudnorm: (value: boolean) => void
   markIn: () => void
   markOut: () => void
   clearMarks: () => void
@@ -578,6 +580,7 @@ function emptyProject(): Saved {
     renderIn: null,
     renderOut: null,
     masterVolume: 1,
+    loudnorm: false,
   }
 }
 
@@ -662,11 +665,11 @@ function loadSaved(): Saved {
 function toSaved(state: State): Saved {
   const {
     width, height, fps, quality, shape, turned, custom, tracks,
-    renderIn, renderOut, masterVolume,
+    renderIn, renderOut, masterVolume, loudnorm,
   } = state
   return {
     width, height, fps, quality, shape, turned, custom, tracks,
-    renderIn, renderOut, masterVolume,
+    renderIn, renderOut, masterVolume, loudnorm,
   }
 }
 
@@ -1000,6 +1003,11 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   // --- метки отрезка сборки ---------------------------------------------
+  setLoudnorm(value) {
+    set({ loudnorm: value })
+    save(get())
+  },
+
   setMasterVolume(value) {
     set({ masterVolume: Math.min(MAX_GAIN, Math.max(0, value)) })
     save(get())

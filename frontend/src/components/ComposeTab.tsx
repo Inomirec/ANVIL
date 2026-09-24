@@ -189,6 +189,8 @@ export function ComposeTab() {
   const clearAll = useCompose((state) => state.clearAll)
   const compact = useCompose((state) => state.compact)
   const masterVolume = useCompose((state) => state.masterVolume)
+  const loudnorm = useCompose((state) => state.loudnorm)
+  const setLoudnorm = useCompose((state) => state.setLoudnorm)
   const setMasterVolume = useCompose((state) => state.setMasterVolume)
 
   const toast = useStore((state) => state.toast)
@@ -542,6 +544,7 @@ export function ComposeTab() {
           height: state.height,
           fps: state.fps,
           masterVolume: state.masterVolume,
+          loudnorm: state.loudnorm,
           tracks: state.tracks,
         },
         output_dir: outputDir,
@@ -1042,6 +1045,15 @@ export function ComposeTab() {
               </div>
             )}
           </div>
+
+          {/* Выравнивание — про весь монтаж, а не про отдельный клип, поэтому
+              живёт рядом с кадром, а не в эффектах клипа. */}
+          <Toggle
+            checked={loudnorm}
+            onChange={setLoudnorm}
+            label="Выровнять громкость всего видео"
+            hint="Готовый файл получит обычную для видео в интернете громкость: тихий монтаж станет громче, слишком громкий — тише, и на пиках звук не захрипит. Уровень подстраивается плавно по ходу видео, поэтому очень тихие и очень громкие места немного сблизятся. Слышно и в просмотре."
+          />
           </>
           )}
 

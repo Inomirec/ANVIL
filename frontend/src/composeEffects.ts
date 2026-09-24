@@ -14,8 +14,8 @@ export type EffectTarget = 'video' | 'audio'
 export interface EffectParam {
   key: string
   label: string
-  /** Ползунок или выбор цвета. */
-  kind?: 'slider' | 'color'
+  /** Ползунок, выбор цвета или галочка (1 — включено, 0 — нет). */
+  kind?: 'slider' | 'color' | 'check'
   min?: number
   max?: number
   step?: number
@@ -83,6 +83,29 @@ export const EFFECTS: EffectKind[] = [
       { key: 'color', label: 'Цвет фона', kind: 'color', default: '#00ff00' },
       { key: 'similarity', label: 'Насколько похожий цвет убирать', min: 1, max: 60, default: 15 },
       { key: 'blend', label: 'Мягкость края', min: 0, max: 40, default: 5 },
+    ],
+  },
+  {
+    type: 'blurfill',
+    name: 'Размытый фон',
+    target: 'video',
+    hint: 'Вместо чёрных полос по бокам — та же картинка, растянутая и размытая',
+    params: [
+      { key: 'strength', label: 'Размытие', min: 5, max: 80, default: 30 },
+      { key: 'dim', label: 'Затемнение', min: 0, max: 80, unit: '%', default: 20 },
+    ],
+  },
+  {
+    type: 'delogo',
+    name: 'Убрать водяной знак',
+    target: 'video',
+    hint: 'Закрасить прямоугольник цветом от его краёв. Лучше всего выходит на спокойном фоне',
+    params: [
+      { key: 'show', label: 'Показать область рамкой (только в окне просмотра)', kind: 'check', default: 1 },
+      { key: 'left', label: 'Слева', min: 0, max: 100, step: 0.5, unit: '%', default: 75 },
+      { key: 'top', label: 'Сверху', min: 0, max: 100, step: 0.5, unit: '%', default: 5 },
+      { key: 'width', label: 'Ширина', min: 1, max: 100, step: 0.5, unit: '%', default: 20 },
+      { key: 'height', label: 'Высота', min: 1, max: 100, step: 0.5, unit: '%', default: 12 },
     ],
   },
   {

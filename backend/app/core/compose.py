@@ -618,6 +618,7 @@ def build_segment(
     still: bool = False,
     codec: list[str] | None = None,
     progress: bool = False,
+    preview: bool = False,
 ) -> list[str]:
     """Команда ffmpeg для отрезка монтажа.
 
@@ -626,6 +627,9 @@ def build_segment(
     рассказывать, сколько уже сделано: без этого полоса готовности у задачи
     так и стоит на нуле до самого конца. Кадру и черновику он не нужен — их
     никто не ждёт с полосой.
+
+    ``preview`` — собирается для окна программы (кадр, просмотр), а не файл:
+    тогда видны подсказки вроде рамки вокруг убираемого водяного знака.
     """
     span = span if span is not None else max(project.duration - at, 0.0)
     if span <= 0:
@@ -692,12 +696,33 @@ def build_segment(
             inputs += ["-ss", f"{seek:.3f}", "-t", f"{take:.3f}", "-i", clip.source]
 
         if clip.kind != "audio":
-            # Эффекты — до вписывания в кадр: они работают с самим файлом.
-            chain.append(
-                f"[{index}:v]{effects.video_chain(clip)}{place_filter(clip, width, height, fps)}"
-                f"{video_fades(clip, at, take, moment=at if still else None)},"
-                f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
-            )
+            fades = video_fades(clip, at, take, moment=at if still else None)
+            fill = effects.blurred_fill(clip) if clip.kind in {"video", "image"} else None
+            if fill:
+                # Размытый фон: под клипом он сам же, растянутый на всё своё
+                # место и размытый, — вместо чёрных полос по бокам. Место — весь
+                # кадр или прямоугольник переставленного клипа; клип ложится
+                # посередине, и результат ровно размером с место.
+                sigma, dim = fill
+                box_w, box_h = clip_box(clip, width, height) if is_placed(clip) else (width, height)
+                chain.append(
+                    f"[{index}:v]{effects.video_chain(clip, preview=preview)}split=2[fa{index}][fb{index}];"
+                    f"[fa{index}]scale={box_w}:{box_h}:force_original_aspect_ratio=increase,"
+                    f"crop={box_w}:{box_h},gblur=sigma={sigma:.1f},"
+                    f"eq=brightness={-dim * 0.5:.3f}[fbg{index}];"
+                    f"[fb{index}]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease:flags=lanczos"
+                    f"[ffg{index}];"
+                    f"[fbg{index}][ffg{index}]overlay=(W-w)/2:(H-h)/2,"
+                    f"format=yuva420p,setsar=1,fps={fps}{fades},"
+                    f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
+                )
+            else:
+                # Эффекты — до вписывания в кадр: они работают с самим файлом.
+                chain.append(
+                    f"[{index}:v]{effects.video_chain(clip, preview=preview)}{place_filter(clip, width, height, fps)}"
+                    f"{fades},"
+                    f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
+                )
             video_labels.append((f"[v{index}]", clip))
 
         # Звук берём и у роликов: иначе два видео подряд оказались бы немыми.
@@ -786,7 +811,7 @@ def build_frame(project: ComposeProject, output: Path, at: float, width: int) ->
     height = round(width * project.height / project.width)
     return build_segment(
         project, output, at=at, span=1.0 / max(project.fps, 1),
-        width=width, height=height, still=True,
+        width=width, height=height, still=True, preview=True,
     )
 
 
@@ -843,6 +868,14 @@ async def prepare(
                 missing.append(clip.source)
                 continue
             clip.source = str(path)
+            if effects.needs_size(clip) and not clip.source_width:
+                try:
+                    info = await probe(path)
+                    stream = info.video
+                    if stream and stream.width and stream.height:
+                        clip.source_width, clip.source_height = stream.width, stream.height
+                except (RuntimeError, OSError):
+                    pass
             if clip.kind == "image":
                 clip.has_audio = False
             elif clip.has_audio is None:
