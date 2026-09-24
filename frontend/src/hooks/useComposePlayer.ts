@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { useCompose } from '../composeStore'
+import { renderRange, useCompose } from '../composeStore'
 import type { MeterLevels } from '../components/MasterMeter'
 
 /**
@@ -156,8 +156,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     const state = useCompose.getState()
     // Метка начала отрезка задаёт и начало просмотра: смотреть то, что не
     // попадёт в файл, обычно незачем.
-    const begin = state.renderIn ?? 0
-    const finish = state.renderOut ?? state.duration()
+    const { from: begin, to: finish } = renderRange(state)
     let at = Math.max(state.playhead, begin)
     // Игла осталась в самом конце — начинаем сначала, как любой плеер.
     // Иначе нажатие на «играть» не делало ничего: показывать уже нечего.
@@ -192,13 +191,13 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
 
     // Дошли до конца — с повтором начинаем сначала, с метки начала отрезка,
     // если она стоит. Без повтора просто останавливаемся.
-    const finish = state.renderOut ?? state.duration()
+    const { from: begin, to: finish } = renderRange(state)
     if (nextAt >= finish - 0.05) {
       if (!loopRef.current) {
         stop()
         return
       }
-      nextAt = state.renderIn ?? 0
+      nextAt = begin
       ahead.current = null
     }
 

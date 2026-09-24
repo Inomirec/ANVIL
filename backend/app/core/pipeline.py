@@ -433,7 +433,7 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
 
     async def runner(ctx: JobContext) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        stem = fsutil.sanitize_name(request.output_name, fallback="Монтаж")
+        stem = fsutil.sanitize_name(request.output_name, fallback="Project")
         output = fsutil.unique_path(directory / f"{stem}.{suffix}", reserve=True)
         ctx.job.output = str(output)
         try:

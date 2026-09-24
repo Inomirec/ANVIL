@@ -360,6 +360,27 @@ export function sourceFrame(width: number, height: number): { width: number; hei
   return { width: even(width), height: even(height) }
 }
 
+/**
+ * Какой отрезок на самом деле играть и собирать.
+ *
+ * Метки хранятся как поставили, а монтаж потом меняется: клипы удаляют и
+ * укорачивают, и метка начала оказывается за концом монтажа. Так просмотр
+ * просил кусок, которого нет, и отвечал «Дальше конца монтажа смотреть
+ * нечего» даже с иглой в самом начале. Здесь метки прижимаются к монтажу, а
+ * пустой или вывернутый отрезок не считается вовсе — берётся весь монтаж.
+ */
+export function renderRange(state: {
+  renderIn: number | null
+  renderOut: number | null
+  duration: () => number
+}): { from: number; to: number; marked: boolean } {
+  const whole = state.duration()
+  const from = Math.min(Math.max(state.renderIn ?? 0, 0), whole)
+  const to = Math.min(Math.max(state.renderOut ?? whole, 0), whole)
+  if (to - from < 0.05) return { from: 0, to: whole, marked: false }
+  return { from, to, marked: state.renderIn !== null || state.renderOut !== null }
+}
+
 const STORAGE_KEY = 'sgh.compose'
 
 interface Saved {
@@ -906,7 +927,10 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   markIn() {
-    const { playhead, renderOut } = get()
+    // За концом монтажа отрезку начинаться не с чего: игла туда ходит, а
+    // метка там означала бы пустой отрезок.
+    const playhead = Math.min(get().playhead, get().duration())
+    const { renderOut } = get()
     set({
       renderIn: playhead,
       // Метка начала позже конца — конец сбрасываем, иначе отрезок пустой.
@@ -916,7 +940,8 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   markOut() {
-    const { playhead, renderIn } = get()
+    const playhead = Math.min(get().playhead, get().duration())
+    const { renderIn } = get()
     set({
       renderOut: playhead,
       renderIn: renderIn !== null && renderIn >= playhead ? null : renderIn,

@@ -12,6 +12,7 @@ import {
   Undo2,
 } from 'lucide-react'
 import { mediaUrl } from '../lib/api'
+import { noStraySelection } from '../lib/noSelect'
 import { humanSize } from '../lib/format'
 import type { FileInfo, ImagePreview, Rect, Stroke } from '../lib/types'
 import { RectCanvas, type Selection, type Tool } from './RectCanvas'
@@ -380,9 +381,11 @@ export function ImageEditor({
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div
         ref={viewportRef}
-        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-[#0e1016] p-4 ring-1 ring-line-soft ${
+        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-[#0e1016] p-4 ring-1 ring-line-soft ${noStraySelection.className} ${
           panning ? 'cursor-grabbing' : spaceHeld ? 'cursor-grab' : ''
         }`}
+        onMouseDownCapture={noStraySelection.onMouseDownCapture}
+        onDragStart={noStraySelection.onDragStart}
         onPointerDown={startPan}
         // Без этого средняя кнопка включает автопрокрутку вместо руки.
         onAuxClick={(event) => event.preventDefault()}

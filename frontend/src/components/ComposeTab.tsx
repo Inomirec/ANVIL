@@ -15,11 +15,13 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { noStraySelection } from '../lib/noSelect'
 import { parentDir, timecode } from '../lib/format'
 import {
   DEFAULT_IMAGE_SECONDS,
   FRAME_QUALITY,
   FRAME_SHAPES,
+  renderRange,
   sourceFrame,
   useCompose,
   type ComposeClip,
@@ -49,6 +51,9 @@ import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
 import { Button, Dropdown, Empty, IconButton, Segmented, Toggle } from './ui'
+
+/** Имя готового файла, если поле оставили пустым. */
+const DEFAULT_NAME = 'Project'
 
 /**
  * Значок занятости у курсора.
@@ -179,8 +184,6 @@ export function ComposeTab() {
   const addClip = useCompose((state) => state.addClip)
   const addPair = useCompose((state) => state.addPair)
   const clearAll = useCompose((state) => state.clearAll)
-  const renderIn = useCompose((state) => state.renderIn)
-  const renderOut = useCompose((state) => state.renderOut)
   const compact = useCompose((state) => state.compact)
   const masterVolume = useCompose((state) => state.masterVolume)
   const setMasterVolume = useCompose((state) => state.setMasterVolume)
@@ -206,10 +209,6 @@ export function ComposeTab() {
   // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
   // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
   const [outputName, setOutputName] = useState('')
-  // Подсветка пустого поля имени: сказать «назовите файл» мало, надо ещё
-  // показать, где его называют.
-  const [nameMissing, setNameMissing] = useState(false)
-  const nameField = useRef<HTMLInputElement>(null)
   const [outputDir, setOutputDir] = useState<string | null>(
     () => localStorage.getItem('sgh.composeOut') || null,
   )
@@ -462,18 +461,12 @@ export function ComposeTab() {
   }
 
   async function build() {
-    // Имя за человека не придумываем. Прежде пустое поле молча превращалось
-    // в «Монтаж», и на диске копились файлы, про которые непонятно, что в
-    // них: человек-то думал, что имя у него своё.
-    if (!outputName.trim()) {
-      setNameMissing(true)
-      nameField.current?.focus()
-      toast('Назовите файл — без имени собирать нечего', 'error')
-      return
-    }
+    // Пустое имя — обычное «Project»: для черновых роликов придумывать имя
+    // каждый раз незачем. Что будет вместо имени, видно в самом поле.
     setBusy(true)
     try {
       const state = useCompose.getState()
+      const range = renderRange(state)
       await api.composeBuild({
         project: {
           width: state.width,
@@ -483,10 +476,11 @@ export function ComposeTab() {
           tracks: state.tracks,
         },
         output_dir: outputDir,
-        output_name: outputName.trim(),
+        output_name: outputName.trim() || DEFAULT_NAME,
         render,
-        start: renderIn,
-        end: renderOut,
+        // Метки, съехавшие за конец монтажа, не в счёт — см. renderRange.
+        start: range.marked ? range.from : null,
+        end: range.marked ? range.to : null,
       })
       setQueueOpen(true)
     } catch (error) {
@@ -511,7 +505,7 @@ export function ComposeTab() {
         },
         at: view.playhead,
         outputDir: outputDir,
-        outputName: outputName.trim() || 'Кадр',
+        outputName: outputName.trim() || DEFAULT_NAME,
       })
       toast('Кадр сохранён — в полном размере кадра проекта, без сжатия', 'ok')
       setQueueOpen(true)
@@ -609,7 +603,9 @@ export function ComposeTab() {
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div
-            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-2/60 p-4"
+            className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-2/60 p-4 ${noStraySelection.className}`}
+            onMouseDownCapture={noStraySelection.onMouseDownCapture}
+            onDragStart={noStraySelection.onDragStart}
             onWheel={(event) => {
               // Колесо увеличивает сам экран просмотра, а не файлы на нём.
               // Точка под курсором остаётся на месте: иначе на приближении
@@ -983,17 +979,11 @@ export function ComposeTab() {
           {/* Имя и папка — одной строкой: это про один и тот же файл. */}
           <div className="flex items-center gap-2">
             <input
-              ref={nameField}
-              className={`field min-w-0 flex-1 ${
-                nameMissing ? 'border-danger ring-1 ring-danger/50 placeholder:text-danger/70' : ''
-              }`}
+              className="field min-w-0 flex-1"
               value={outputName}
-              onChange={(event) => {
-                setOutputName(event.target.value)
-                setNameMissing(false)
-              }}
-              placeholder={nameMissing ? 'Здесь нужно имя файла' : 'Название будущего файла'}
-              title="Имя готового файла"
+              onChange={(event) => setOutputName(event.target.value)}
+              placeholder={DEFAULT_NAME}
+              title={`Имя готового файла. Пустое — «${DEFAULT_NAME}»`}
             />
             <button
               type="button"

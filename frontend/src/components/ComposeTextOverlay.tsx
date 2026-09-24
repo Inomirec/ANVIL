@@ -239,7 +239,7 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
         contentEditable="plaintext-only"
         suppressContentEditableWarning
         spellCheck={false}
-        className={`min-w-[1ch] whitespace-pre outline-none ${focused ? 'cursor-text' : 'cursor-move'}`}
+        className={`min-w-[1ch] select-text whitespace-pre outline-none ${focused ? 'cursor-text' : 'cursor-move'}`}
         style={{
           // Пока файл шрифта не пришёл — по имени, как получится. Пришёл —
           // ровно им. Жирность и наклон тогда уже в самом файле: добавлять их

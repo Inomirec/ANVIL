@@ -86,7 +86,18 @@ const TAIL_SECONDS = 8
 const MAX_FADE_RATIO = 0.5
 
 type Drag =
-  | { kind: 'move'; ids: string[]; grab: number; lastAt: number; row: number }
+  | {
+      kind: 'move'
+      ids: string[]
+      grab: number
+      lastAt: number
+      row: number
+      /** Где нажали — чтобы отличить нажатие от перетаскивания. */
+      fromX: number
+      fromY: number
+      clickAt: number
+      started: boolean
+    }
   | { kind: 'level'; id: string; top: number; height: number }
   | { kind: 'edge'; id: string; side: 'left' | 'right'; clip: ComposeClip }
   | { kind: 'fade'; id: string; side: 'in' | 'out'; clip: ComposeClip }
@@ -320,6 +331,14 @@ export function ComposeTimeline({
       }
 
       if (current.kind === 'move') {
+        // Пока мышь не отошла на несколько пикселей, это ещё нажатие, а не
+        // перетаскивание: дрогнувшая рука не должна сдвигать клип на кадр.
+        if (!current.started) {
+          const away =
+            Math.abs(event.clientX - current.fromX) + Math.abs(event.clientY - current.fromY)
+          if (away < DRAG_START) return
+          current.started = true
+        }
         // Курсор ушёл на другую дорожку — переносим туда же и клипы. Дорожку
         // запоминаем не по клипу, а отдельно: если переехать не удалось
         // (внизу звук, а тащим картинку), клип должен остаться на месте, и
@@ -389,7 +408,16 @@ export function ComposeTimeline({
       // только здесь: во время перетаскивания клип должен свободно проходить
       // и через чужие переходы.
       if (current?.kind === 'move') {
-        useCompose.getState().settleOverlaps(current.ids)
+        const state = useCompose.getState()
+        if (current.started) {
+          state.settleOverlaps(current.ids)
+        } else {
+          // Нажали по клипу, не сдвинув, — игла встаёт туда, где нажали, как
+          // и на пустом месте дорожки. Выделение клипа при этом остаётся.
+          state.setPlayhead(
+            snap(current.clickAt, clipEdges(state.tracks), PLAYHEAD_SNAP / state.scale),
+          )
+        }
       }
       if (current?.kind === 'edge') {
         useCompose.getState().trimOverlaps(current.id)
@@ -873,6 +901,10 @@ export function ComposeTimeline({
                         grab: at - clip.start,
                         lastAt: at,
                         row: rowAt(event.clientY),
+                        fromX: event.clientX,
+                        fromY: event.clientY,
+                        clickAt: at,
+                        started: false,
                       }
                     } else if (where === 'fadeIn' || where === 'fadeOut') {
                       drag.current = {
