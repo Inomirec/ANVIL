@@ -129,8 +129,10 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
   const totalSize = files.reduce((sum, file) => sum + file.size, 0)
   // Отмечать всё подряд можно только внутри одного типа: пресет всегда
   // относится к чему-то одному, и на «Всех» человек отметил бы заодно
-  // картинки, собираясь сжимать видео.
-  const canSelectAll = filter !== 'all' && files.length > 0
+  // картинки, собираясь сжимать видео. Но если в списке и так файлы одного
+  // типа — например, в папке одни картинки, — на «Всех» мешать нечему.
+  const oneKind = new Set(files.map((file) => file.kind)).size === 1
+  const canSelectAll = files.length > 0 && (filter !== 'all' || oneKind)
 
   async function remove(path: string) {
     // Окно подтверждения закрываем сразу: удаление занятого файла занимает

@@ -15,8 +15,8 @@ from fastapi.responses import FileResponse
 from .. import config
 from ..core import filmstrip, fsutil, thumbs, trash, waveform
 from ..core.events import bus
-from ..core.probe import probe
-from ..models import PathRequest, RenameRequest
+from ..core.probe import moves, probe
+from ..models import PathRequest, PathsRequest, RenameRequest
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 
@@ -115,6 +115,29 @@ async def path_kind(path: str) -> dict[str, str]:
     if target.exists():
         return {"kind": "file", "path": str(target)}
     return {"kind": "missing", "path": str(target)}
+
+
+@router.post("/moving")
+async def moving(request: PathsRequest) -> dict[str, list[str]]:
+    """Какие из картинок движутся — по заголовкам файлов.
+
+    Спрашивают перед пачкой, чтобы не пугать вопросом о движении, когда
+    движущихся среди отмеченных нет. Чтение — несколько байт на файл, но на
+    сотне файлов с медленного диска это заметно, поэтому вне обработчика.
+    """
+
+    def check() -> list[str]:
+        found: list[str] = []
+        for path in request.paths:
+            try:
+                target = fsutil.safe_path(path)
+            except (PermissionError, FileNotFoundError, ValueError):
+                continue
+            if target.is_file() and moves(target):
+                found.append(path)
+        return found
+
+    return {"moving": await asyncio.to_thread(check)}
 
 
 @router.get("/info")

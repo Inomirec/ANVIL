@@ -246,6 +246,81 @@ def exif_orientation(path: Path) -> int:
         return 1
 
 
+def _gif_moves(handle: Any) -> bool:
+    """В GIF больше одного кадра — считаем блоки картинок, не распаковывая их."""
+    head = handle.read(13)
+    if len(head) < 13 or head[:3] != b"GIF":
+        return False
+    if head[10] & 0x80:  # общая палитра: 3 байта на цвет
+        handle.seek(3 * (2 ** ((head[10] & 0x07) + 1)), 1)
+    frames = 0
+    while True:
+        kind = handle.read(1)
+        if not kind or kind == b"\x3b":  # конец файла
+            return False
+        if kind == b"\x2c":  # кадр
+            frames += 1
+            if frames > 1:
+                return True
+            desc = handle.read(9)
+            if len(desc) < 9:
+                return False
+            if desc[8] & 0x80:  # своя палитра кадра
+                handle.seek(3 * (2 ** ((desc[8] & 0x07) + 1)), 1)
+            handle.read(1)  # размер кода LZW
+        elif kind == b"\x21":  # служебный блок
+            handle.read(1)
+        else:
+            return False
+        # Данные идут кусками: байт длины, потом сами байты, ноль — конец.
+        while True:
+            size = handle.read(1)
+            if not size or size == b"\x00":
+                break
+            handle.seek(size[0], 1)
+
+
+def _png_moves(handle: Any) -> bool:
+    """APNG: блок acTL с числом кадров больше одного стоит до данных картинки."""
+    if handle.read(8) != b"\x89PNG\r\n\x1a\n":
+        return False
+    while True:
+        head = handle.read(8)
+        if len(head) < 8:
+            return False
+        size = int.from_bytes(head[:4], "big")
+        name = head[4:]
+        if name == b"acTL":
+            return int.from_bytes(handle.read(4), "big") > 1
+        if name in (b"IDAT", b"IEND"):
+            return False
+        handle.seek(size + 4, 1)
+
+
+def moves(path: str | Path) -> bool:
+    """Движется ли картинка — по заголовку файла, без ffprobe.
+
+    Нужно для вопроса перед пачкой: по одному расширению программа считала
+    движущимся любой WebP, хотя почти все они обычные картинки. Заголовок
+    отвечает точно и стоит несколько байт чтения: у WebP это флаг анимации в
+    блоке VP8X, у PNG — блок acTL, у GIF — второй кадр.
+    """
+    target = Path(path)
+    try:
+        with target.open("rb") as handle:
+            head = handle.read(21)
+            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                return head[12:16] == b"VP8X" and len(head) > 20 and bool(head[20] & 0x02)
+            handle.seek(0)
+            if head[:3] == b"GIF":
+                return _gif_moves(handle)
+            if head[:8] == b"\x89PNG\r\n\x1a\n":
+                return _png_moves(handle)
+    except OSError:
+        return False
+    return False
+
+
 async def probe(path: str | Path, use_cache: bool = True) -> MediaInfo:
     """Запускает ffprobe и возвращает разобранную информацию о файле."""
     file = Path(path)

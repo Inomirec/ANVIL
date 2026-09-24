@@ -237,6 +237,10 @@ class PathRequest(BaseModel):
     path: str
 
 
+class PathsRequest(BaseModel):
+    paths: list[str]
+
+
 class RenameRequest(BaseModel):
     path: str
     new_name: str

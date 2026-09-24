@@ -316,6 +316,35 @@ export function ImageEditor({
     [edit, onEditChange, commit],
   )
 
+  // Цвет на панели относится не только к следующей маске: если что-то
+  // выбрано — маска нажатием или маски с мазками рамкой, — перекрашиваем и
+  // его. Иначе поменять цвет уже нарисованного было нечем, кроме меню по
+  // правой кнопке, о котором ещё надо знать.
+  const colorSession = useRef(false)
+  const recolorChosen = useCallback(
+    (color: string) => {
+      const boxes = new Set(marked.boxes)
+      if (selection?.type === 'box') boxes.add(selection.index)
+      const strokes = new Set(marked.strokes)
+      if (!boxes.size && !strokes.size) return
+      // Окно выбора цвета присылает цвет на каждое движение мыши — отмена
+      // должна вернуть цвет до окна, а не предпоследний оттенок из него.
+      if (!colorSession.current) {
+        commit()
+        colorSession.current = true
+      }
+      onEditChange({
+        ...edit,
+        boxes: edit.boxes.map((box, i) => (boxes.has(i) ? { ...box, color } : box)),
+        strokes: edit.strokes.map((stroke, i) =>
+          strokes.has(i) && !stroke.erase ? { ...stroke, color } : stroke,
+        ),
+      })
+    },
+    [marked, selection, edit, onEditChange, commit],
+  )
+  const hasChosen = selection?.type === 'box' || marked.boxes.length > 0 || marked.strokes.length > 0
+
   // Горячие клавиши работают, пока фокус не в поле ввода.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -510,8 +539,15 @@ export function ImageEditor({
         {tool !== 'view' && tool !== 'crop' && (
           <button
             type="button"
-            onClick={() => colorInputRef.current?.click()}
-            title="Цвет закраски — нажмите, чтобы выбрать"
+            onClick={() => {
+              colorSession.current = false
+              colorInputRef.current?.click()
+            }}
+            title={
+              hasChosen
+                ? 'Цвет закраски — выбранное перекрасится в него'
+                : 'Цвет закраски — нажмите, чтобы выбрать'
+            }
             className="flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-surface-3"
           >
             <span
@@ -525,7 +561,10 @@ export function ImageEditor({
               ref={colorInputRef}
               type="color"
               value={paintColor}
-              onChange={(event) => applyColor(event.target.value)}
+              onChange={(event) => {
+                applyColor(event.target.value)
+                recolorChosen(event.target.value)
+              }}
               className="h-0 w-0 opacity-0"
               tabIndex={-1}
             />

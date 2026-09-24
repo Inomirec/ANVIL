@@ -237,6 +237,11 @@ export function ExportPanel({
           `Обрабатываю ${result.jobs.length} ${plural(result.jobs.length, ['файл', 'файла', 'файлов'])}`,
           'ok',
         )
+        // Отправленные файлы из отметок убираем: иначе следующая пачка
+        // прихватила бы их снова. Отметки других типов остаются.
+        const sent = new Set(batch)
+        const store = useStore.getState()
+        store.setChecked(store.checked.filter((path) => !sent.has(path)))
       }
       setQueueOpen(true)
       onDone?.()

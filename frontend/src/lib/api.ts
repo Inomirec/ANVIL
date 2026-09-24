@@ -113,6 +113,8 @@ export const api = {
     if (params.recursive === false) query.set('recursive', 'false')
     return request<LibraryResponse>(`/api/library?${query.toString()}`)
   },
+  /** Какие из картинок движутся — по заголовкам файлов, без ffprobe. */
+  movingImages: (paths: string[]) => post<{ moving: string[] }>('/api/library/moving', { paths }),
   fileInfo: (path: string) => request<FileInfo>(`/api/library/info?path=${encodeURIComponent(path)}`),
   waveform: (path: string, buckets?: number) =>
     request<Waveform>(

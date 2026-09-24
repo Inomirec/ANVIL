@@ -209,21 +209,38 @@ export function ImagePanel({
   // Ничего не отмечено — кнопка сжимает открытую картинку.
   const single = batch.length === 0
 
-  // Про движение у отмеченных файлов заранее известно только расширение:
-  // читать каждый файл ради этого — лишняя работа на пачке в сотню картинок.
-  // Поэтому спрашиваем по расширению, а настоящую проверку делает сервер и
-  // меняет формат только у тех, кто и правда движется.
-  const MOVING_EXT = ['.gif', '.webp']
-  const moving = batch.filter((path) =>
-    MOVING_EXT.some((ext) => path.toLowerCase().endsWith(ext)),
-  )
-  const needsAsking =
-    options.format !== 'webp' && (movingUnsupported || (!single && moving.length > 0))
+  // Сколько отмеченных картинок движется — считается перед самой обработкой.
+  // По одному расширению судить нельзя: так любой WebP сходил за движущийся,
+  // и вопрос о движении всплывал на пачке обычных картинок. Сервер читает
+  // заголовки файлов — несколько байт на файл, — и отвечает точно.
+  const [movingCount, setMovingCount] = useState(0)
+  const MAY_MOVE = ['.gif', '.webp', '.png', '.apng']
 
   async function start() {
-    if (needsAsking) {
+    if (options.format === 'webp') return run()
+    if (single) {
+      if (!movingUnsupported) return run()
+      setMovingCount(1)
       setAskSwitch(true)
       return
+    }
+    const candidates = batch.filter((path) =>
+      MAY_MOVE.some((ext) => path.toLowerCase().endsWith(ext)),
+    )
+    if (candidates.length) {
+      setBusy(true)
+      const found = await api
+        .movingImages(candidates)
+        .then((answer) => answer.moving.length)
+        // Спросить не вышло — пусть решает сервер: он сам откажется от
+        // движущихся и напишет в очереди, какие именно.
+        .catch(() => 0)
+      setBusy(false)
+      if (found > 0) {
+        setMovingCount(found)
+        setAskSwitch(true)
+        return
+      }
     }
     await run()
   }
@@ -244,6 +261,11 @@ export function ImagePanel({
           `Обрабатываю ${result.jobs.length} ${plural(result.jobs.length, ['картинку', 'картинки', 'картинок'])}`,
           'ok',
         )
+        // Отправленные файлы из отметок убираем: иначе следующая пачка
+        // прихватила бы их снова. Отметки других типов остаются.
+        const sent = new Set(batch)
+        const store = useStore.getState()
+        store.setChecked(store.checked.filter((path) => !sent.has(path)))
       }
       setQueueOpen(true)
     } catch (error) {
@@ -439,9 +461,9 @@ export function ImagePanel({
         >
           <div className="space-y-3 text-[12.5px] leading-snug text-ink-dim">
             <p>
-              {single || movingUnsupported
+              {single
                 ? 'Эта картинка движется, а выбранный формат хранит только один кадр — от движения ничего не останется.'
-                : `Среди отмеченных есть движущиеся картинки (${moving.length} шт.), а выбранный формат хранит только один кадр.`}
+                : `Среди отмеченных есть движущиеся картинки (${movingCount} шт.), а выбранный формат хранит только один кадр.`}
             </p>
             <p>
               Сохранить движение умеет только WebP. Ответ запомнится на всю эту
