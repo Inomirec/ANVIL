@@ -590,10 +590,9 @@ export function ComposeTimeline({
     view.scrollLeft = Math.max(0, target.playhead * scale - target.keep)
   }, [scale])
 
-  const onWheel = (event: React.WheelEvent) => {
+  const onWheel = (event: WheelEvent) => {
     event.preventDefault()
-    // С Ctrl колесо листает дорожки: когда их много, тянуть полосу прокрутки
-    // мышью неудобно, а колесо под рукой.
+    // С Ctrl колесо листает дорожки — и только: масштаб при этом не трогаем.
     if (event.ctrlKey || event.metaKey) {
       if (vscroll.current) vscroll.current.scrollTop += event.deltaY
       return
@@ -603,6 +602,19 @@ export function ComposeTimeline({
       Math.min(400, Math.max(minScale(), state.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15))),
     )
   }
+  const wheelRef = useRef(onWheel)
+  wheelRef.current = onWheel
+
+  // Колесо слушаем напрямую, а не через React: там обработчик колеса только
+  // «смотрит», и отменить обычную прокрутку из него нельзя. Так и было —
+  // колесо приближало таймлайн и заодно листало дорожки вверх-вниз.
+  useEffect(() => {
+    const element = vscroll.current
+    if (!element) return
+    const listener = (event: WheelEvent) => wheelRef.current(event)
+    element.addEventListener('wheel', listener, { passive: false })
+    return () => element.removeEventListener('wheel', listener)
+  }, [])
 
   return (
     <div className="flex h-full flex-col">
@@ -799,7 +811,7 @@ export function ComposeTimeline({
           иначе полотно растягивается лишь на видимую высоту, прокручивается
           по высоте само (вбок-прокрутка тянет за собой и вертикальную), и
           когда дорожки перестают влезать, названия и дорожки разъезжаются. */}
-      <div ref={vscroll} className="flex min-h-0 flex-1 items-start overflow-y-auto" onWheel={onWheel}>
+      <div ref={vscroll} className="flex min-h-0 flex-1 items-start overflow-y-auto">
         <TrackHeads
           tracks={tracks}
           width={headWidth}
