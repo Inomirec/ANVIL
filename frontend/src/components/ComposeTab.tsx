@@ -53,7 +53,7 @@ import {
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { useComposePlayer } from '../hooks/useComposePlayer'
-import { Button, Dropdown, Empty, IconButton, Segmented, Toggle } from './ui'
+import { Button, Dropdown, Empty, IconButton, QuietHints, Segmented, Toggle } from './ui'
 
 /** Имя готового файла, если поле оставили пустым. */
 const DEFAULT_NAME = 'Project'
@@ -960,6 +960,9 @@ export function ComposeTab() {
       </div>
 
       {/* Правая панель */}
+      {/* Описания настроек в колонке — при наведении, как и в панелях
+          обработки: текстом под каждой галочкой они занимали место. */}
+      <QuietHints>
       <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
           {/* Пока выделена надпись, здесь её настройки, а не кадра: так их
@@ -1052,7 +1055,7 @@ export function ComposeTab() {
           <Toggle
             checked={loudnorm}
             onChange={setLoudnorm}
-            label="Выровнять громкость всего видео"
+            label="Выровнять громкость"
             hint="Готовый файл получит обычную для видео в интернете громкость: тихий монтаж станет громче, слишком громкий — тише, и на пиках звук не захрипит. Уровень подстраивается плавно по ходу видео, поэтому очень тихие и очень громкие места немного сблизятся. Слышно и в просмотре."
           />
           </>
@@ -1153,6 +1156,7 @@ export function ComposeTab() {
           </Button>
         </div>
       </aside>
+      </QuietHints>
 
       <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
       <ComposeMissing open={missingOpen} onClose={() => setMissingOpen(false)} />
