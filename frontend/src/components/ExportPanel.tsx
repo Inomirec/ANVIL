@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Play, Terminal } from 'lucide-react'
+import { FileX2, Headphones, Play, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
 import { humanSize, parentDir, plural, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
@@ -7,7 +7,7 @@ import type { AudioOptions, FileInfo, Preset, VideoOptions } from '../lib/types'
 import { useStore } from '../store'
 import type { TrimState } from './MediaEditor'
 import type { Fades } from './Timeline'
-import { Button, Section, Segmented, Select, Toggle } from './ui'
+import { Button, QuietHints, Section, Segmented, Select, Toggle } from './ui'
 
 const DEFAULT_VIDEO: VideoOptions = {
   codec: 'av1_svt',
@@ -308,11 +308,32 @@ export function ExportPanel({
     (trim.in !== null && trim.in > 0.05) ||
     (trim.out !== null && total > 0 && trim.out < total - 0.05)
 
+  const resolutions = [
+    { value: '0', label: 'Оригинал', title: 'Оставить разрешение исходника' },
+    { value: '2160', label: '4K' },
+    { value: '1440', label: '1440p' },
+    { value: '1080', label: '1080p' },
+    { value: '720', label: '720p' },
+    { value: '480', label: '480p' },
+  ]
+
   return (
+    <QuietHints>
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
         {!streamCopy && !isAudio && (
-          <Section title="Разрешение">
+          <Section
+            title="Разрешение"
+            id="export.resolution"
+            summary={resolutions.find((item) => item.value === String(video.max_height))?.label}
+            hint={
+              sourceHeight
+                ? outputHeight && outputHeight < sourceHeight
+                  ? `Исходник ${sourceHeight}p уменьшится до ${outputHeight}p — это сильнее всего режет вес.`
+                  : `Исходник ${sourceHeight}p — увеличивать его программа не станет, останется как есть.`
+                : 'Мелкое видео растянуто вверх не будет — только уменьшение.'
+            }
+          >
             <Segmented
               columns={3}
               value={String(video.max_height)}
@@ -320,26 +341,16 @@ export function ExportPanel({
                 setVideo({ ...video, max_height: Number(value) })
                 savePrefs({ max_height: Number(value) })
               }}
-              options={[
-                { value: '0', label: 'Оригинал', title: 'Оставить разрешение исходника' },
-                { value: '2160', label: '4K' },
-                { value: '1440', label: '1440p' },
-                { value: '1080', label: '1080p' },
-                { value: '720', label: '720p' },
-                { value: '480', label: '480p' },
-              ]}
+              options={resolutions}
             />
-            <p className="text-[11px] leading-snug text-ink-faint">
-              {sourceHeight
-                ? outputHeight && outputHeight < sourceHeight
-                  ? `Исходник ${sourceHeight}p уменьшится до ${outputHeight}p — это сильнее всего режет вес.`
-                  : `Исходник ${sourceHeight}p — увеличивать его программа не станет, останется как есть.`
-                : 'Мелкое видео растянуто вверх не будет — только уменьшение.'}
-            </p>
           </Section>
         )}
 
-        <Section title="Насколько сильно жать">
+        <Section
+          title="Пресеты сжатия"
+          id="export.presets"
+          summary={activePreset?.label ?? 'свои настройки'}
+        >
           <div className="grid gap-1.5">
             {kindPresets.map((preset) => (
               <button
@@ -347,22 +358,24 @@ export function ExportPanel({
                 type="button"
                 disabled={preset.available === false}
                 onClick={() => applyPreset(preset)}
-                className={`rounded-xl border px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                // Описание — при наведении: знающему оно только занимает место,
+                // а важные галочки из-за него уезжали за прокрутку.
+                title={
+                  preset.available === false
+                    ? 'Этот способ недоступен на вашем компьютере'
+                    : preset.hint
+                }
+                className={`rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                   presetId === preset.id
                     ? 'border-accent/60 bg-accent/10'
                     : 'border-line-soft bg-surface-2 hover:border-line hover:bg-surface-3'
                 }`}
               >
                 <span className="block text-[13px] font-medium text-ink">{preset.label}</span>
-                <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint">
-                  {preset.available === false
-                    ? 'Этот способ недоступен на вашем компьютере'
-                    : preset.hint}
-                </span>
-                {/* Чем именно жмём — бледной строкой: не мешает, но снимает
-                    вопрос «а чем Баланс отличается от Качества». */}
+                {/* Чем именно жмём — бледной строкой: снимает вопрос «а чем
+                    Баланс отличается от Качества». */}
                 {preset.tech && preset.available !== false && (
-                  <span className="mt-1 block font-mono text-[10px] text-ink-faint/60">
+                  <span className="mt-0.5 block font-mono text-[10px] text-ink-faint/60">
                     {preset.tech}
                   </span>
                 )}
@@ -372,7 +385,27 @@ export function ExportPanel({
         </Section>
 
 
-        <Section title="Остальные настройки">
+        <Section
+          title="Остальные настройки"
+          id="export.other"
+          // Свёрнутый раздел не должен прятать то, о чём легко забыть: удаление
+          // оригинала горит красным, остальное включённое — значками.
+          summary={
+            <>
+              {!streamCopy && !isAudio && status?.gpuAvailable && video.use_gpu && (
+                <span title="Кодировать на видеокарте">
+                  <Zap size={13} className="text-accent-soft" />
+                </span>
+              )}
+              {!streamCopy && audio.mono && (
+                <span title="Звук в моно">
+                  <Headphones size={13} className="text-accent-soft" />
+                </span>
+              )}
+              {deleteOriginal && <DeleteMark />}
+            </>
+          }
+        >
           <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
             {!streamCopy && !isAudio && status?.gpuAvailable && (
               <Toggle
@@ -509,5 +542,18 @@ export function ExportPanel({
         )}
       </div>
     </div>
+    </QuietHints>
+  )
+}
+
+/** Значок «оригинал уйдёт в корзину» — для свёрнутого раздела настроек. */
+export function DeleteMark() {
+  return (
+    <span
+      title="Оригинал уйдёт в корзину"
+      className="flex items-center rounded bg-danger/15 px-1 py-0.5 text-danger"
+    >
+      <FileX2 size={13} />
+    </span>
   )
 }

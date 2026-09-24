@@ -17,7 +17,7 @@ import type { GalleryItem } from '../lib/types'
 import { useStore } from '../store'
 import { FolderPicker } from './FolderPicker'
 import { LinkPreview } from './LinkPreview'
-import { Button, Section, Segmented, Select, Toggle } from './ui'
+import { Button, QuietHints, Section, Segmented, Select, Toggle } from './ui'
 
 type Mode = 'auto' | 'video' | 'audio' | 'images'
 
@@ -421,6 +421,7 @@ export function DownloadPanel() {
 
       </div>
 
+      <QuietHints>
       <aside className="flex w-[340px] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5">
           <Section title="Формат">
@@ -541,6 +542,7 @@ export function DownloadPanel() {
         </Button>
         </div>
       </aside>
+      </QuietHints>
 
       <FolderPicker
         open={folderPicker}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { renderRange, useCompose } from '../composeStore'
+import { useCompose } from '../composeStore'
 import type { MeterLevels } from '../components/MasterMeter'
 
 /**
@@ -154,13 +154,14 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     setError(null)
     setPreparing(true)
     const state = useCompose.getState()
-    // Метка начала отрезка задаёт и начало просмотра: смотреть то, что не
-    // попадёт в файл, обычно незачем.
-    const { from: begin, to: finish } = renderRange(state)
-    let at = Math.max(state.playhead, begin)
+    // Играет то, что под иглой. Метки I и O сюда не вмешиваются: они только
+    // для готового файла. Прежде просмотр начинался с метки начала, и метка,
+    // оставшаяся за концом монтажа, не давала смотреть вовсе.
+    const finish = state.duration()
+    let at = state.playhead
     // Игла осталась в самом конце — начинаем сначала, как любой плеер.
     // Иначе нажатие на «играть» не делало ничего: показывать уже нечего.
-    if (at >= finish - 0.05) at = begin
+    if (at >= finish - 0.05) at = 0
     const first = await fetchChunk(at, mine)
     setPreparing(false)
     // Пока кусок готовился, человек мог нажать «стоп» — тогда молча уходим.
@@ -189,15 +190,15 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     const current = chunk.current
     let nextAt = current ? current.at + current.span : 0
 
-    // Дошли до конца — с повтором начинаем сначала, с метки начала отрезка,
-    // если она стоит. Без повтора просто останавливаемся.
-    const { from: begin, to: finish } = renderRange(state)
+    // Дошли до конца монтажа — с повтором начинаем сначала, без повтора
+    // просто останавливаемся.
+    const finish = state.duration()
     if (nextAt >= finish - 0.05) {
       if (!loopRef.current) {
         stop()
         return
       }
-      nextAt = begin
+      nextAt = 0
       ahead.current = null
     }
 

@@ -21,7 +21,8 @@ import {
   DEFAULT_IMAGE_SECONDS,
   FRAME_QUALITY,
   FRAME_SHAPES,
-  renderRange,
+  hasClipsIn,
+  renderSpan,
   sourceFrame,
   useCompose,
   type ComposeClip,
@@ -463,10 +464,21 @@ export function ComposeTab() {
   async function build() {
     // Пустое имя — обычное «Project»: для черновых роликов придумывать имя
     // каждый раз незачем. Что будет вместо имени, видно в самом поле.
+    const state = useCompose.getState()
+    // Отрезок без единого файла дал бы чёрный экран нужной длины — такое
+    // никому не нужно, а метку за концом монтажа легко не заметить.
+    const span = renderSpan(state)
+    if (!hasClipsIn(state.tracks, span.from, span.to)) {
+      toast(
+        state.renderIn !== null || state.renderOut !== null
+          ? 'Между метками I и O нет ни одного файла — рендерить нечего. Передвиньте метки или уберите их крестиком'
+          : 'На таймлайне пусто — рендерить нечего',
+        'error',
+      )
+      return
+    }
     setBusy(true)
     try {
-      const state = useCompose.getState()
-      const range = renderRange(state)
       await api.composeBuild({
         project: {
           width: state.width,
@@ -478,9 +490,8 @@ export function ComposeTab() {
         output_dir: outputDir,
         output_name: outputName.trim() || DEFAULT_NAME,
         render,
-        // Метки, съехавшие за конец монтажа, не в счёт — см. renderRange.
-        start: range.marked ? range.from : null,
-        end: range.marked ? range.to : null,
+        start: state.renderIn,
+        end: state.renderOut,
       })
       setQueueOpen(true)
     } catch (error) {
@@ -1032,9 +1043,10 @@ export function ComposeTab() {
             className="min-w-0 flex-1 py-2.5"
             disabled={busy || !clips}
             onClick={() => void build()}
+            title="Собрать готовое видео — от метки I до метки O, а без меток весь монтаж"
           >
             <Play size={15} />
-            Собрать видео
+            Рендер
           </Button>
           <Button
             className="w-[42px] shrink-0 px-0"

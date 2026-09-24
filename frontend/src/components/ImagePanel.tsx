@@ -7,7 +7,8 @@ import { strokesToPng } from '../lib/paint'
 import type { FileInfo, ImageOptions, ImagePreview, Preset } from '../lib/types'
 import { useStore } from '../store'
 import type { ImageEdit } from './ImageEditorTop'
-import { Button, Modal, Section, Segmented, Select, Toggle } from './ui'
+import { DeleteMark } from './ExportPanel'
+import { Button, Modal, QuietHints, Section, Segmented, Select, Toggle } from './ui'
 
 const DEFAULT_IMAGE: ImageOptions = {
   format: 'avif',
@@ -277,10 +278,18 @@ export function ImagePanel({
 
   const ratio = preview && preview.size ? file.size / preview.size : 0
 
+  const formatLabel = FORMATS.find((item) => item.value === options.format)?.label ?? options.format
+  const sizeLabel = SIZES.find((item) => item.value === String(options.max_dimension))?.label
+
   return (
+    <QuietHints>
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
-        <Section title="Пресеты">
+        <Section
+          title="Пресеты сжатия"
+          id="image.presets"
+          summary={activePreset?.label ?? 'свои настройки'}
+        >
           <div className="grid gap-1.5">
             {imagePresets.map((preset) => (
               <button
@@ -292,18 +301,17 @@ export function ImagePanel({
                     ...preset.options.image,
                   }))
                 }
-                className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                // Описание — при наведении, чтобы пресеты не занимали пол-колонки.
+                title={preset.hint}
+                className={`rounded-xl border px-3 py-2 text-left transition-colors ${
                   activePreset?.id === preset.id
                     ? 'border-accent/60 bg-accent/10'
                     : 'border-line-soft bg-surface-2 hover:border-line hover:bg-surface-3'
                 }`}
               >
                 <span className="block text-[13px] font-medium text-ink">{preset.label}</span>
-                <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint">
-                  {preset.hint}
-                </span>
                 {preset.tech && (
-                  <span className="mt-1 block font-mono text-[10px] text-ink-faint/70">
+                  <span className="mt-0.5 block font-mono text-[10px] text-ink-faint/70">
                     {preset.tech}
                   </span>
                 )}
@@ -312,7 +320,11 @@ export function ImagePanel({
           </div>
         </Section>
 
-        <Section title="Настроить вручную">
+        <Section
+          title="Настроить вручную"
+          id="image.manual"
+          summary={`${formatLabel} · ${options.quality}${sizeLabel ? ` · ${sizeLabel}` : ''}`}
+        >
           <Segmented<Format>
             value={options.format as Format}
             onChange={(value) => setOptions({ ...options, format: value })}
@@ -359,7 +371,16 @@ export function ImagePanel({
           />
         </Section>
 
-        <Section title="Что получится">
+        <Section
+          title="Что получится"
+          id="image.result"
+          summary={
+            <>
+              {preview && showPreview && <span>{humanSize(preview.size)}</span>}
+              {deleteOriginal && <DeleteMark />}
+            </>
+          }
+        >
           <div className="rounded-xl bg-surface-2 px-3 py-2.5 ring-1 ring-line-soft">
             {!showPreview ? (
               <p className="text-[12px] text-ink-faint">Превью выключено.</p>
@@ -506,5 +527,6 @@ export function ImagePanel({
         </p>
       </div>
     </div>
+    </QuietHints>
   )
 }

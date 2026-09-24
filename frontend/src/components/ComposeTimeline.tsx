@@ -74,8 +74,11 @@ const HEAD_MIN = 24
 const HEAD_MAX = 320
 /** С этой ширины в колонке помещается название. */
 const NAME_FROM = 58
-/** А с этой — и ползунок уровня. */
-const LEVEL_FROM = 118
+/** А с этой — и ползунок уровня. Прятался он раньше, при 118 пикселях: места
+ *  под ним оставалось ещё на треть колонки. */
+const LEVEL_FROM = 80
+/** В сжатых дорожках ползунок стоит в ряд с названием — ему нужно больше. */
+const LEVEL_NARROW_FROM = 150
 /** Линейка времени над дорожками. */
 export const RULER_HEIGHT = 24
 /** Панель кнопок над таймлайном. */
@@ -184,10 +187,20 @@ export function ComposeTimeline({
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
   // Меню дорожки: правая кнопка по пустому месту. Отдельной кнопки у дорожки
   // нет — она заняла бы место у самого начала таймлайна, где лежат клипы.
-  const [trackMenu, setTrackMenu] = useState<{ x: number; y: number; id: string } | null>(null)
+  // Меню дорожки бывает двух видов: по полотну — что положить в это место,
+  // по колонке с названием — что сделать с самой дорожкой.
+  const [trackMenu, setTrackMenu] = useState<{
+    x: number
+    y: number
+    id: string
+    where: 'lane' | 'head'
+    at: number
+  } | null>(null)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const canvas = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
+  /** Куда поставить прокрутку, когда масштаб сменится: игла и её место на экране. */
+  const pendingScroll = useRef<{ playhead: number; keep: number } | null>(null)
   const vscroll = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag>(null)
 
@@ -557,16 +570,25 @@ export function ComposeTimeline({
     const wasAt = state.playhead * state.scale - view.scrollLeft
     const inside = wasAt >= 0 && wasAt <= view.clientWidth
     const keep = inside ? wasAt : view.clientWidth / 2
+    // Масштаб упёрся в предел — перерисовки не будет, и поправка ждала бы
+    // следующего щелчка с устаревшими числами.
+    if (next === state.scale) return
+    pendingScroll.current = { playhead: state.playhead, keep }
     setScale(next)
-    // Ждём перерисовку: ширина полотна меняется вместе с масштабом, и до неё
-    // прокрутка упрётся в старый предел. Ждём обычным таймером, а не кадром
-    // отрисовки: в свёрнутом окне кадры не приходят вовсе, и прокрутка тогда
-    // не срабатывала бы.
-    setTimeout(() => {
-      const now = useCompose.getState().scale
-      view.scrollLeft = Math.max(0, state.playhead * now - keep)
-    }, 0)
   }
+
+  // Прокрутку под новый масштаб правим до того, как окно нарисует кадр.
+  // Прежде её правили таймером уже после отрисовки, и каждый щелчок колеса
+  // давал два кадра подряд — дорожка в новом масштабе на старом месте, потом
+  // на новом, — что читалось как двоение всего, что лежит на таймлайне. Кадры
+  // отрисовки тут не нужны, поэтому и в свёрнутом окне это работает.
+  useLayoutEffect(() => {
+    const target = pendingScroll.current
+    const view = scroller.current
+    if (!target || !view) return
+    pendingScroll.current = null
+    view.scrollLeft = Math.max(0, target.playhead * scale - target.keep)
+  }, [scale])
 
   const onWheel = (event: React.WheelEvent) => {
     event.preventDefault()
@@ -744,10 +766,12 @@ export function ComposeTimeline({
               // щелчков. Длинный монтаж хочется увидеть разом, а не искать
               // его край.
               const fit = minScale()
-              setScale(fit)
-              setTimeout(() => {
+              if (fit === useCompose.getState().scale) {
                 if (scroller.current) scroller.current.scrollLeft = 0
-              }, 0)
+                return
+              }
+              pendingScroll.current = { playhead: 0, keep: 0 }
+              setScale(fit)
             }}
           >
             <Scan size={14} />
@@ -783,7 +807,7 @@ export function ComposeTimeline({
           onLevel={setTrackLevel}
           onMenu={(event, id) => {
             event.preventDefault()
-            setTrackMenu({ x: event.clientX, y: event.clientY, id })
+            setTrackMenu({ x: event.clientX, y: event.clientY, id, where: 'head', at: 0 })
           }}
         />
 
@@ -831,7 +855,13 @@ export function ComposeTimeline({
               onContextMenu={(event) => {
                 if (event.target !== event.currentTarget) return
                 event.preventDefault()
-                setTrackMenu({ x: event.clientX, y: event.clientY, id: track.id })
+                setTrackMenu({
+                  x: event.clientX,
+                  y: event.clientY,
+                  id: track.id,
+                  where: 'lane',
+                  at: Math.max(0, secondsAt(event.clientX)),
+                })
               }}
               onDragOver={(event) => {
                 event.preventDefault()
@@ -996,12 +1026,13 @@ export function ComposeTimeline({
       {trackMenu && (
         <TrackMenu
           at={trackMenu}
+          where={trackMenu.where}
           trackId={trackMenu.id}
           onClose={() => setTrackMenu(null)}
           onRemove={() => removeTrack(trackMenu.id)}
           onAdd={addTrack}
-          onFill={() => addColor('#101018', trackMenu.id)}
-          onText={() => addText(trackMenu.id)}
+          onFill={() => addColor('#101018', trackMenu.id, trackMenu.at)}
+          onText={() => addText(trackMenu.id, trackMenu.at)}
           tracks={tracks}
         />
       )}
@@ -1064,6 +1095,33 @@ function TrackHeads({
     }
   }, [onWidth])
 
+  // Нажали на колонку дорожки — это может быть и правка названия, и
+  // перетаскивание. Решаем по ходу мыши: сдвинулась по вертикали — тащим.
+  const pending = useRef<{ id: string; kind: 'video' | 'audio'; top: number; y: number } | null>(null)
+  useEffect(() => {
+    const move = (event: MouseEvent) => {
+      const held = pending.current
+      if (!held || Math.abs(event.clientY - held.y) < DRAG_START) return
+      pending.current = null
+      // Если нажимали в поле названия, оно успело получить фокус и начать
+      // выделение текста — снимаем и то, и другое.
+      ;(document.activeElement as HTMLElement | null)?.blur?.()
+      window.getSelection()?.removeAllRanges()
+      carry.current = { id: held.id, kind: held.kind, top: held.top }
+      setDragging(held.id)
+      setDropRow(tracks.findIndex((track) => track.id === held.id))
+    }
+    const up = () => {
+      pending.current = null
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [tracks])
+
   // Перетаскивание самой дорожки — отдельно от растягивания колонки.
   useEffect(() => {
     if (!dragging) return
@@ -1092,7 +1150,7 @@ function TrackHeads({
   // В сжатых дорожках ползунок встаёт рядом с названием, поэтому места ему
   // нужно больше: иначе от названия остаётся пара букв.
   const narrow = rowHeight < TRACK_HEIGHT
-  const withLevel = width >= (narrow ? LEVEL_FROM + 40 : LEVEL_FROM)
+  const withLevel = width >= (narrow ? LEVEL_NARROW_FROM : LEVEL_FROM)
 
   return (
     <div
@@ -1108,7 +1166,7 @@ function TrackHeads({
         return (
           <div
             key={track.id}
-            className={`relative flex items-center gap-1.5 overflow-hidden border-b border-line-soft pr-1.5 ${
+            className={`relative flex cursor-grab items-center gap-1.5 overflow-hidden border-b border-line-soft pr-1.5 active:cursor-grabbing ${
               dragging === track.id ? 'opacity-50' : ''
             } ${
               dropRow === tracks.indexOf(track) && dragging && dragging !== track.id
@@ -1117,6 +1175,22 @@ function TrackHeads({
             }`}
             style={{ height: rowHeight }}
             onContextMenu={(event) => onMenu(event, track.id)}
+            // Переставляют дорожку, потянув за любое место колонки: за номер,
+            // за название, за пустоту рядом. Ползунок уровня — не в счёт.
+            title="Потяните вверх или вниз, чтобы переставить дорожку"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              const target = event.target as HTMLElement
+              if (target instanceof HTMLInputElement && target.type === 'range') return
+              if (!(target instanceof HTMLInputElement)) event.preventDefault()
+              const box = event.currentTarget.parentElement?.getBoundingClientRect()
+              pending.current = {
+                id: track.id,
+                kind: track.kind,
+                top: (box?.top ?? 0) + RULER_HEIGHT,
+                y: event.clientY,
+              }
+            }}
           >
             {/* Цветная полоса с номером — то, что остаётся при любой ширине.
                 За неё же дорожку и переставляют: потянул вверх или вниз —
@@ -1124,24 +1198,8 @@ function TrackHeads({
                 считаются сверху вниз, и звук между картинками сбил бы
                 порядок. */}
             <span
-              className="flex h-full w-[18px] shrink-0 cursor-grab items-center justify-center font-mono text-[10px] font-semibold text-black/70 active:cursor-grabbing"
+              className="flex h-full w-[18px] shrink-0 items-center justify-center font-mono text-[10px] font-semibold text-black/70"
               style={{ background: colour }}
-              title={`${
-                track.kind === 'audio' ? 'Звуковая дорожка' : 'Видеодорожка'
-              } — потяните вверх или вниз, чтобы переставить`}
-              onMouseDown={(event) => {
-                if (event.button !== 0) return
-                event.preventDefault()
-                const column = event.currentTarget.closest('div[style]')?.parentElement
-                const box = column?.getBoundingClientRect()
-                carry.current = {
-                  id: track.id,
-                  kind: track.kind,
-                  top: (box?.top ?? 0) + RULER_HEIGHT,
-                }
-                setDragging(track.id)
-                setDropRow(tracks.indexOf(track))
-              }}
             >
               {trackNumber(tracks, track.id)}
             </span>
@@ -1159,8 +1217,8 @@ function TrackHeads({
                   value={track.name ?? ''}
                   onChange={(event) => onRename(track.id, event.target.value)}
                   placeholder={track.kind === 'audio' ? 'Звук' : 'Видео'}
-                  title="Название дорожки"
-                  className={`min-w-0 truncate bg-transparent text-[11.5px] text-ink outline-none placeholder:text-ink-faint/60 ${
+                  title="Название дорожки — нажмите, чтобы переименовать; потяните, чтобы переставить"
+                  className={`min-w-0 cursor-grab truncate bg-transparent text-[11.5px] text-ink outline-none placeholder:text-ink-faint/60 focus:cursor-text ${
                     narrow ? 'flex-1' : 'w-full'
                   }`}
                 />
@@ -1252,9 +1310,17 @@ function useMenuPlace(at: { x: number; y: number }) {
   return { box, place }
 }
 
-/** Меню дорожки: добавить соседнюю или убрать эту вместе с содержимым. */
+/**
+ * Меню дорожки.
+ *
+ * По полотну — что положить туда, где нажали: надпись и заливку. По колонке
+ * с названием — что сделать с самой дорожкой: добавить соседнюю или убрать
+ * эту. Прежде всё было одним меню, и «Удалить дорожку и всё на ней» лежало в
+ * одном щелчке от «Добавить надпись» — промахнуться было легко.
+ */
 function TrackMenu({
   at,
+  where,
   trackId,
   tracks,
   onClose,
@@ -1264,6 +1330,7 @@ function TrackMenu({
   onText,
 }: {
   at: { x: number; y: number }
+  where: 'lane' | 'head'
   trackId: string
   tracks: ComposeTrack[]
   onClose: () => void
@@ -1314,18 +1381,26 @@ function TrackMenu({
       style={place}
       onContextMenu={(event) => event.preventDefault()}
     >
-      {item('Добавить заливку под иглой', onFill, track.kind !== 'video')}
-      {item('Добавить надпись под иглой', onText, track.kind !== 'video')}
-      <div className="my-1 h-px bg-line-soft" />
-      {item('Добавить видеодорожку', () => onAdd('video'), tracks.length >= MAX_TRACKS)}
-      {item('Добавить звуковую дорожку', () => onAdd('audio'), tracks.length >= MAX_TRACKS)}
-      <div className="my-1 h-px bg-line-soft" />
-      {item(
-        track.clips.length
-          ? `Удалить дорожку и всё на ней (${track.clips.length})`
-          : 'Удалить дорожку',
-        onRemove,
-        alone,
+      {where === 'lane' ? (
+        <>
+          {/* На звуковой дорожке надписи и заливке не место — они лягут на
+              видеодорожку, в то же время. */}
+          {item('Добавить надпись сюда', onText)}
+          {item('Добавить заливку сюда', onFill)}
+        </>
+      ) : (
+        <>
+          {item('Добавить видеодорожку', () => onAdd('video'), tracks.length >= MAX_TRACKS)}
+          {item('Добавить звуковую дорожку', () => onAdd('audio'), tracks.length >= MAX_TRACKS)}
+          <div className="my-1 h-px bg-line-soft" />
+          {item(
+            track.clips.length
+              ? `Удалить дорожку и всё на ней (${track.clips.length})`
+              : 'Удалить дорожку',
+            onRemove,
+            alone,
+          )}
+        </>
       )}
     </div>
   )

@@ -361,24 +361,54 @@ export function sourceFrame(width: number, height: number): { width: number; hei
 }
 
 /**
- * Какой отрезок на самом деле играть и собирать.
+ * Отрезок сборки по меткам I и O.
  *
- * Метки хранятся как поставили, а монтаж потом меняется: клипы удаляют и
- * укорачивают, и метка начала оказывается за концом монтажа. Так просмотр
- * просил кусок, которого нет, и отвечал «Дальше конца монтажа смотреть
- * нечего» даже с иглой в самом начале. Здесь метки прижимаются к монтажу, а
- * пустой или вывернутый отрезок не считается вовсе — берётся весь монтаж.
+ * Метки нужны только готовому файлу: ими выбирают, что в него попадёт. На
+ * просмотр они не влияют — играет то, что под иглой. Без меток собирается всё
+ * от нуля до конца последнего клипа.
  */
-export function renderRange(state: {
+export function renderSpan(state: {
   renderIn: number | null
   renderOut: number | null
   duration: () => number
-}): { from: number; to: number; marked: boolean } {
-  const whole = state.duration()
-  const from = Math.min(Math.max(state.renderIn ?? 0, 0), whole)
-  const to = Math.min(Math.max(state.renderOut ?? whole, 0), whole)
-  if (to - from < 0.05) return { from: 0, to: whole, marked: false }
-  return { from, to, marked: state.renderIn !== null || state.renderOut !== null }
+}): { from: number; to: number } {
+  return { from: state.renderIn ?? 0, to: state.renderOut ?? state.duration() }
+}
+
+/** Есть ли в отрезке хоть один клип: пустой отрезок дал бы чёрный экран. */
+export function hasClipsIn(tracks: ComposeTrack[], from: number, to: number): boolean {
+  return tracks.some((track) =>
+    track.clips.some((clip) => clip.start < to && clip.start + clip.duration > from),
+  )
+}
+
+/**
+ * Последний размер «Свой».
+ *
+ * Переключились на 720p и обратно — «Свой» должен вернуть то, что вводили, а
+ * не размер только что выбранного набора. Живёт отдельно от проекта: это
+ * привычка человека, а не часть монтажа.
+ */
+const CUSTOM_KEY = 'sgh.composeCustomSize'
+
+function rememberCustom(size: { width: number; height: number }) {
+  try {
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(size))
+  } catch {
+    /* не запомнилось — вернётся размер набора, не беда */
+  }
+}
+
+function recallCustom(): { width: number; height: number } | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? 'null')
+    if (saved && saved.width >= 16 && saved.height >= 16) {
+      return { width: Number(saved.width), height: Number(saved.height) }
+    }
+  } catch {
+    /* испорченная запись — как будто её нет */
+  }
+  return null
 }
 
 const STORAGE_KEY = 'sgh.compose'
@@ -449,9 +479,9 @@ interface State extends Saved {
 
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
   /** Кладёт заливку под иглу — файла для этого не нужно. */
-  addColor: (color: string, trackId?: string) => string
+  addColor: (color: string, trackId?: string, at?: number) => string
   /** Кладёт надпись под иглу: свой инструмент, файла ей не нужно. */
-  addText: (trackId?: string) => string
+  addText: (trackId?: string, at?: number) => string
   addPair: (video: Omit<ComposeClip, 'id'>, trackId?: string) => string
   updateClip: (id: string, patch: Partial<ComposeClip>) => void
   moveClips: (ids: string[], shift: number) => void
@@ -815,13 +845,15 @@ export const useCompose = create<State>((set, get) => ({
   setCustomSize(width, height) {
     // Нечётные размеры кодировщики не принимают.
     const even = (value: number) => Math.max(16, Math.round(value / 2) * 2)
-    set({ width: even(width), height: even(height), custom: true })
+    const size = { width: even(width), height: even(height) }
+    set({ ...size, custom: true })
+    rememberCustom(size)
     save(get())
   },
 
   useCustom(custom) {
     if (custom) {
-      set({ custom: true })
+      set({ custom: true, ...(recallCustom() ?? {}) })
     } else {
       const { quality, shape, turned } = get()
       set({ custom: false, ...frameSize(quality, shape, turned) })
@@ -846,6 +878,7 @@ export const useCompose = create<State>((set, get) => ({
       }
     }
     set({ ...wanted, custom: true })
+    rememberCustom(wanted)
     save(get())
   },
 
@@ -927,10 +960,7 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   markIn() {
-    // За концом монтажа отрезку начинаться не с чего: игла туда ходит, а
-    // метка там означала бы пустой отрезок.
-    const playhead = Math.min(get().playhead, get().duration())
-    const { renderOut } = get()
+    const { playhead, renderOut } = get()
     set({
       renderIn: playhead,
       // Метка начала позже конца — конец сбрасываем, иначе отрезок пустой.
@@ -940,8 +970,7 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   markOut() {
-    const playhead = Math.min(get().playhead, get().duration())
-    const { renderIn } = get()
+    const { playhead, renderIn } = get()
     set({
       renderOut: playhead,
       renderIn: renderIn !== null && renderIn >= playhead ? null : renderIn,
@@ -989,7 +1018,7 @@ export const useCompose = create<State>((set, get) => ({
    * Без дорожки встаёт на нижнюю видеодорожку: заливку чаще всего кладут под
    * остальное. Длина — как у картинки по умолчанию, дальше её тянут.
    */
-  addText(trackId) {
+  addText(trackId, at) {
     const state = get()
     const video = state.tracks.filter((track) => track.kind === 'video')
     const target =
@@ -1002,7 +1031,7 @@ export const useCompose = create<State>((set, get) => ({
         source: '',
         name: TEXT_DEFAULTS.text,
         kind: 'text',
-        start: Math.round(state.playhead * 100) / 100,
+        start: Math.round((at ?? state.playhead) * 100) / 100,
         duration: DEFAULT_TEXT_SECONDS,
         sourceIn: 0,
         sourceDuration: 0,
@@ -1028,7 +1057,7 @@ export const useCompose = create<State>((set, get) => ({
     )
   },
 
-  addColor(color, trackId) {
+  addColor(color, trackId, at) {
     const state = get()
     const video = state.tracks.filter((track) => track.kind === 'video')
     const target =
@@ -1040,7 +1069,7 @@ export const useCompose = create<State>((set, get) => ({
         name: 'Заливка',
         kind: 'color',
         color,
-        start: Math.round(state.playhead * 100) / 100,
+        start: Math.round((at ?? state.playhead) * 100) / 100,
         duration: DEFAULT_IMAGE_SECONDS,
         sourceIn: 0,
         sourceDuration: 0,

@@ -1,7 +1,43 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, X } from 'lucide-react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
+import { Check, ChevronDown, X } from 'lucide-react'
 
 /* Мелкие переиспользуемые элементы интерфейса. */
+
+/**
+ * Подсказки только при наведении.
+ *
+ * В панелях обработки и загрузки описания под каждой галочкой и пресетом
+ * занимали столько места, что важные кнопки уезжали за прокрутку, а человеку,
+ * который знает, что делает переключатель, описание ничего не даёт. Внутри
+ * `QuietHints` описание уходит во всплывающую подсказку — оно по-прежнему есть,
+ * просто не занимает место. В диалогах (настройки, сборка) описания остаются
+ * на виду: туда заходят редко и как раз затем, чтобы разобраться.
+ */
+const Quiet = createContext(false)
+
+export function QuietHints({ children }: { children: ReactNode }) {
+  return <Quiet.Provider value={true}>{children}</Quiet.Provider>
+}
+
+/** Подпись под полем — или ничего, если подсказки прячутся в наведение. */
+/** Подсказка при наведении — только там, где она не написана под полем. */
+function useHintTitle(hint?: string): string | undefined {
+  return useContext(Quiet) ? hint : undefined
+}
+
+function HintLine({ hint }: { hint?: string }) {
+  const quiet = useContext(Quiet)
+  if (!hint || quiet) return null
+  return <p className="mt-1 text-[11px] leading-snug text-ink-faint">{hint}</p>
+}
 
 type ButtonTone = 'primary' | 'ghost' | 'subtle' | 'danger'
 
@@ -85,8 +121,10 @@ export function Toggle({
   hint?: string
   disabled?: boolean
 }) {
+  const quiet = useContext(Quiet)
   return (
     <label
+      title={quiet ? hint : undefined}
       className={`flex items-start gap-3 rounded-lg px-1 py-1.5 ${
         disabled ? 'opacity-45' : 'cursor-pointer'
       }`}
@@ -109,7 +147,9 @@ export function Toggle({
       </button>
       <span className="min-w-0">
         <span className="block text-[13px] leading-tight text-ink">{label}</span>
-        {hint && <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint">{hint}</span>}
+        {hint && !quiet && (
+          <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint">{hint}</span>
+        )}
       </span>
     </label>
   )
@@ -136,8 +176,9 @@ export function Slider({
   hint?: string
   disabled?: boolean
 }) {
+  const hintTitle = useHintTitle(hint)
   return (
-    <div className={disabled ? 'opacity-45' : ''}>
+    <div className={disabled ? 'opacity-45' : ''} title={hintTitle}>
       <div className="mb-1.5 flex items-baseline justify-between">
         <span className="label mb-0">{label}</span>
         <span className="font-mono text-[12px] text-ink">
@@ -155,7 +196,7 @@ export function Slider({
         disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
       />
-      {hint && <p className="mt-1 text-[11px] leading-snug text-ink-faint">{hint}</p>}
+      <HintLine hint={hint} />
     </div>
   )
 }
@@ -238,8 +279,9 @@ export function Select<T extends string>({
   hint?: string
   disabled?: boolean
 }) {
+  const hintTitle = useHintTitle(hint)
   return (
-    <div>
+    <div title={hintTitle}>
       {label && <span className="label">{label}</span>}
       <select
         className="field cursor-pointer"
@@ -253,7 +295,7 @@ export function Select<T extends string>({
           </option>
         ))}
       </select>
-      {hint && <p className="mt-1 text-[11px] leading-snug text-ink-faint">{hint}</p>}
+      <HintLine hint={hint} />
     </div>
   )
 }
@@ -279,8 +321,9 @@ export function NumberField({
   hint?: string
   disabled?: boolean
 }) {
+  const hintTitle = useHintTitle(hint)
   return (
-    <div className={disabled ? 'opacity-45' : ''}>
+    <div className={disabled ? 'opacity-45' : ''} title={hintTitle}>
       <span className="label">{label}</span>
       <div className="relative">
         <input
@@ -302,29 +345,87 @@ export function NumberField({
           </span>
         )}
       </div>
-      {hint && <p className="mt-1 text-[11px] leading-snug text-ink-faint">{hint}</p>}
+      <HintLine hint={hint} />
     </div>
   )
 }
 
+/**
+ * Раздел правой колонки.
+ *
+ * С `id` раздел сворачивается нажатием на заголовок, и это запоминается.
+ * Свёрнутый раздел показывает рядом с заголовком `summary` — что в нём
+ * выбрано: иначе, свернув «Разрешение», человек забыл бы, что там стоит.
+ * `hint` — пояснение ко всему разделу, при наведении.
+ */
 export function Section({
   title,
   children,
   action,
+  id,
+  summary,
+  hint,
 }: {
   title: string
   children: ReactNode
   action?: ReactNode
+  /** Ключ для запоминания свёрнутости. Без него раздел не сворачивается. */
+  id?: string
+  /** Что показать у заголовка, пока раздел свёрнут. */
+  summary?: ReactNode
+  hint?: string
 }) {
+  const key = id ? `sgh.section.${id}` : null
+  const [folded, setFolded] = useState(() => {
+    if (!key) return false
+    try {
+      return localStorage.getItem(key) === '1'
+    } catch {
+      return false
+    }
+  })
+  const toggle = () => {
+    if (!key) return
+    const next = !folded
+    setFolded(next)
+    try {
+      localStorage.setItem(key, next ? '1' : '0')
+    } catch {
+      /* запомнить не вышло — не беда */
+    }
+  }
+  const heading = (
+    <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{title}</h3>
+  )
   return (
-    <section className="space-y-3">
-      <header className="flex items-center justify-between">
-        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-          {title}
-        </h3>
+    <section className={folded ? '' : 'space-y-3'} title={hint}>
+      <header className="flex items-center justify-between gap-2">
+        {key ? (
+          <button
+            type="button"
+            onClick={toggle}
+            title={folded ? 'Развернуть' : 'Свернуть'}
+            className="group flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          >
+            <ChevronDown
+              size={12}
+              className={`shrink-0 text-ink-faint transition-transform group-hover:text-ink-dim ${
+                folded ? '-rotate-90' : ''
+              }`}
+            />
+            {heading}
+            {folded && summary && (
+              <span className="ml-auto flex min-w-0 items-center gap-1.5 truncate text-[11px] text-ink-dim">
+                {summary}
+              </span>
+            )}
+          </button>
+        ) : (
+          heading
+        )}
         {action}
       </header>
-      {children}
+      {!folded && children}
     </section>
   )
 }
