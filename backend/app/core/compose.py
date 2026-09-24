@@ -32,7 +32,7 @@ from pathlib import Path
 
 from .. import paths
 from ..models import ComposeClip, ComposeProject
-from . import binaries, fonts, fsutil
+from . import binaries, effects, fonts, fsutil
 from .probe import probe
 
 #: Черновой кодек: быстрее всего, что есть. Черновик живёт секунды и нужен
@@ -106,13 +106,22 @@ def clips_at(project: ComposeProject, at: float, span: float) -> list[tuple[int,
 
 
 def _window(clip: ComposeClip, at: float, span: float) -> tuple[float, float, float]:
-    """Что берём от клипа в этом окне: откуда читать, сколько и когда показать."""
+    """Что берём от клипа в этом окне: откуда читать, сколько и когда показать.
+
+    У клипа «задом наперёд» кусок берётся с другого конца: начало окна — это
+    конец отрезка файла. Прочитанный кусок потом разворачивает фильтр
+    ``reverse`` — так и кадр под иглой, и кусок просмотра показывают ровно то
+    место, что окажется в готовом файле.
+    """
     # Сколько клипа уже прошло к началу окна.
     skip = max(0.0, at - clip.start)
-    seek = clip.source_in + skip
     offset = max(0.0, clip.start - at)
-    take = min(clip.duration - skip, span - offset)
-    return seek, max(take, 0.0), offset
+    take = max(min(clip.duration - skip, span - offset), 0.0)
+    if clip.reverse:
+        seek = clip.source_in + max(0.0, clip.duration - skip - take)
+    else:
+        seek = clip.source_in + skip
+    return seek, take, offset
 
 
 def fit_filter(width: int, height: int, fps: int) -> str:
@@ -569,6 +578,11 @@ def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> st
     то, каким получится файл, это не влияет.
     """
     parts = ["aresample=48000"]
+    # Эффекты звука и «задом наперёд» — первыми: громкость и затухания
+    # относятся уже к тому, что получилось.
+    extra = effects.audio_chain(clip)
+    if extra:
+        parts.append(extra.rstrip(","))
     if abs(clip.volume - 1.0) > 1e-6:
         parts.append(f"volume={clip.volume:.3g}")
 
@@ -678,8 +692,9 @@ def build_segment(
             inputs += ["-ss", f"{seek:.3f}", "-t", f"{take:.3f}", "-i", clip.source]
 
         if clip.kind != "audio":
+            # Эффекты — до вписывания в кадр: они работают с самим файлом.
             chain.append(
-                f"[{index}:v]{place_filter(clip, width, height, fps)}"
+                f"[{index}:v]{effects.video_chain(clip)}{place_filter(clip, width, height, fps)}"
                 f"{video_fades(clip, at, take, moment=at if still else None)},"
                 f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
             )

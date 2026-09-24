@@ -270,6 +270,20 @@ class ComposeModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
+class ClipEffect(ComposeModel):
+    """Эффект клипа: какой, включён ли и с какими настройками.
+
+    Настройки — числа в шкале, которую видит человек («теплее на 30»);
+    в числа ffmpeg их переводит ``core.effects``. Поля, нужные только окну
+    (свёрнут ли эффект в колонке), сервер просто не читает.
+    """
+
+    id: str
+    type: str
+    on: bool = True
+    params: dict[str, float | str] = Field(default_factory=dict)
+
+
 class ComposeClip(ComposeModel):
     """Один кусок на дорожке монтажа.
 
@@ -326,6 +340,17 @@ class ComposeClip(ComposeModel):
     #: за край кадра частично.
     x: float = Field(default=0.5, ge=-1.0, le=2.0)
     y: float = Field(default=0.5, ge=-1.0, le=2.0)
+
+    # --- эффекты ------------------------------------------------------------
+    #: Эффекты по порядку: цветокоррекция, размытие, шумоподавление голоса…
+    effects: list[ClipEffect] = Field(default_factory=list)
+    #: Отразить по горизонтали и по вертикали.
+    flip_h: bool = False
+    flip_v: bool = False
+    #: Повернуть по часовой стрелке: 0, 90, 180 или 270 градусов.
+    rotate: int = Field(default=0, ge=0, le=270)
+    #: Играть задом наперёд — и картинку, и звук.
+    reverse: bool = False
 
     # --- надпись (только у клипов вида ``text``) --------------------------
     #: Что написать. Переводы строк сохраняются: так набирают субтитры в две

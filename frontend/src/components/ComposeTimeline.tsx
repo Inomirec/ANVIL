@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
+  ChevronRight,
   FlagTriangleLeft,
   FlagTriangleRight,
   ChevronsDownUp,
@@ -48,6 +49,7 @@ import {
   type ComposeTrack,
 } from '../composeStore'
 import { useStore } from '../store'
+import { EFFECTS, effectParams, targetOf } from '../composeEffects'
 import { IconButton } from './ui'
 
 /** Радиус прилипания и ширина уголка для растягивания, в пикселях. */
@@ -390,6 +392,26 @@ export function ComposeTimeline({
       if (!found) return
       const points = magnets(state.tracks, [current.id], state.playhead)
       const nearby = SNAP_PIXELS / state.scale
+
+      if (origin.reverse && origin.kind !== 'image') {
+        // Задом наперёд края меняются ролями: левый край клипа — это конец
+        // отрезка файла, правый — его начало. Поэтому правый край двигает
+        // точку, с которой читаем файл, а левый — нет.
+        const tail = (origin.sourceDuration || Infinity) - (origin.sourceIn + origin.duration)
+        if (current.side === 'right') {
+          let end = snap(at, points, nearby)
+          end = Math.max(end, origin.start + MIN_CLIP_SECONDS)
+          end = Math.min(end, origin.start + origin.duration + origin.sourceIn)
+          const length = end - origin.start
+          state.resizeClip(current.id, origin.start, length, origin.sourceIn + origin.duration - length)
+        } else {
+          let begin = snap(at, points, nearby)
+          begin = Math.min(begin, origin.start + origin.duration - MIN_CLIP_SECONDS)
+          begin = Math.max(begin, origin.start - tail, 0)
+          state.resizeClip(current.id, begin, origin.duration - (begin - origin.start), origin.sourceIn)
+        }
+        return
+      }
 
       if (current.side === 'right') {
         let end = snap(at, points, nearby)
@@ -1511,6 +1533,26 @@ function ClipMenu({
       )}
 
 
+      {(clip.kind === 'video' || clip.kind === 'image' || clip.kind === 'audio') && (
+        <>
+          <div className="my-1 h-px bg-line-soft" />
+          <EffectsSubmenu clipId={clipId} onClose={onClose} />
+          {clip.kind !== 'audio' && (
+            <>
+              {item('Отразить по горизонтали', '', () => state.flipClips(pick(state, clipId), 'h'))}
+              {item('Отразить по вертикали', '', () => state.flipClips(pick(state, clipId), 'v'))}
+              {item('Повернуть на 90°', '', () => state.rotateClips(pick(state, clipId)))}
+            </>
+          )}
+          {clip.kind !== 'image' &&
+            item(
+              clip.reverse ? 'Играть как обычно' : 'Задом наперёд',
+              '',
+              () => state.reverseClips(pick(state, clipId)),
+            )}
+        </>
+      )}
+
       {/* Размер и место в кадре задаются рамкой прямо в окне просмотра —
           выбранный клип можно взять и перетащить. Здесь остаётся только
           быстрый возврат: наигравшись, человек хочет вернуть как было. */}
@@ -1536,6 +1578,98 @@ function ClipMenu({
             clip.x === 0.5 && clip.y === 0.5,
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Пункт «Эффекты» с подменю сбоку.
+ *
+ * Все эффекты сразу в основном меню были бы перегрузом — поэтому они
+ * раскрываются при наведении, как в обычных программах. У ролика со звуком
+ * в подменю и эффекты картинки, и эффекты звука: каждый ляжет на свою
+ * половину. Добавленный эффект сразу видно справа — клип выделяется.
+ */
+function EffectsSubmenu({ clipId, onClose }: { clipId: string; onClose: () => void }) {
+  const state = useCompose()
+  const [open, setOpen] = useState(false)
+  const [left, setLeft] = useState(false)
+  const row = useRef<HTMLDivElement>(null)
+  const clip = state.findClip(clipId)?.clip
+  if (!clip) return null
+  const partner = state.partnerOf(clipId)
+  const parts = [clip, partner].filter(Boolean) as ComposeClip[]
+
+  const groups = (['video', 'audio'] as const)
+    .map((target) => ({
+      target,
+      clip: parts.find((item) => targetOf(item.kind) === target),
+    }))
+    .filter((group) => group.clip)
+
+  return (
+    <div
+      ref={row}
+      className="relative"
+      onMouseEnter={() => {
+        // У правого края окна подменю раскрывается влево, иначе уйдёт за экран.
+        const box = row.current?.getBoundingClientRect()
+        setLeft(Boolean(box && box.right + 240 > window.innerWidth))
+        setOpen(true)
+      }}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <div
+        className={`flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-left text-[12px] ${
+          open ? 'bg-surface-3 text-ink' : 'text-ink-dim'
+        }`}
+      >
+        Эффекты
+        <ChevronRight size={12} className="text-ink-faint" />
+      </div>
+      {open && (
+        <div
+          className={`absolute top-[-4px] z-10 min-w-[220px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl ${
+            left ? 'right-full mr-1' : 'left-full ml-1'
+          }`}
+        >
+          {groups.map((group, index) => {
+            const taken = new Set((group.clip!.effects ?? []).map((effect) => effect.type))
+            return (
+              <div key={group.target}>
+                {groups.length > 1 && (
+                  <div
+                    className={`px-2.5 pb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint ${
+                      index ? 'mt-1 border-t border-line-soft pt-1.5' : 'pt-1'
+                    }`}
+                  >
+                    {group.target === 'video' ? 'Картинка' : 'Звук'}
+                  </div>
+                )}
+                {EFFECTS.filter((effect) => effect.target === group.target).map((effect) => (
+                  <button
+                    key={effect.type}
+                    type="button"
+                    disabled={taken.has(effect.type)}
+                    title={taken.has(effect.type) ? 'Уже добавлен' : effect.hint}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={() => {
+                      state.addEffect(group.clip!.id, effect.type, effectParams(effect.type))
+                      // Выделяем клип: его эффекты откроются справа, где их и
+                      // настраивают.
+                      state.select([clipId])
+                      onClose()
+                    }}
+                    className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[12px] text-ink-dim transition-colors enabled:hover:bg-surface-3 enabled:hover:text-ink disabled:opacity-35"
+                  >
+                    {effect.name}
+                  </button>
+                ))}
+              </div>
+            )
+          })}
+        </div>
       )}
     </div>
   )
@@ -1956,6 +2090,17 @@ function ClipBox({
             // Знак группы: клип ходит не один. Без него группы работали, но
             // глазами их было не отличить от обычных клипов.
             <Link2 size={11} className="shrink-0 text-accent" />
+          )}
+          {/* Метка «fx»: у клипа есть включённые эффекты, отражение, поворот
+              или он играет задом наперёд — иначе по таймлайну этого не видно. */}
+          {((clip.effects ?? []).some((effect) => effect.on) ||
+            clip.flipH ||
+            clip.flipV ||
+            Boolean(clip.rotate) ||
+            clip.reverse) && (
+            <span className="shrink-0 rounded bg-accent/30 px-1 font-mono text-[9px] leading-[13px] text-white">
+              fx
+            </span>
           )}
           <span className="truncate">{clip.name}</span>
         </span>

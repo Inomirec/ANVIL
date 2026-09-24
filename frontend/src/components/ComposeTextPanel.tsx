@@ -270,6 +270,7 @@ export function SliderNumber({
   unit,
   reset,
   onChange,
+  stacked = false,
 }: {
   label: string
   value: number
@@ -280,6 +281,8 @@ export function SliderNumber({
   /** Куда вернуть по двойному нажатию. */
   reset: number
   onChange: (value: number) => void
+  /** Подпись строкой над ползунком — для длинных подписей. */
+  stacked?: boolean
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const apply = () => {
@@ -288,9 +291,9 @@ export function SliderNumber({
     if (Number.isFinite(number)) onChange(Math.min(max, Math.max(min, number)))
     setDraft(null)
   }
-  return (
+  const row = (
     <div className="flex items-center gap-2">
-      <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>
+      {!stacked && <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>}
       <input
         type="range"
         min={min}
@@ -318,6 +321,13 @@ export function SliderNumber({
         />
         <span className="ml-0.5 text-[10px] text-ink-faint">{unit}</span>
       </label>
+    </div>
+  )
+  if (!stacked) return row
+  return (
+    <div className="space-y-1">
+      <span className="block text-[11.5px] text-ink-dim">{label}</span>
+      {row}
     </div>
   )
 }

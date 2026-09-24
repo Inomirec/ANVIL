@@ -12,6 +12,16 @@ import { create } from 'zustand'
 
 export type ClipKind = 'video' | 'image' | 'audio' | 'color' | 'text'
 
+/** Эффект клипа: какой, включён ли, свёрнут ли в колонке и его настройки. */
+export interface ClipEffect {
+  id: string
+  type: string
+  on: boolean
+  /** Свёрнут в правой колонке — видно только название. */
+  folded?: boolean
+  params: Record<string, number | string>
+}
+
 export interface ComposeClip {
   id: string
   /** Путь к файлу на диске. */
@@ -43,6 +53,15 @@ export interface ComposeClip {
    * человек собирает клавишей G, разбирает — U.
    */
   groupId?: string
+  /** Эффекты по порядку: цветокоррекция, размытие, шумоподавление голоса… */
+  effects?: ClipEffect[]
+  /** Отражение по горизонтали и вертикали. */
+  flipH?: boolean
+  flipV?: boolean
+  /** Поворот по часовой стрелке: 0, 90, 180, 270. */
+  rotate?: number
+  /** Играть задом наперёд. */
+  reverse?: boolean
   /** Непрозрачность картинки: 1 — как есть, 0 — совсем не видно. */
   opacity: number
   /** Приближение внутри кадра: 1 — вписано целиком. */
@@ -489,6 +508,17 @@ interface State extends Saved {
   markOut: () => void
   clearMarks: () => void
 
+  /** Родная половина ролика: картинка для звука и звук для картинки. */
+  partnerOf: (clipId: string) => ComposeClip | null
+  addEffect: (clipId: string, type: string, params: Record<string, number | string>) => void
+  updateEffect: (clipId: string, effectId: string, patch: Partial<ClipEffect>) => void
+  removeEffect: (clipId: string, effectId: string) => void
+  /** Отразить по горизонтали или вертикали. */
+  flipClips: (ids: string[], axis: 'h' | 'v') => void
+  /** Повернуть на 90° по часовой стрелке. */
+  rotateClips: (ids: string[]) => void
+  /** Задом наперёд — и картинку, и родной звук ролика. */
+  reverseClips: (ids: string[]) => void
   addClip: (clip: Omit<ComposeClip, 'id'>, trackId?: string) => string
   /** Кладёт заливку под иглу — файла для этого не нужно. */
   addColor: (color: string, trackId?: string, at?: number) => string
@@ -585,6 +615,7 @@ function normalize(input: unknown): Saved {
         sizeY: clip.sizeY ?? 0,
         ratio: clip.ratio ?? 0,
         radius: clip.radius ?? 0,
+        effects: clip.effects ?? [],
         // Заливкам прежних версий добираем цвета рамки и тени: без них колонка
         // показывала бы одно, а программа рисовала бы другое.
         ...(clip.kind === 'color'
@@ -1259,13 +1290,23 @@ export const useCompose = create<State>((set, get) => ({
             start: at,
             duration: clip.duration - passed,
             // У картинки своего времени нет, а ролик продолжаем с той же точки.
-            sourceIn: clip.kind === 'image' ? clip.sourceIn : clip.sourceIn + passed,
+            // Задом наперёд — наоборот: правая половина на таймлайне — это
+            // начало отрезка файла, левая — его конец.
+            sourceIn:
+              clip.kind === 'image' || clip.reverse ? clip.sourceIn : clip.sourceIn + passed,
             // Половинки связаны между собой заново: старая связка осталась у
             // левых кусков, правым нужна своя.
             groupId: clip.groupId ? `${clip.groupId}-r` : undefined,
           }
           made.push(rightId)
-          next.push({ ...clip, duration: passed }, right)
+          next.push(
+            {
+              ...clip,
+              duration: passed,
+              ...(clip.reverse ? { sourceIn: clip.sourceIn + clip.duration - passed } : {}),
+            },
+            right,
+          )
         }
         return { ...track, clips: next }
       }),
@@ -1648,6 +1689,92 @@ export const useCompose = create<State>((set, get) => ({
     get().mark()
     set({ ...normalize(data), playhead: 0, selected: [], missing: [], opened: get().opened + 1 })
     save(get())
+  },
+
+  partnerOf(clipId) {
+    const all = get().tracks.flatMap((track) => track.clips)
+    const clip = all.find((item) => item.id === clipId)
+    if (!clip?.groupId) return null
+    // Родная половина — из той же группы, с тем же файлом и другого вида:
+    // в группе, собранной руками, могут лежать и чужие клипы.
+    return (
+      all.find(
+        (item) =>
+          item.id !== clip.id &&
+          item.groupId === clip.groupId &&
+          item.source === clip.source &&
+          (item.kind === 'audio') !== (clip.kind === 'audio'),
+      ) ?? null
+    )
+  },
+
+  addEffect(clipId, type, params) {
+    get().mark()
+    const clip = get().findClip(clipId)?.clip
+    if (!clip) return
+    const effect: ClipEffect = { id: nextId(), type, on: true, params }
+    get().updateClip(clipId, { effects: [...(clip.effects ?? []), effect] })
+  },
+
+  updateEffect(clipId, effectId, patch) {
+    const clip = get().findClip(clipId)?.clip
+    if (!clip) return
+    get().updateClip(clipId, {
+      effects: (clip.effects ?? []).map((effect) =>
+        effect.id === effectId
+          ? { ...effect, ...patch, params: { ...effect.params, ...(patch.params ?? {}) } }
+          : effect,
+      ),
+    })
+  },
+
+  removeEffect(clipId, effectId) {
+    get().mark()
+    const clip = get().findClip(clipId)?.clip
+    if (!clip) return
+    get().updateClip(clipId, {
+      effects: (clip.effects ?? []).filter((effect) => effect.id !== effectId),
+    })
+  },
+
+  flipClips(ids, axis) {
+    get().mark()
+    for (const id of ids) {
+      const clip = get().findClip(id)?.clip
+      if (!clip || clip.kind === 'audio' || clip.kind === 'text') continue
+      get().updateClip(id, axis === 'h' ? { flipH: !clip.flipH } : { flipV: !clip.flipV })
+    }
+  },
+
+  rotateClips(ids) {
+    get().mark()
+    for (const id of ids) {
+      const clip = get().findClip(id)?.clip
+      if (!clip || clip.kind === 'audio' || clip.kind === 'text') continue
+      // Повёрнутый на бок клип меняет форму — рамка в окне просмотра должна
+      // лечь по новой картинке, а не по прежней.
+      get().updateClip(id, {
+        rotate: ((clip.rotate ?? 0) + 90) % 360,
+        ratio: clip.ratio ? 1 / clip.ratio : clip.ratio,
+      })
+    }
+  },
+
+  reverseClips(ids) {
+    get().mark()
+    const touched = new Set<string>()
+    for (const id of ids) {
+      const clip = get().findClip(id)?.clip
+      if (!clip || (clip.kind !== 'video' && clip.kind !== 'audio')) continue
+      const next = !clip.reverse
+      // Картинка и звук ролика разворачиваются вместе: иначе губы шли бы в
+      // одну сторону, а голос в другую.
+      for (const item of [clip, get().partnerOf(id)]) {
+        if (!item || touched.has(item.id)) continue
+        touched.add(item.id)
+        get().updateClip(item.id, { reverse: next })
+      }
+    }
   },
 
   setMissing(paths) {

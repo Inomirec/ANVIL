@@ -42,6 +42,7 @@ import { ComposeMissing } from './ComposeMissing'
 import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
 import { ComposeTextPanel } from './ComposeTextPanel'
 import { ComposeFillPanel } from './ComposeFillPanel'
+import { ComposeClipPanel } from './ComposeClipPanel'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderSettings,
@@ -619,6 +620,24 @@ export function ComposeTab() {
   // То же для заливки: её цвет, скругление, рамка и тень.
   const fillClip =
     pickedVisual.length === 1 && pickedVisual[0].kind === 'color' ? pickedVisual[0] : undefined
+  // Выбран один файл — справа его эффекты. Ролик со звуком — это два клипа,
+  // картинка и звук; выбор такой пары тоже считается одним файлом.
+  const picked = useCompose((state) => state.picked)
+  const partnerOf = useCompose((state) => state.partnerOf)
+  const mediaClip = (() => {
+    const all = tracks.flatMap((track) => track.clips)
+    const chosen = all.filter((clip) => selected.includes(clip.id))
+    const media = (clip?: ComposeClip) =>
+      clip && (clip.kind === 'video' || clip.kind === 'image' || clip.kind === 'audio') ? clip : undefined
+    if (chosen.length === 1) return media(chosen[0])
+    if (chosen.length === 2 && partnerOf(chosen[0].id)?.id === chosen[1].id) {
+      // Показываем ту половину, по которой нажали, — важно лишь для подписи.
+      const first = all.find((clip) => clip.id === picked[0])
+      return media(first && chosen.includes(first) ? first : chosen.find((clip) => clip.kind !== 'audio'))
+    }
+    return undefined
+  })()
+
   // Надпись, которую прямо сейчас видно и можно править в кадре. Её рисует
   // окно, поэтому из собранного программой кадра она убирается — иначе на
   // экране было бы две одинаковые надписи.
@@ -946,6 +965,8 @@ export function ComposeTab() {
             <ComposeTextPanel clip={textClip} />
           ) : fillClip ? (
             <ComposeFillPanel clip={fillClip} />
+          ) : mediaClip ? (
+            <ComposeClipPanel clip={mediaClip} />
           ) : (
           <>
           {/* Кадр проекта. Без заголовка и без лишних чисел: что выбрано,
