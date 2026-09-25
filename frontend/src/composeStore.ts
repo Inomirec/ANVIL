@@ -1111,10 +1111,12 @@ export const useCompose = create<State>((set, get) => ({
       if (clip && (playhead < clip.start || playhead >= clip.start + clip.duration)) {
         set({ playhead: clip.start + clip.duration / 2 })
       }
+      get().ensureKey(id, 'mask')
+      get().setAnimFocus('mask')
+      return
     }
-    // Двигать маску и обрезать разом нельзя: рамки лежат друг на друге.
-    set({ masking: id, ...(id ? { cropping: null, animFocus: 'mask' } : {}) })
-    if (id) get().ensureKey(id, 'mask')
+    if (get().animFocus === 'mask') get().setAnimFocus(null)
+    else set({ masking: null })
   },
   cropping: null,
   setCropping: (id) => {
@@ -1126,12 +1128,15 @@ export const useCompose = create<State>((set, get) => ({
       if (clip && (playhead < clip.start || playhead >= clip.start + clip.duration)) {
         set({ playhead: clip.start + clip.duration / 2 })
       }
+      // Нажали «Обрезать» — на таймлайне сразу ключ под иглой. Один ключ —
+      // одна обрезка на весь клип; поставят второй в другом месте — обрезка
+      // будет меняться между ними.
+      get().ensureKey(id, 'crop')
+      get().setAnimFocus('crop')
+      return
     }
-    set({ cropping: id, ...(id ? { masking: null, animFocus: 'crop' } : {}) })
-    // Нажали «Обрезать» — на таймлайне сразу ключ под иглой. Один ключ —
-    // одна обрезка на весь клип; поставят второй в другом месте — обрезка
-    // будет меняться между ними.
-    if (id) get().ensureKey(id, 'crop')
+    if (get().animFocus === 'crop') get().setAnimFocus(null)
+    else set({ cropping: null })
   },
   bumpRefresh: () => set({ refresh: get().refresh + 1 }),
   missing: [],
@@ -2050,7 +2055,18 @@ export const useCompose = create<State>((set, get) => ({
 
   animFocus: null,
   setAnimFocus(group) {
-    set({ animFocus: group })
+    // Горят часики обрезки или маски — в окне просмотра их рамка: править
+    // то, чьи ключи в работе. Отдельной кнопки «изменить в кадре» нет —
+    // из-за неё маска пропадала с экрана, хотя была включена.
+    const state = get()
+    const picture = state.selected
+      .map((id) => state.findClip(id)?.clip)
+      .find((clip) => clip && (clip.kind === 'video' || clip.kind === 'image'))
+    set({
+      animFocus: group,
+      cropping: group === 'crop' && picture ? picture.id : null,
+      masking: group === 'mask' && picture?.mask ? picture.id : null,
+    })
   },
 
   toggleAnim(id, groupId) {
@@ -2061,7 +2077,8 @@ export const useCompose = create<State>((set, get) => ({
     // Одни на всё: включили эти — прежние погасли. Выключение ключей не
     // стирает: движение остаётся, просто их не видно на таймлайне.
     if (get().animFocus === groupId) {
-      set({ animFocus: null, selectedKeys: null })
+      get().setAnimFocus(null)
+      set({ selectedKeys: null })
       return
     }
     const keyed = group.fields.some((field) => (clip.anim?.[field]?.length ?? 0) > 0)
@@ -2071,7 +2088,8 @@ export const useCompose = create<State>((set, get) => ({
       const at = Math.min(Math.max(get().playhead - clip.start, 0), clip.duration)
       get().updateClip(id, { anim: withKey(clip, group, at, groupValues(clip, group, at)) })
     }
-    set({ animFocus: groupId, selectedKeys: null })
+    get().setAnimFocus(groupId)
+    set({ selectedKeys: null })
   },
 
   selectedKeys: null,

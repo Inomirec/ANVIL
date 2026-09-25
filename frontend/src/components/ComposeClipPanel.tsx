@@ -317,14 +317,14 @@ function CropCard({ clip }: { clip: ComposeClip }) {
           {side('Снизу', 'cropBottom')}
         </>
       )}
-      <Button
-        tone={cropping === clip.id ? 'primary' : 'subtle'}
-        className="w-full"
-        onClick={() => setCropping(cropping === clip.id ? null : clip.id)}
-      >
-        <Crop size={14} />
-        {cropping === clip.id ? 'Готово' : used ? 'Изменить в кадре' : 'Обрезать в кадре'}
-      </Button>
+      {/* Обрезать — один раз, дальше рамка обрезки в кадре видна, пока
+          горят часики карточки: отдельная кнопка «изменить» только путала. */}
+      {!used && (
+        <Button tone="subtle" className="w-full" onClick={() => setCropping(clip.id)}>
+          <Crop size={14} />
+          Обрезать в кадре
+        </Button>
+      )}
     </Card>
   )
 }
@@ -491,14 +491,6 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) 
           ]}
           onChange={(next) => updateClip(clip.id, { mask: { ...mask, feather: next / 100 } })}
         />
-        <Button
-          tone={masking === clip.id ? 'primary' : 'subtle'}
-          className="w-full"
-          onClick={() => setMasking(masking === clip.id ? null : clip.id)}
-        >
-          <SquareDashed size={14} />
-          {masking === clip.id ? 'Готово' : 'Изменить в кадре'}
-        </Button>
       </div>
     </Card>
   )

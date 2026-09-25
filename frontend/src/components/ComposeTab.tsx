@@ -203,15 +203,16 @@ export function ComposeTab() {
   const opened = useCompose((state) => state.opened)
   const refresh = useCompose((state) => state.refresh)
   const masking = useCompose((state) => state.masking)
+  // Рамка обрезки или маски — у выбранного клипа, пока горят их часики:
+  // сменили выделение — рамка переходит на новый клип.
+  const animFocus = useCompose((state) => state.animFocus)
   useEffect(() => {
-    if (masking && !selected.includes(masking)) useCompose.getState().setMasking(null)
-  }, [masking, selected])
+    if (animFocus === 'crop' || animFocus === 'mask') useCompose.getState().setAnimFocus(animFocus)
+  }, [animFocus, selected])
   const cropping = useCompose((state) => state.cropping)
   // Выделение ушло с клипа — и обрезка его закончена: рамка обрезки без
   // выделенного клипа только путала бы.
-  useEffect(() => {
-    if (cropping && !selected.includes(cropping)) useCompose.getState().setCropping(null)
-  }, [cropping, selected])
+
   const missingAlert = useCompose((state) => state.missingAlert)
   useEffect(() => {
     if (missingAlert) setMissingOpen(true)
