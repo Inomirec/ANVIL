@@ -24,6 +24,8 @@ export interface RenderSettings {
   audioCodec: string
   audioBitrateKbps: number
   container: string
+  /** Собрать только звук: MP3, M4A, Opus или FLAC — без картинки. */
+  audioOnly?: boolean
 }
 
 export interface RenderPreset extends RenderSettings {
@@ -66,6 +68,19 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
     audioBitrateKbps: 256,
     container: 'mp4',
   },
+  {
+    id: 'audio-mp3',
+    label: 'Только звук · MP3',
+    videoCodec: 'h264',
+    crf: 16,
+    bitrateKbps: 0,
+    speedPreset: 'slow',
+    useGpu: false,
+    audioCodec: 'mp3',
+    audioBitrateKbps: 320,
+    container: 'mp4',
+    audioOnly: true,
+  },
 ]
 
 export const DEFAULT_RENDER: RenderSettings = settingsOf(BUILTIN_PRESETS[0])
@@ -86,8 +101,12 @@ export function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
   const settings = settingsOf(preset)
   return (Object.keys(settings) as (keyof RenderSettings)[])
     .filter((key) => key !== 'bitrateKbps')
-    .every((key) => value[key] === settings[key])
+    .every((key) => (key === 'audioOnly' ? Boolean(value.audioOnly) === Boolean(settings.audioOnly) : value[key] === settings[key]))
+    && Boolean(value.audioOnly) === Boolean(settings.audioOnly)
 }
+
+/** Каким файлом выйдет сборка одного звука — по кодеку звука. */
+export const AUDIO_FILE: Record<string, string> = { mp3: 'MP3', aac: 'M4A', opus: 'Opus', flac: 'FLAC' }
 
 const VIDEO_CODECS = [
   { value: 'av1_svt', label: 'AV1 — меньше вес при том же качестве' },
@@ -98,7 +117,7 @@ const VIDEO_CODECS = [
 const AUDIO_CODECS = [
   { value: 'opus', label: 'Opus — лучше всех при малом весе' },
   { value: 'aac', label: 'AAC — играет везде' },
-  { value: 'mp3', label: 'MP3 — для совсем старого' },
+  { value: 'mp3', label: 'MP3 — играет везде, даже в старом' },
   { value: 'flac', label: 'FLAC — без потерь, тяжёлый' },
   { value: 'none', label: 'Без звука' },
 ]
@@ -202,6 +221,9 @@ function speedOptions(codec: string): { value: string; label: string }[] {
 
 /** Короткая строка под кнопкой: что получится, не открывая окно. */
 export function renderSummary(value: RenderSettings): string {
+  if (value.audioOnly) {
+    return `Только звук · ${AUDIO_FILE[value.audioCodec] ?? 'M4A'} ${value.audioCodec === 'flac' ? '' : value.audioBitrateKbps + ' кбит/с'}`.trim()
+  }
   const video = VIDEO_CODECS.find((item) => item.value === value.videoCodec)
   const name = video ? video.label.split(' —')[0] : value.videoCodec
   const weight =
@@ -455,6 +477,17 @@ export function ComposeRenderSettings({
         </div>
 
         <div className="space-y-3 border-t border-line-soft pt-4">
+          <Toggle
+            checked={Boolean(value.audioOnly)}
+            onChange={(audioOnly) =>
+              set({ audioOnly, ...(audioOnly && value.audioCodec === 'none' ? { audioCodec: 'mp3' } : {}) })
+            }
+            label="Только звук — без картинки"
+            hint="Соберётся звуковой файл (MP3, M4A, Opus или FLAC — по кодеку звука), например чтобы достать звук из ролика. Если на таймлайне нет ни видео, ни картинок, ни надписей, звуком соберётся и без этой галочки."
+          />
+
+          {!value.audioOnly && (
+          <>
           <Select
             label="Кодек видео"
             value={value.videoCodec}
@@ -570,11 +603,13 @@ export function ComposeRenderSettings({
             label="Кодировать на видеокарте"
             hint="Быстрее в разы, но при том же качестве файл обычно тяжелее. Подходящий кодировщик программа подберёт сама."
           />
+          </>
+          )}
 
           <Select
             label="Кодек звука"
             value={value.audioCodec}
-            options={AUDIO_CODECS}
+            options={value.audioOnly ? AUDIO_CODECS.filter((item) => item.value !== 'none') : AUDIO_CODECS}
             onChange={(audioCodec) => set({ audioCodec })}
           />
 
@@ -590,12 +625,18 @@ export function ComposeRenderSettings({
             />
           )}
 
-          <Select
-            label="Контейнер"
-            value={value.container}
-            options={CONTAINERS}
-            onChange={(container) => set({ container })}
-          />
+          {value.audioOnly ? (
+            <p className="text-[11.5px] text-ink-faint">
+              Файл: {AUDIO_FILE[value.audioCodec] ?? 'M4A'}
+            </p>
+          ) : (
+            <Select
+              label="Контейнер"
+              value={value.container}
+              options={CONTAINERS}
+              onChange={(container) => set({ container })}
+            />
+          )}
         </div>
 
         <div className="flex items-end gap-2 border-t border-line-soft pt-4">

@@ -321,6 +321,11 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
     raise ValueError(f"Неизвестный видеокодек: {codec}")
 
 
+def audio_extension(codec: str) -> str:
+    """Расширение звукового файла для кодека — без точки."""
+    return _AUDIO_EXT.get(codec, ".m4a").lstrip(".")
+
+
 def audio_codec_args(options: AudioOptions) -> list[str]:
     """Аргументы кодека звука."""
     codec = options.codec

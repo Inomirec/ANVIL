@@ -430,7 +430,20 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         # Выравнивание громкости у монтажа своё, на мастер-шине.
         loudnorm=False,
     )
-    suffix = render.container if render.container != "auto" else "mp4"
+    # Только звук — по просьбе или потому, что картинки в монтаже нет вовсе
+    # (оставили от ролика одну звуковую дорожку): тогда и файл звуковой, а
+    # не видео с чёрным кадром.
+    visual = any(
+        clip.kind in {"video", "image", "text", "color"} for track in project.tracks for clip in track.clips
+    )
+    sound_only = render.audio_only or not visual
+    if sound_only:
+        if render.audio_codec in {"none", "copy"}:
+            raise ValueError("Для сборки одного звука выберите звуковой кодек: MP3, AAC, Opus или FLAC")
+        suffix = encode.audio_extension(render.audio_codec)
+        label = f"только звук · {render.audio_codec}"
+    else:
+        suffix = render.container if render.container != "auto" else "mp4"
 
     async def runner(ctx: JobContext) -> None:
         directory.mkdir(parents=True, exist_ok=True)
@@ -438,15 +451,18 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         output = fsutil.unique_path(directory / f"{stem}.{suffix}", reserve=True)
         ctx.job.output = str(output)
         try:
-            codec = encode.video_codec_args(video, encode.effective_crf(video, None))
-            codec += encode.audio_codec_args(audio)
+            if sound_only:
+                codec = encode.audio_codec_args(audio)
+            else:
+                codec = encode.video_codec_args(video, encode.effective_crf(video, None))
+                codec += encode.audio_codec_args(audio)
             if any(compose.effects.stabilizer(clip) for track in project.tracks for clip in track.clips):
                 ctx.progress(0.0, "Стабилизация")
             await compose.stabilize_all(project)
             await compose.prepare_fills(project)
             args = compose.build_segment(
                 project, output, at=begin, span=total or None, codec=codec,
-                progress=True,
+                progress=True, audio_only=sound_only,
             )
             ctx.log("$ " + encode.to_display_string(args))
             ctx.meta(command=encode.to_display_string(args))

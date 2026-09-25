@@ -606,6 +606,8 @@ class ComposeRender(ComposeModel):
     audio_codec: AudioCodec = "opus"
     audio_bitrate_kbps: int = Field(default=192, ge=16, le=512)
     container: Container = "mp4"
+    #: Собрать только звук — файл MP3, M4A, Opus или FLAC, без картинки.
+    audio_only: bool = False
 
 
 class ComposeBuildRequest(ComposeModel):

@@ -45,6 +45,7 @@ import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderSettings,
   DEFAULT_RENDER,
+  AUDIO_FILE,
   presetName,
   renderSummary,
   type RenderPreset,
@@ -229,6 +230,10 @@ export function ComposeTab() {
     }
   })
   const [renderOpen, setRenderOpen] = useState(false)
+  // Картинки на таймлайне нет (оставили от ролика один звук) — соберётся
+  // звуковой файл, а не видео с чёрным кадром. Сервер решает так же.
+  const allClips = tracks.flatMap((track) => track.clips)
+  const soundOnly = allClips.length > 0 && !allClips.some((clip) => clip.kind !== 'audio')
   // Свои наборы сборки — чтобы под кнопкой писать название набора. Читаем
   // заново, когда окно настроек закрыли: там могли сохранить новый.
   const [myPresets, setMyPresets] = useState<RenderPreset[]>([])
@@ -1124,7 +1129,11 @@ export function ComposeTab() {
             {/* Только название набора: полное описание (кодек, качество,
                 звук) не помещалось в строку. Подробности — при наведении. */}
             <p className="mt-1 truncate text-[11px] leading-snug text-ink-faint" title={renderSummary(render)}>
-              {presetName(render, myPresets)}
+              {soundOnly && !render.audioOnly
+                ? render.audioCodec === 'none'
+                  ? 'Картинки нет, а звук выключен — выберите кодек звука'
+                  : `Картинки нет — соберётся только звук · ${AUDIO_FILE[render.audioCodec] ?? 'M4A'}`
+                : presetName(render, myPresets)}
             </p>
           </div>
 

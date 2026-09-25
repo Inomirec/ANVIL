@@ -768,6 +768,7 @@ def build_segment(
     codec: list[str] | None = None,
     progress: bool = False,
     preview: bool = False,
+    audio_only: bool = False,
 ) -> list[str]:
     """Команда ffmpeg для отрезка монтажа.
 
@@ -779,6 +780,9 @@ def build_segment(
 
     ``preview`` — собирается для окна программы (кадр, просмотр), а не файл:
     тогда видны подсказки вроде рамки вокруг убираемого водяного знака.
+
+    ``audio_only`` — только звук: картинку не собираем вовсе (ни фона, ни
+    слоёв), у роликов берём одну звуковую дорожку.
     """
     span = span if span is not None else max(project.duration - at, 0.0)
     if span <= 0:
@@ -799,7 +803,8 @@ def build_segment(
 
     # Чёрный фон на всю длину отрезка. Он же отвечает за пустые места, где ни
     # один клип не стоит: без него дырка на таймлайне обрывала бы сборку.
-    chain.append(f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f}[bg]")
+    if not audio_only:
+        chain.append(f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f}[bg]")
 
     index = 0
     #: Картинки масок: их входы идут после всех клипов.
@@ -815,6 +820,9 @@ def build_segment(
         )
         # Кадру звук не нужен — и записать его в картинку нельзя.
         if still and clip.kind == "audio":
+            continue
+        # Только звук — клипы без звука не нужны вовсе.
+        if audio_only and not sound:
             continue
 
         if clip.kind == "text":
@@ -852,7 +860,7 @@ def build_segment(
             # Из файла берём столько, сколько пройдёт за окно с этой скоростью.
             inputs += ["-ss", f"{seek:.4f}", "-t", f"{take * clip.speed:.3f}", "-i", source]
 
-        if clip.kind != "audio":
+        if clip.kind != "audio" and not audio_only:
             fades = video_fades(clip, at, take, moment=at if still else None)
             # Откуда берётся картинка клипа. Обычно — прямо со входа, через
             # линейную цепочку фильтров. С маской — через отдельный граф: у
@@ -987,10 +995,26 @@ def build_segment(
             mixed += f",volume={project.master_volume:.3g}"
         if project.loudnorm:
             mixed += ",loudnorm=I=-16:TP=-1.5:LRA=11"
+        if audio_only:
+            # Тишина в конце отрезка тоже часть файла: без добивки звук
+            # кончился бы вместе с последним клипом. Время после сведения
+            # пересчитываем по числу отсчётов: у тишины от задержки его нет,
+            # и звуковой файл без картинки выходил длиной в секунду.
+            mixed += ",apad,asetpts=N/SR/TB"
         chain.append(mixed + "[aout]")
 
     args = [binaries.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y"]
     args += inputs
+    if audio_only:
+        if not audio_labels:
+            raise ValueError("В монтаже нет звука — собирать нечего")
+        args += ["-filter_complex", ";".join(chain), "-map", "[aout]", "-vn"]
+        args += codec or ["-c:a", "aac", "-b:a", "192k"]
+        args += ["-t", f"{span:.3f}"]
+        if progress:
+            args += ["-progress", "pipe:1", "-nostats"]
+        args.append(str(output))
+        return args
     args += ["-filter_complex", ";".join(chain), "-map", layer]
 
     if still:
