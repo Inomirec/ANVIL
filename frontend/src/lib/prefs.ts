@@ -14,6 +14,8 @@ export interface Prefs {
   loudnorm?: boolean
   mono?: boolean
   videoPreset?: string
+  /** Пресет для GIF: видео или движущийся WebP. */
+  gifPreset?: string
   audioPreset?: string
   /** Настройки сжатия картинок: формат, качество, предел размера. */
   image?: { format?: string; quality?: number; max_dimension?: number }

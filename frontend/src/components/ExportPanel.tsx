@@ -66,6 +66,22 @@ const LANGUAGES: Record<string, string> = {
   ukr: 'украинский', uk: 'украинский',
 }
 
+/**
+ * GIF можно перегнать и в видео, и в движущийся WebP — второе стоит в том же
+ * списке отдельным пресетом. Свой список у GIF нужен потому, что SIQuester
+ * считает GIF картинкой (предел 1 МБ), а видео того же движения весит в разы
+ * меньше; WebP же гифку часто раздувает.
+ */
+const GIF_WEBP: Preset = {
+  id: 'gif_webp',
+  kind: 'image',
+  label: 'Движущаяся картинка WebP',
+  hint: 'Останется картинкой, а не видео. Часто весит больше исходного GIF — видео обычно легче в разы.',
+  tech: 'WebP · качество 80',
+  accent: '',
+  options: { image: { format: 'webp', quality: 80, max_dimension: 0, effort: 4 } },
+}
+
 export function ExportPanel({
   file,
   trim,
@@ -88,9 +104,15 @@ export function ExportPanel({
   const status = useStore((state) => state.status)
 
   const isAudio = file.kind === 'audio'
+  // GIF обрабатывается как ролик: звука нет, обрезать незачем, а пресеты —
+  // видео плюс движущийся WebP.
+  const gif = file.kind === 'image' && file.ext.toLowerCase() === 'gif'
   const kindPresets: Preset[] = useMemo(
-    () => (isAudio ? presets.audio : presets.video) ?? [],
-    [presets, isAudio],
+    () =>
+      gif
+        ? [...(presets.video ?? []).filter((preset) => !preset.options.stream_copy), GIF_WEBP]
+        : ((isAudio ? presets.audio : presets.video) ?? []),
+    [presets, isAudio, gif],
   )
 
   const [presetId, setPresetId] = useState<string>('')
@@ -132,7 +154,7 @@ export function ExportPanel({
   // При первом показе (и при смене типа файла) берём пресет по умолчанию.
   useEffect(() => {
     const prefs = loadPrefs()
-    const remembered = isAudio ? prefs.audioPreset : prefs.videoPreset
+    const remembered = gif ? prefs.gifPreset : isAudio ? prefs.audioPreset : prefs.videoPreset
     const first =
       kindPresets.find((preset) => preset.id === remembered && preset.available !== false) ??
       kindPresets.find((preset) => preset.available !== false)
@@ -144,7 +166,13 @@ export function ExportPanel({
 
   function applyPreset(preset: Preset) {
     setPresetId(preset.id)
-    savePrefs(preset.kind === 'audio' ? { audioPreset: preset.id } : { videoPreset: preset.id })
+    savePrefs(
+      gif
+        ? { gifPreset: preset.id }
+        : preset.kind === 'audio'
+          ? { audioPreset: preset.id }
+          : { videoPreset: preset.id },
+    )
     if (preset.options.video) {
       // Разрешение выбирает человек отдельно — пресет отвечает только за силу
       // сжатия, поэтому его max_height мы не подхватываем.
@@ -178,6 +206,7 @@ export function ExportPanel({
   }
 
   const activePreset = kindPresets.find((preset) => preset.id === presetId)
+  const toWebp = gif && presetId === GIF_WEBP.id
 
   // Дорожки есть только у открытого файла: к отмеченным в пачке выбор не
   // применяется — у них своя разметка, и номер оттуда ничего не значит.
@@ -185,7 +214,8 @@ export function ExportPanel({
 
   const buildRequest = (source: string, withTrim: boolean) => ({
     source,
-    kind: file.kind,
+    kind: gif ? (toWebp ? ('image' as const) : ('video' as const)) : file.kind,
+    ...(toWebp ? { image: { ...GIF_WEBP.options.image, boxes: [], box_color: 'black', crop: null } } : {}),
     // Без подпапки результат кладём прямо в папку исходника.
     output_dir: intoSubfolder ? null : parentDir(source),
     trim: withTrim ? { start: trim.in, end: trim.out } : { start: null, end: null },
@@ -205,7 +235,7 @@ export function ExportPanel({
     },
     stream_copy: streamCopy,
     replace_original: deleteOriginal,
-    suffix,
+    suffix: toWebp ? '_webp' : suffix,
     preset_label: activePreset?.label,
   })
 
@@ -213,7 +243,10 @@ export function ExportPanel({
   const others = checked.filter(
     (path) =>
       path !== file.path &&
-      (files.find((item) => item.path === path)?.kind ?? '') === file.kind,
+      (files.find((item) => item.path === path)?.kind ?? '') === file.kind &&
+      // К гифке в пачку идут только гифки: обычные картинки в видео не
+      // перегоняют.
+      (!gif || path.toLowerCase().endsWith('.gif')),
   )
   // Снятая галочка означает «этот файл не трогать» — даже если он открыт.
   // Раньше открытый файл попадал в обработку всегда, и при включённом
@@ -321,7 +354,7 @@ export function ExportPanel({
     <QuietHints>
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
-        {!streamCopy && !isAudio && (
+        {!streamCopy && !isAudio && !toWebp && (
           <Section
             title="Разрешение"
             id="export.resolution"
@@ -347,9 +380,14 @@ export function ExportPanel({
         )}
 
         <Section
-          title="Пресеты сжатия"
+          title={gif ? 'Перевести GIF' : 'Пресеты сжатия'}
           id="export.presets"
           summary={activePreset?.label ?? 'свои настройки'}
+          hint={
+            gif
+              ? 'SIQuester считает GIF картинкой, а у картинок предел 1 МБ. Видео с тем же движением весит в разы меньше. Превью AV1 SIQuester не показывает — для него берите H.264.'
+              : undefined
+          }
         >
           <div className="grid gap-1.5">
             {kindPresets.map((preset) => (
@@ -418,7 +456,7 @@ export function ExportPanel({
                 hint="Высокая скорость, но в теории могут появиться незначительные артефакты. Полезно для больших видео, когда важно время."
               />
             )}
-            {tracks.length > 1 && (
+            {tracks.length > 1 && !gif && (
               <Select
                 label="Звуковая дорожка"
                 value={String(audio.track ?? 0)}
@@ -431,6 +469,8 @@ export function ExportPanel({
                 hint="В файле несколько дорожек — например, оригинал и озвучка. Программа берёт первую, если не выбрать другую."
               />
             )}
+            {!gif && (
+              <>
             <Toggle
               checked={audio.loudnorm}
               onChange={(value) => {
@@ -451,6 +491,8 @@ export function ExportPanel({
               label="Перевести звук в моно"
               hint="Делает звук более плоским, но и понижает вес файла примерно на треть."
             />
+              </>
+            )}
             <Toggle
               checked={intoSubfolder}
               onChange={(value) => {
@@ -510,7 +552,9 @@ export function ExportPanel({
       <div className="space-y-2 border-t border-line-soft bg-surface px-4 py-3">
         <div className="flex items-center justify-between text-[11px] text-ink-faint">
           <span>
-            {cutting ? (
+            {gif ? (
+              'GIF целиком'
+            ) : cutting ? (
               <>
                 Отрезок:{' '}
                 <span className="tabular-nums text-ink-dim">
@@ -528,7 +572,11 @@ export function ExportPanel({
           <Play size={15} />
           {!single
             ? `Обработать ${batch.length} ${plural(batch.length, ['файл', 'файла', 'файлов'])}`
-            : streamCopy
+            : gif
+              ? toWebp
+                ? 'Сжать в WebP'
+                : 'Перевести в видео'
+              : streamCopy
               ? 'Обрезать без сжатия'
               : 'Обрезать и сжать'}
         </Button>

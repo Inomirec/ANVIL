@@ -292,7 +292,10 @@ const JobRow = memo(function JobRow({
     // Исходник ушёл в корзину — сравнивать не с чем. Раньше кнопка
     // оставалась, а в окне сквозь пустую половину просвечивал сжатый файл,
     // и выходило, будто разницы нет вовсе.
-    !job.meta?.sourceRemoved
+    !job.meta?.sourceRemoved &&
+    // Снимок кадра — не сжатая копия ролика: сравнивать картинку с видео
+    // нечего.
+    !job.meta?.frame
 
   const statusIcon = {
     queued: <Loader2 size={13} className="text-ink-faint" />,

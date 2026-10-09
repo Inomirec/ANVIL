@@ -34,6 +34,7 @@ from pathlib import Path
 from .. import paths
 from ..models import ComposeClip, ComposeProject
 from . import anim, binaries, effects, fonts, fsutil, stabilize
+from .probe import moves as probe_moves
 from .probe import probe
 
 #: Черновой кодек: быстрее всего, что есть. Черновик живёт секунды и нужен
@@ -1061,9 +1062,18 @@ def _repeat(source: str) -> list[str]:
     открывает иначе — как ролик, — и на `-loop` отвечает «Option loop not
     found»: картинка не попадала ни в кадр, ни в сборку. Им нужен
     `-stream_loop -1` — повтор файла целиком; у движущегося GIF это заодно
-    зацикливает анимацию. Проверено на avif, gif, webp, png и jpg.
+    зацикливает анимацию.
+
+    Движущиеся WebP и PNG тоже читаются как ролик, но `-stream_loop` на них
+    зависает: вернуться к началу такой файл не умеет, и сборка не кончается
+    никогда. Повторяет их сам разборщик файла (`-ignore_loop 0`) — столько
+    раз, сколько записано в файле, у почти всех это «без конца». Проверено на
+    avif, gif, webp и png, обычных и движущихся.
     """
-    if Path(source).suffix.lower() in _STILL_SUFFIXES:
+    suffix = Path(source).suffix.lower()
+    if suffix in {".webp", ".png", ".apng"} and probe_moves(source):
+        return ["-ignore_loop", "0"]
+    if suffix in _STILL_SUFFIXES:
         return ["-loop", "1"]
     return ["-stream_loop", "-1"]
 

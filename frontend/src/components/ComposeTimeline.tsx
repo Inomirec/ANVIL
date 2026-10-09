@@ -35,6 +35,7 @@ import { SceneStrip } from './SceneStrip'
 import {
   clipEdges,
   magnets,
+  withGroups,
   dbToGain,
   gainToDb,
   MAX_DB,
@@ -44,6 +45,7 @@ import {
   MIN_DB,
   shareToVolume,
   snap,
+  snapFrame,
   trackColor,
   trackNumber,
   volumeLabel,
@@ -123,7 +125,6 @@ type Drag =
       kind: 'move'
       ids: string[]
       grab: number
-      lastAt: number
       row: number
       /** Где нажали — чтобы отличить нажатие от перетаскивания. */
       fromX: number
@@ -406,30 +407,50 @@ export function ComposeTimeline({
           if (moved >= 0) current.row = moved
         }
 
-        // Один клип липнет к соседям и к игле, у пачки прилипание только
-        // мешало бы: у каждого клипа свои края, и к чему липнуть — непонятно.
-        if (current.ids.length === 1) {
-          const found = state.findClip(current.ids[0])
-          if (!found) return
-          const points = magnets(state.tracks, current.ids, state.playhead)
-          const wanted = snap(at - current.grab, points, SNAP_PIXELS / state.scale)
-          const delta = wanted - found.clip.start
-          if (Math.abs(delta) > 1e-6) state.moveClips(current.ids, delta)
-        } else {
-          const delta = at - current.lastAt
-          if (Math.abs(delta) > 1e-6) {
-            state.moveClips(current.ids, delta)
-            current.lastAt = at
+        // Куда встаёт взятый клип — считаем от места нажатия, а не копим
+        // сдвиги по движению мыши: иначе погрешность прилипания и кадров
+        // накапливалась бы. Липнут оба края каждого клипа пачки (и звука
+        // ролика, который едет следом) — к ближайшей точке; соседи по пачке
+        // в точки не входят, иначе клип лип бы к собственному звуку и стоял
+        // на месте. Ни к чему не прилип — встаёт на кадр.
+        const anchor = state.findClip(current.ids[0])?.clip
+        if (!anchor) return
+        const family = withGroups(state.tracks, current.ids)
+        const clips = family
+          .map((id) => state.findClip(id)?.clip)
+          .filter((clip): clip is ComposeClip => Boolean(clip))
+        const points = magnets(state.tracks, family, state.playhead)
+        let shift = at - current.grab - anchor.start
+        let best = SNAP_PIXELS / state.scale
+        let pull: number | null = null
+        for (const clip of clips) {
+          for (const edge of [clip.start, clip.start + clip.duration]) {
+            for (const point of points) {
+              const gap = point - (edge + shift)
+              if (Math.abs(gap) < best) {
+                best = Math.abs(gap)
+                pull = gap
+              }
+            }
           }
         }
+        if (pull !== null) shift += pull
+        else {
+          const rate = state.fps || 30
+          shift = Math.round((anchor.start + shift) * rate) / rate - anchor.start
+        }
+        if (Math.abs(shift) > 1e-6) state.moveClips(current.ids, shift)
         return
       }
 
       const origin = current.clip
       const found = state.findClip(current.id)
       if (!found) return
-      const points = magnets(state.tracks, [current.id], state.playhead)
+      const points = magnets(state.tracks, withGroups(state.tracks, [current.id]), state.playhead)
       const nearby = SNAP_PIXELS / state.scale
+      // Края тоже встают на кадр, если не прилипли ни к чему.
+      const place = (value: number, list: number[], within: number) =>
+        snapFrame(value, list, within, state.fps)
 
       // Секунда таймлайна у ускоренного клипа — это несколько секунд файла:
       // всё, что про файл, умножаем на скорость, всё, что про таймлайн, — делим.
@@ -443,8 +464,8 @@ export function ComposeTimeline({
         const end0 = origin.start + origin.duration
         const wanted =
           current.side === 'right'
-            ? snap(at, points, nearby) - origin.start
-            : end0 - snap(at, points, nearby)
+            ? place(at, points, nearby) - origin.start
+            : end0 - place(at, points, nearby)
         const next = Math.min(MAX_SPEED, Math.max(MIN_SPEED, span / Math.max(wanted, 0.05)))
         // Круглую скорость ставим точно: ×1, ×2, ×0.5 ловятся на глаз.
         const nice = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4].find(
@@ -469,7 +490,7 @@ export function ComposeTimeline({
         const tail =
           ((origin.sourceDuration || Infinity) - (origin.sourceIn + origin.duration * speed)) / speed
         if (current.side === 'right') {
-          let end = snap(at, points, nearby)
+          let end = place(at, points, nearby)
           end = Math.max(end, origin.start + MIN_CLIP_SECONDS)
           end = Math.min(end, origin.start + origin.duration + origin.sourceIn / speed)
           const length = end - origin.start
@@ -480,7 +501,7 @@ export function ComposeTimeline({
             origin.sourceIn + (origin.duration - length) * speed,
           )
         } else {
-          let begin = snap(at, points, nearby)
+          let begin = place(at, points, nearby)
           begin = Math.min(begin, origin.start + origin.duration - MIN_CLIP_SECONDS)
           begin = Math.max(begin, origin.start - tail, 0)
           state.resizeClip(current.id, begin, origin.duration - (begin - origin.start), origin.sourceIn)
@@ -489,14 +510,14 @@ export function ComposeTimeline({
       }
 
       if (current.side === 'right') {
-        let end = snap(at, points, nearby)
+        let end = place(at, points, nearby)
         // У ролика нельзя взять больше, чем в нём есть.
         if (origin.sourceDuration) {
           end = Math.min(end, origin.start + (origin.sourceDuration - origin.sourceIn) / speed)
         }
         state.resizeClip(current.id, origin.start, end - origin.start, origin.sourceIn)
       } else {
-        let begin = snap(at, points, nearby)
+        let begin = place(at, points, nearby)
         begin = Math.min(begin, origin.start + origin.duration - MIN_CLIP_SECONDS)
         const shift = begin - origin.start
         // Тянем за левый край — у ролика вместе с началом уезжает и точка,
@@ -1070,7 +1091,7 @@ export function ComposeTimeline({
                 const at = secondsAt(event.clientX)
                 onDropFile(
                   path,
-                  snap(at, magnets(tracks, [], playhead), (SNAP_PIXELS * 2) / scale),
+                  snapFrame(at, magnets(tracks, [], playhead), (SNAP_PIXELS * 2) / scale, useCompose.getState().fps),
                   track.id,
                   { x: event.clientX, y: event.clientY },
                 )
@@ -1122,7 +1143,6 @@ export function ComposeTimeline({
                         kind: 'move',
                         ids,
                         grab: at - clip.start,
-                        lastAt: at,
                         row: rowAt(event.clientY),
                         fromX: event.clientX,
                         fromY: event.clientY,

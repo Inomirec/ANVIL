@@ -312,7 +312,8 @@ def submit_frame_grab(request: FrameGrabRequest) -> Job:
         runner=runner,
         pool="image",
         source=str(source),
-        meta={"preset": "стоп-кадр · PNG", "kind": "image"},
+        # Кадр — не сжатая копия ролика, сравнивать его с роликом нечего.
+        meta={"preset": "стоп-кадр · PNG", "kind": "image", "frame": True},
     )
 
 
@@ -381,7 +382,7 @@ def submit_compose_frame(request: ComposeSnapshotRequest, project: ComposeProjec
         title=f"{fsutil.sanitize_name(request.output_name, fallback='Кадр')}.png",
         runner=runner,
         pool="image",
-        meta={"preset": "стоп-кадр · PNG", "kind": "image"},
+        meta={"preset": "стоп-кадр · PNG", "kind": "image", "frame": True},
     )
 
 

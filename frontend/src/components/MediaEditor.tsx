@@ -20,6 +20,7 @@ import { humanSize, timecode } from '../lib/format'
 import { cutTimes, frameCode, useScenes } from '../lib/scenes'
 import type { FileInfo, FilmstripInfo } from '../lib/types'
 import { useStore } from '../store'
+import { useZoomPan } from '../lib/zoomPan'
 import { Timeline, type Fades } from './Timeline'
 import { IconButton } from './ui'
 
@@ -76,7 +77,6 @@ export function MediaEditor({
   onTrackVolumeChange: (volume: number) => void
 }) {
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null)
-  const shellRef = useRef<HTMLDivElement>(null)
 
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
@@ -98,6 +98,9 @@ export function MediaEditor({
   const setQueueOpen = useStore((state) => state.setQueueOpen)
 
   const isVideo = file.kind === 'video'
+  // Колесо над кадром приближает его, зажатое колесо таскает: мелкую надпись
+  // или край кадра иначе не разглядеть. На готовый файл не влияет.
+  const zoom = useZoomPan(file.path, isVideo ? 8 : 1)
 
   /**
    * Метки должны существовать сразу, а не появляться после нажатия I/O:
@@ -382,9 +385,20 @@ export function MediaEditor({
     <div className="flex h-full min-h-0 flex-col gap-3">
       {/* Область просмотра */}
       <div
-        ref={shellRef}
+        ref={zoom.shell}
+        onMouseDown={zoom.onMouseDown}
         className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-black ring-1 ring-line-soft"
       >
+        {zoom.view !== 1 && (
+          <button
+            type="button"
+            onClick={zoom.reset}
+            title="Кадр приближен — на готовый файл это не влияет. Нажмите, чтобы вернуть обычный размер."
+            className="absolute right-2 top-2 z-10 rounded-lg bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
+          >
+            {Math.round(zoom.view * 100)}%
+          </button>
+        )}
         {!file.playable && (
           <div className="absolute inset-x-0 top-0 z-10 bg-warn/15 px-4 py-2 text-center text-[12px] text-warn">
             Формат «.{file.ext}» не показывается в предпросмотре. Обработать файл
@@ -398,6 +412,7 @@ export function MediaEditor({
             ref={mediaRef as React.RefObject<HTMLVideoElement>}
             src={mediaUrl(file.path)}
             className="max-h-full max-w-full"
+            style={{ transform: zoom.transform }}
             onLoadedMetadata={(event) => {
               const total = event.currentTarget.duration || 0
               setDuration(total)

@@ -7,8 +7,9 @@ import { ComposeTab } from './components/ComposeTab'
 import { DownloadPanel } from './components/DownloadPanel'
 import { ExportPanel } from './components/ExportPanel'
 import { FolderPicker } from './components/FolderPicker'
+import { GifView } from './components/GifView'
 import { ImageEditor, ImagePanel, emptyImageEdit, type ImageEdit } from './components/ImageEditor'
-import type { ImagePreview } from './lib/types'
+import type { FileInfo, ImagePreview } from './lib/types'
 import { JobQueue } from './components/JobQueue'
 import { MediaEditor, type TrimState } from './components/MediaEditor'
 import { emptyFades, type Fades } from './components/Timeline'
@@ -206,7 +207,9 @@ export default function App() {
             </div>
           ) : activeInfo ? (
             <div className="h-full p-4">
-              {activeInfo.kind === 'image' ? (
+              {isGif(activeInfo) ? (
+                <GifView file={activeInfo} />
+              ) : activeInfo.kind === 'image' ? (
                 <ImageEditor
                   file={activeInfo}
                   edit={imageEdit}
@@ -237,7 +240,7 @@ export default function App() {
         {/* Правая панель настроек экспорта */}
         {tab === 'library' && activeInfo && (
           <aside className="flex w-[340px] shrink-0 flex-col border-l border-line-soft bg-surface">
-            {activeInfo.kind === 'image' ? (
+            {activeInfo.kind === 'image' && !isGif(activeInfo) ? (
               <ImagePanel
                 key={activeInfo.path}
                 file={activeInfo}
@@ -331,4 +334,9 @@ function TabButton({
       {label}
     </button>
   )
+}
+
+/** GIF перегоняют в видео — у него своя панель, а не панель картинок. */
+function isGif(file: FileInfo): boolean {
+  return file.kind === 'image' && file.ext.toLowerCase() === 'gif'
 }

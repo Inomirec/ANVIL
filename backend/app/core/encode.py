@@ -64,6 +64,13 @@ def build_video_filters(
                 "scale=-2:" + f"'min({options.max_height},ih)'" + ":flags=lanczos"
             )
 
+    scaled = any(item.startswith("scale=") for item in filters)
+    if not scaled and info and info.video and (info.video.width % 2 or info.video.height % 2):
+        # Цвет в видео живёт на вдвое меньшей сетке, и кодировщик отказывается
+        # от кадра с нечётной стороной. У роликов так почти не бывает, а у
+        # GIF, которые перегоняют в видео, — сплошь и рядом.
+        filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
+
     if options.max_fps > 0:
         source_fps = info.video.fps if info and info.video else None
         # Темп уже умножает фактический fps, учитываем это при сравнении.

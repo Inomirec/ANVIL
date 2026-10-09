@@ -1056,7 +1056,7 @@ function crowdedUnder(
 }
 
 /** Дополняет выбор соседями по группе. */
-function withGroups(tracks: ComposeTrack[], ids: string[]): string[] {
+export function withGroups(tracks: ComposeTrack[], ids: string[]): string[] {
   const all = tracks.flatMap((track) => track.clips)
   const links = new Set(
     all.filter((clip) => ids.includes(clip.id)).map((clip) => clip.groupId).filter(Boolean),
@@ -2492,6 +2492,18 @@ export function clipEdges(tracks: ComposeTrack[]): number[] {
     for (const clip of track.clips) points.push(clip.start, clip.start + clip.duration)
   }
   return points
+}
+
+/**
+ * Липнет к ближайшей точке, а не нашлось рядом ни одной — встаёт на кадр:
+ * клип, начинающийся посреди кадра, на готовом видео сдвигается на этот кадр
+ * сам, и выровненное на глаз расходится.
+ */
+export function snapFrame(value: number, points: number[], within: number, fps: number): number {
+  const stuck = snap(value, points, within)
+  if (stuck !== value) return stuck
+  const rate = fps || 30
+  return Math.round(value * rate) / rate
 }
 
 export function snap(value: number, points: number[], within: number): number {
