@@ -20,6 +20,7 @@ ffmpeg на число вне шкалы отвечает отказом соб�
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass
 from typing import Callable
@@ -65,7 +66,7 @@ def _escaped(path: str) -> str:
     return path.replace(BACKSLASH, "/").replace(":", BACKSLASH * 2 + ":")
 
 
-def _command_file(lines: list[tuple[float, str]]) -> str:
+def command_file(lines: list[tuple[float, str]]) -> str:
     """Файл с командами для ``sendcmd``, путь уже подготовлен для фильтра.
 
     Командами меняют настройки фильтров, которые формулой от времени не
@@ -159,7 +160,7 @@ def _video_effect(
                 clip, field(param), f"{filter_name}@{name}", option,
                 skip=timing.skip, take=timing.take, fps=timing.fps, scale=convert,
             )
-        return f"sendcmd=f={_command_file(lines)},"
+        return f"sendcmd=f={command_file(lines)},"
 
     if kind == "delogo":
         return _delogo(effect, clip, preview)
@@ -429,13 +430,28 @@ def mask_size(clip: ComposeClip) -> tuple[int, int]:
     return width, height
 
 
+def feather_animated(clip: ComposeClip) -> bool:
+    """Мягкость края маски меняется по ключам.
+
+    Тогда картинка формы рисуется резкой, а мягкий край даёт размытие уже
+    собранной маски — его силу можно менять на каждом кадре командой.
+    """
+    return has_mask(clip) and anim.animated(clip, "mask.feather")
+
+
+def _feather(clip: ComposeClip) -> float:
+    """Мягкость, нарисованная в самой картинке формы."""
+    assert clip.mask is not None
+    return 0.0 if feather_animated(clip) else clip.mask.feather
+
+
 def mask_margin(clip: ComposeClip) -> tuple[float, float]:
     """Запас вокруг формы на картинке маски — под мягкий край, в долях формы."""
     assert clip.mask is not None
     width, height = mask_size(clip)
     box_w = max(clip.mask.w * width, 2.0)
     box_h = max(clip.mask.h * height, 2.0)
-    soft = clip.mask.feather * min(box_w, box_h) / 2
+    soft = _feather(clip) * min(box_w, box_h) / 2
     return soft / box_w, soft / box_h
 
 
@@ -462,7 +478,8 @@ def shape_render(clip: ComposeClip) -> tuple[tuple[int, int], str, float]:
     left, top = px * box_w, py * box_h
     hw, hh = box_w / 2, box_h / 2
     cx, cy = left + hw, top + hh
-    soft = max(0.5, m.feather * min(hw, hh))
+    feather = _feather(clip)
+    soft = max(0.5, feather * min(hw, hh))
     if m.shape == "custom" and len(m.points) >= 3:
         points = [
             (left + min(1.2, max(-0.2, u)) * box_w, top + min(1.2, max(-0.2, v)) * box_h)
@@ -477,7 +494,7 @@ def shape_render(clip: ComposeClip) -> tuple[tuple[int, int], str, float]:
                 f"*lt(X+0.5,{(xj - xi) / (yj - yi):.5f}*(Y+0.5-{yi:.2f})+{xi:.2f})"
             )
         inside = f"mod({'+'.join(terms) or '0'},2)"
-        return (full_w, full_h), f"255*{inside}", (soft / 2.5 if m.feather > 0 else 0.0)
+        return (full_w, full_h), f"255*{inside}", (soft / 2.5 if feather > 0 else 0.0)
     if m.shape == "ellipse":
         distance = f"(hypot((X-{cx:.2f})/{hw:.2f},(Y-{cy:.2f})/{hh:.2f})-1)*{min(hw, hh):.2f}"
     else:
@@ -594,7 +611,7 @@ def clip_graph(
             # размера клипа, мягкий край — размытием, и только наружу:
             # удвоенная яркость размытого края внутри формы снова белая.
             box = min(mask.w * width, mask.h * height)
-            sigma = mask.feather * box / 2 / 2.5
+            sigma = _feather(clip) * box / 2 / 2.5
             soft = f",gblur=sigma={sigma:.2f},lut=c0='min(255,2*val)'" if sigma > 0.3 else ""
             parts.append(
                 f"{shape}setpts=PTS-STARTPTS,format=gray,scale={width}:{height}:flags=bilinear{soft}[{tag}m]"
@@ -614,11 +631,35 @@ def clip_graph(
                 f"[{tag}mb][{tag}ms]overlay=x='W*({anim.expression(clip, 'mask.x', moment)})-w/2'"
                 f":y='H*({anim.expression(clip, 'mask.y', moment)})-h/2':eval=frame,format=gray[{tag}m]"
             )
+        if feather_animated(clip):
+            # Мягкий край по ключам: размываем уже собранную маску, силу
+            # размытия шлёт sendcmd на каждый кадр. Удвоенная яркость
+            # оставляет край мягким только снаружи, как и без ключей.
+            lines: list[tuple[float, str]] = []
+            last = ""
+            for number in range(max(1, int(math.ceil(timing.take * timing.fps)) + 1)):
+                local = number / timing.fps + timing.skip
+                box = min(
+                    anim.value_at(clip, "mask.w", local) * width,
+                    anim.value_at(clip, "mask.h", local) * height,
+                )
+                sigma = f"{max(0.01, anim.value_at(clip, 'mask.feather', local) * box / 2 / 2.5):.2f}"
+                if sigma != last:
+                    lines.append((number / timing.fps, f"gblur@{tag}mg sigma {sigma}"))
+                    last = sigma
+            first = lines[0][1].rsplit(" ", 1)[1]
+            parts.append(
+                f"[{tag}m]sendcmd=f={command_file(lines)},gblur@{tag}mg=sigma={first},"
+                f"lut=c0='min(255,2*val)'[{tag}mf]"
+            )
+            matte = f"[{tag}mf]"
+        else:
+            matte = f"[{tag}m]"
         if len(uses) == 2:
-            parts.append(f"[{tag}m]split[{tag}mfx][{tag}mvis]")
+            parts.append(f"{matte}split[{tag}mfx][{tag}mvis]")
             matte_for = {"fx": f"[{tag}mfx]", "vis": f"[{tag}mvis]"}
         else:
-            matte_for = {uses[0]: f"[{tag}m]"}
+            matte_for = {uses[0]: matte}
 
         if "fx" in matte_for:
             parts.append(f"{current}split[{tag}o][{tag}e]")

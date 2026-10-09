@@ -685,8 +685,11 @@ interface State extends Saved {
   /** Выбранные ключи на таймлайне: у какого клипа, какой группы, какие времена. */
   selectedKeys: { clipId: string; group: string; times: number[] } | null
   selectKeys: (selection: { clipId: string; group: string; times: number[] } | null) => void
-  /** Сдвинуть ключи группы, стоящие в ``times``, на ``delta`` секунд. */
-  moveKeys: (id: string, group: string, times: number[], delta: number) => void
+  /**
+   * Сдвинуть ключи группы, стоящие в ``times``, на ``delta`` секунд. Вернёт,
+   * на сколько сдвинулось на самом деле: за края клипа ключи не уходят.
+   */
+  moveKeys: (id: string, group: string, times: number[], delta: number) => number
   /** Удалить выбранные ключи. */
   deleteKeys: () => void
   /** Скопировать выбранные ключи; вернёт, сколько скопировано. */
@@ -2012,7 +2015,9 @@ export const useCompose = create<State>((set, get) => ({
     const touched = new Map<string, Record<string, AnimValue>>()
     for (const [field, value] of Object.entries(values)) {
       const groupId =
-        field === 'x' || field === 'y'
+        field === 'opacity' || field === 'fontSize'
+          ? field
+          : field === 'x' || field === 'y'
           ? 'position'
           : field === 'size' || field === 'sizeY'
             ? 'size'
@@ -2047,6 +2052,8 @@ export const useCompose = create<State>((set, get) => ({
       cropTop: next.cropTop,
       cropRight: next.cropRight,
       cropBottom: next.cropBottom,
+      opacity: next.opacity,
+      ...(next.kind === 'text' ? { fontSize: next.fontSize } : {}),
       mask: next.mask,
       effects: next.effects,
       anim: next.anim,
@@ -2100,7 +2107,12 @@ export const useCompose = create<State>((set, get) => ({
   moveKeys(id, groupId, times, delta) {
     const clip = get().findClip(id)?.clip
     const group = clip && groupOf(clip, groupId)
-    if (!clip || !group || !delta) return
+    if (!clip || !group || !delta || !times.length) return 0
+    // Ключ за краем клипа не виден и не действует так, как его ставили, —
+    // увести его туда значило бы потерять: ни выбрать, ни удалить. Пачка
+    // упирается в край целиком, сохраняя расстояния между ключами.
+    delta = Math.min(Math.max(delta, -Math.min(...times)), clip.duration - Math.max(...times))
+    if (Math.abs(delta) < 1e-6) return 0
     const near = (t: number) => times.some((time) => Math.abs(time - t) < KEY_NEAR / 2)
     const anim: Anim = { ...(clip.anim ?? {}) }
     for (const field of group.fields) {
@@ -2113,6 +2125,7 @@ export const useCompose = create<State>((set, get) => ({
       anim[field] = [...staying, ...moving.map((key) => ({ ...key, t: key.t + delta }))].sort((a, b) => a.t - b.t)
     }
     get().updateClip(id, { anim })
+    return delta
   },
 
   deleteKeys() {
@@ -2177,7 +2190,10 @@ export const useCompose = create<State>((set, get) => ({
     const anim: Anim = { ...(clip.anim ?? {}) }
     const sources = Object.values(copy.fields)
     group.fields.forEach((field, index) => {
-      const pasted = (copy.fields[field] ?? sources[index] ?? []).map((key) => ({ ...key, t: key.t + at }))
+      // Что не помещается в клип, не вставляем: за его краем ключ не виден.
+      const pasted = (copy.fields[field] ?? sources[index] ?? [])
+        .map((key) => ({ ...key, t: key.t + at }))
+        .filter((key) => key.t >= -1e-3 && key.t <= clip.duration + 1e-3)
       if (!pasted.length) return
       const clash = (t: number) => pasted.some((key) => Math.abs(key.t - t) < KEY_NEAR / 2)
       anim[field] = [...(anim[field] ?? []).filter((key) => !clash(key.t)), ...pasted].sort((a, b) => a.t - b.t)

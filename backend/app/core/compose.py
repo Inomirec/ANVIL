@@ -98,10 +98,20 @@ def clips_at(project: ComposeProject, at: float, span: float) -> list[tuple[int,
                 # правим сам клип: тогда сборку можно звать сколько угодно раз
                 # подряд, и громкость не будет умножаться сама на себя.
                 if track.level != 1.0:
-                    clip = clip.model_copy(update={
+                    update = {
                         "volume": min(4.0, clip.volume * track.level),
                         "opacity": min(1.0, clip.opacity * track.level),
-                    })
+                    }
+                    if clip.anim.get("opacity"):
+                        # Ключи непрозрачности — тоже на уровень дорожки.
+                        update["anim"] = {
+                            **clip.anim,
+                            "opacity": [
+                                key.model_copy(update={"v": min(1.0, key.v * track.level)})
+                                for key in clip.anim["opacity"]
+                            ],
+                        }
+                    clip = clip.model_copy(update=update)
                 found.append((layer, clip))
     found.sort(key=lambda item: (-item[0], item[1].start))
     return found
@@ -365,12 +375,19 @@ def text_filter(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
     Размеры считаем от высоты кадра, а не в пикселях: тот же монтаж,
     переведённый с 720p на 1080p, должен выглядеть так же, а не втрое мельче.
     """
-    size = max(1, round(height * clip.font_size))
+    # Слой надписи начинается с начала прочитанного куска, ``skip`` — сколько
+    # клипа прошло до него: от этого считаются ключи.
+    moment = f"(t+{skip:.4f})"
     where = fonts.path_for(clip.font, clip.bold, clip.italic)
     parts = [f"textfile={_escaped(str(text_file(clip.text)))}"]
     if where:
         parts.append(f"fontfile={_escaped(where)}")
-    parts.append(f"fontsize={size}")
+    if anim.animated(clip, "fontSize"):
+        # Размер по ключам — формулой от времени: drawtext пересчитывает её
+        # на каждом кадре. Надпись растёт от своей середины.
+        parts.append(f"fontsize='max(1,{height}*({anim.expression(clip, 'fontSize', moment)}))'")
+    else:
+        parts.append(f"fontsize={max(1, round(height * clip.font_size))}")
     parts.append(f"fontcolor={_colour(clip.text_color)}")
 
     # Строки между собой равняются по середине: у субтитров в две строки
@@ -400,9 +417,7 @@ def text_filter(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
 
     # Куда встанет надпись. x и y клипа — это её середина в долях кадра, так
     # же как у картинок: человек двигает текст той же рамкой.
-    # По ключам место меняется формулой от времени: слой надписи начинается
-    # с начала прочитанного куска, ``skip`` — сколько клипа прошло до него.
-    moment = f"(t+{skip:.4f})"
+    # По ключам место меняется формулой от времени.
     middle_x = f"w*({anim.expression(clip, 'x', moment)})"
     middle_y = f"h*({anim.expression(clip, 'y', moment)})"
     if clip.align == "left":
@@ -661,7 +676,7 @@ def frame_alpha(clip: ComposeClip, moment: float) -> float:
     правильно. Поэтому для кадра считаем прозрачность прямо: где игла — такая
     и видимость.
     """
-    alpha = clip.opacity
+    alpha = anim.value_at(clip, "opacity", moment - clip.start)
     if clip.fade_in > 0:
         passed = moment - clip.start
         if passed < clip.fade_in:
@@ -673,17 +688,25 @@ def frame_alpha(clip: ComposeClip, moment: float) -> float:
     return max(0.0, min(1.0, alpha))
 
 
-def video_fades(clip: ComposeClip, at: float, take: float, *, moment: float | None = None) -> str:
+def video_fades(
+    clip: ComposeClip,
+    at: float,
+    take: float,
+    *,
+    moment: float | None = None,
+    fps: int = 25,
+    tag: str = "o",
+) -> str:
     """Появление и уход картинки; ``moment`` — для одиночного кадра."""
     if moment is not None:
         alpha = frame_alpha(clip, moment)
         if alpha >= 1.0:
             return ""
         return f",format=yuva420p,colorchannelmixer=aa={alpha:.4g}"
-    return _video_fade_filters(clip, at, take)
+    return _video_fade_filters(clip, at, take, fps, tag)
 
 
-def _video_fade_filters(clip: ComposeClip, at: float, take: float) -> str:
+def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: int = 25, tag: str = "o") -> str:
     """Появление и уход картинки по краям клипа.
 
     Затухание делаем по прозрачности (``alpha=1``), а не в чёрный: под нижним
@@ -706,7 +729,19 @@ def _video_fade_filters(clip: ComposeClip, at: float, take: float) -> str:
             )
 
     # Полупрозрачный клип — тот же канал прозрачности, только постоянный.
-    if clip.opacity < 1.0:
+    if anim.animated(clip, "opacity"):
+        # По ключам: формулу от времени colorchannelmixer не понимает, но
+        # слушает команды — значение на каждый кадр шлёт sendcmd.
+        lines = anim.commands(
+            clip, "opacity", f"colorchannelmixer@{tag}", "aa",
+            skip=skip, take=take, fps=fps,
+            scale=lambda value: min(1.0, max(0.0, value)),
+        )
+        first = min(1.0, max(0.0, anim.value_at(clip, "opacity", skip)))
+        parts.append(
+            f"sendcmd=f={effects.command_file(lines)},colorchannelmixer@{tag}=aa={first:.3f}"
+        )
+    elif clip.opacity < 1.0:
         parts.append(f"colorchannelmixer=aa={clip.opacity:.3g}")
 
     if not parts:
@@ -862,7 +897,9 @@ def build_segment(
             inputs += ["-ss", f"{seek:.4f}", "-t", f"{take * clip.speed:.3f}", "-i", source]
 
         if clip.kind != "audio" and not audio_only:
-            fades = video_fades(clip, at, take, moment=at if still else None)
+            fades = video_fades(
+                clip, at, take, moment=at if still else None, fps=fps, tag=f"op{index}"
+            )
             # Откуда берётся картинка клипа. Обычно — прямо со входа, через
             # линейную цепочку фильтров. С маской — через отдельный граф: у
             # маски свой вход, а её номер станет известен, когда соберутся все

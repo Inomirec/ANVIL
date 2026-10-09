@@ -349,6 +349,8 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) 
     updateClip(clip.id, { mask: { ...mask, ...patch } })
   }
   const effects = (clip.effects ?? []).some((effect) => effect.on)
+  const playhead = useCompose((state) => state.playhead)
+  const applyValues = useCompose((state) => state.applyValues)
 
   if (!mask) {
     // Маски ещё нет — карточка с одной кнопкой: так её место в колонке
@@ -371,6 +373,9 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) 
       </Card>
     )
   }
+
+  // Мягкость края — с ключами маски, поэтому показываем ту, что под иглой.
+  const shown = shownAt(clip, playhead).mask ?? mask
 
   const choice = (
     label: string,
@@ -479,7 +484,7 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) 
         <SliderNumber
           stacked
           label="Мягкость края"
-          value={Math.round(mask.feather * 100)}
+          value={Math.round(shown.feather * 100)}
           min={0}
           max={100}
           unit="%"
@@ -489,7 +494,8 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) 
             { value: 15, label: 'обычно' },
             { value: 50, label: 'мягко' },
           ]}
-          onChange={(next) => updateClip(clip.id, { mask: { ...mask, feather: next / 100 } })}
+          // Мягкость — часть ключей маски: часики у карточки.
+          onChange={(next) => applyValues(clip.id, { 'mask.feather': next / 100 })}
         />
       </div>
     </Card>

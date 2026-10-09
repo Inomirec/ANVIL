@@ -29,7 +29,7 @@ import {
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
 import { cutTimes, frameCode, scenesOf, useScenes } from '../lib/scenes'
-import { groupOf, hasKeys, hasPlaceKeys, KEY_NEAR, keyTimes } from '../composeAnim'
+import { groupOf, hasKeys, hasPlaceKeys, KEY_NEAR, keyTimes, valueAt } from '../composeAnim'
 import { KeyBar } from './ComposeAnimUi'
 import { SceneStrip } from './SceneStrip'
 import {
@@ -365,10 +365,10 @@ export function ComposeTimeline({
         const share = Math.min(1, Math.max(0, 1 - (event.clientY - current.top) / current.height))
         const clip = state.findClip(current.id)?.clip
         if (clip) {
-          state.updateClip(
-            current.id,
-            clip.kind === 'audio' ? { volume: shareToVolume(share) } : { opacity: share },
-          )
+          // Непрозрачность бывает с ключами — тогда правка ложится в ключ
+          // под иглой, как и в колонке справа.
+          if (clip.kind === 'audio') state.updateClip(current.id, { volume: shareToVolume(share) })
+          else state.applyValues(current.id, { opacity: share })
         }
         return
       }
@@ -2163,7 +2163,12 @@ function ClipBox({
   // Сжатая дорожка: подписи и уголки в неё не помещаются.
   const short = height < TRACK_HEIGHT
   // У звука линия показывает громкость, у картинки — насколько она видна.
-  const level = sound ? volumeShare(clip.volume) : clip.opacity
+  // С ключами непрозрачность меняется по клипу: линия идёт кривой, а
+  // тянется она там, где стоит игла.
+  const fading = !sound && (clip.anim?.opacity?.length ?? 0) > 0
+  const playhead = useCompose((state) => (fading ? state.playhead : 0))
+  const local = Math.min(Math.max(playhead - clip.start, 0), clip.duration)
+  const level = sound ? volumeShare(clip.volume) : fading ? valueAt(clip, 'opacity', local) : clip.opacity
   // На сжатой дорожке клип высотой с полтора десятка пикселей, и всё, за
   // что его можно потянуть, лежит друг на друге: целясь в середину, попадаешь
   // то в затухание, то в громкость. Поэтому у сжатого клипа остаётся только
@@ -2214,9 +2219,11 @@ function ClipBox({
       const wanted = Math.round((moved.clientX - fromX) / now.scale / frame) * frame
       const step = wanted - applied
       if (Math.abs(step) < frame / 2) return
-      now.moveKeys(clip.id, focusGroup.id, times, step)
-      times = times.map((time) => time + step)
-      applied = wanted
+      // У края клипа ключи упираются: сдвиг бывает меньше просимого.
+      const shifted = now.moveKeys(clip.id, focusGroup.id, times, step)
+      if (!shifted) return
+      times = times.map((time) => time + shifted)
+      applied += shifted
       now.selectKeys({ clipId: clip.id, group: focusGroup.id, times })
     }
     const up = () => {
@@ -2315,6 +2322,30 @@ function ClipBox({
               />
             )
           })}
+      {/* Ключи за краем клипа — после обрезки или разреза они остаются на
+          своих кадрах ролика. Сами не видны, поэтому у края — бледная
+          пометка: иначе непонятно, откуда движение до первого ромбика. */}
+      {active &&
+        focusGroup &&
+        (['left', 'right'] as const).map((side) => {
+          const count = keyTimes(clip, focusGroup).filter((t) =>
+            side === 'left' ? t < -1e-3 : t > clip.duration + 1e-3,
+          ).length
+          if (!count) return null
+          return (
+            <span
+              key={side}
+              title={`${focusGroup.label}: ${count} ${plural(count, ['ключ', 'ключа', 'ключей'])} за ${
+                side === 'left' ? 'началом' : 'концом'
+              } клипа — остались на своих кадрах после обрезки. Растяните клип в эту сторону, чтобы их увидеть и поправить`}
+              className={`absolute bottom-0 z-10 px-0.5 font-mono text-[10px] leading-[14px] text-accent-soft/70 ${
+                side === 'left' ? 'left-0' : 'right-0'
+              }`}
+            >
+              {side === 'left' ? '◂◆' : '◆▸'}
+            </span>
+          )
+        })}
       {lost && (
         <div
           className="absolute inset-0 bg-[repeating-linear-gradient(135deg,rgba(239,68,68,0.35)_0_6px,transparent_6px_12px)]"
@@ -2341,10 +2372,30 @@ function ClipBox({
       {/* Шторка приглушена, пока её не трогали: пока громкость обычная, она
           ничего не сообщает, а внимание забирает. Стоит увести её вниз — она
           проступает вместе с подписью. */}
+      {fading && (
+        <svg
+          className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+          viewBox={`0 0 ${box} 100`}
+          preserveAspectRatio="none"
+        >
+          <polyline
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+            className="text-accent-soft"
+            points={Array.from({ length: Math.max(2, Math.ceil(box / 4)) + 1 }, (_, index) => {
+              const x = Math.min(index * 4, box)
+              const value = valueAt(clip, 'opacity', (x / box) * clip.duration)
+              return `${x.toFixed(1)},${((1 - value) * 100).toFixed(2)}`
+            }).join(' ')}
+          />
+        </svg>
+      )}
       {short ? (
         // На сжатой дорожке шторку не тянут, но уровень всё равно показываем:
         // иначе приглушённый клип ничем не отличается от обычного.
-        level < 1 && (
+        level < 1 && !fading && (
           <div
             className={`pointer-events-none absolute inset-x-0 h-[2px] ${
               sound ? 'bg-ok/70' : 'bg-accent-soft/70'
@@ -2359,7 +2410,9 @@ function ClipBox({
         title={
           sound
             ? `Громкость ${volumeLabel(clip.volume)} — тяните вверх или вниз`
-            : `Непрозрачность ${Math.round(level * 100)}% — тяните вверх или вниз`
+            : fading
+              ? `Непрозрачность под иглой ${Math.round(level * 100)}% — меняется по ключам. Тяните вверх или вниз: правка ляжет в ключ под иглой`
+              : `Непрозрачность ${Math.round(level * 100)}% — тяните вверх или вниз`
         }
         onMouseDown={(event) => {
           event.stopPropagation()
@@ -2371,7 +2424,9 @@ function ClipBox({
           className={`mt-[3px] h-[3px] w-full transition-opacity ${
             sound ? 'bg-ok/90' : 'bg-accent-soft/90'
           } ${
-            level >= 1
+            fading
+              ? 'opacity-0 group-hover/level:opacity-60'
+              : level >= 1
               ? 'opacity-20 group-hover/level:opacity-90 group-hover:opacity-60'
               : 'opacity-100'
           }`}

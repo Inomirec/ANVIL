@@ -49,7 +49,7 @@ export interface AnimGroup {
 }
 
 export const CROP_FIELDS = ['cropLeft', 'cropTop', 'cropRight', 'cropBottom']
-export const MASK_FIELDS = ['mask.x', 'mask.y', 'mask.w', 'mask.h']
+export const MASK_FIELDS = ['mask.x', 'mask.y', 'mask.w', 'mask.h', 'mask.feather']
 
 /** Какие группы есть у клипа — от вида клипа, маски и эффектов. */
 export function groupsOf(clip: ComposeClip): AnimGroup[] {
@@ -61,6 +61,8 @@ export function groupsOf(clip: ComposeClip): AnimGroup[] {
   if (visual || clip.kind === 'color') {
     groups.push({ id: 'size', label: 'Размер', fields: ['size', 'sizeY'] })
   }
+  if (clip.kind === 'text') groups.push({ id: 'fontSize', label: 'Размер текста', fields: ['fontSize'] })
+  if (clip.kind !== 'audio') groups.push({ id: 'opacity', label: 'Непрозрачность', fields: ['opacity'] })
   if (visual) groups.push({ id: 'crop', label: 'Обрезка', fields: CROP_FIELDS, auto: true })
   if (visual && clip.mask) {
     // У своей формы по ключам меняются и сами точки — форма может меняться.
@@ -99,7 +101,10 @@ export function fieldValue(clip: ComposeClip, field: string): number {
     return Number(raw) || 0
   }
   const value = (clip as unknown as Record<string, unknown>)[field]
-  return typeof value === 'number' ? value : 0
+  if (typeof value === 'number') return value
+  // Без записанного значения — умолчания клипа, а не ноль: иначе первый
+  // ключ сделал бы надпись невидимо мелкой, а клип — прозрачным.
+  return field === 'fontSize' ? 0.07 : field === 'opacity' ? 1 : 0
 }
 
 function sorted(clip: ComposeClip, field: string): AnimKey[] {

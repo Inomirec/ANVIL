@@ -136,6 +136,16 @@ export function PlaceFields({ clip, size = true }: { clip: ComposeClip; size?: b
           />
         </>,
       )}
+      {row(
+        'opacity',
+        'Видимость',
+        <NumberBox
+          value={now.opacity * 100}
+          unit="%"
+          title="Непрозрачность клипа: 100 — виден целиком, 0 — не виден вовсе"
+          onDone={(value) => applyValues(clip.id, { opacity: Math.min(100, Math.max(0, value)) / 100 })}
+        />,
+      )}
       {size &&
         row(
           'size',

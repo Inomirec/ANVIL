@@ -1,4 +1,5 @@
-import { PlaceFields } from './ComposeAnimUi'
+import { AnimClock, PlaceFields } from './ComposeAnimUi'
+import { shownAt } from '../composeAnim'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlignCenter,
@@ -507,6 +508,9 @@ function TextBox({ value, onChange }: { value: string; onChange: (value: string)
 export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
   const updateClip = useCompose((state) => state.updateClip)
   const height = useCompose((state) => state.height)
+  const playhead = useCompose((state) => state.playhead)
+  const applyValues = useCompose((state) => state.applyValues)
+  const mark = useCompose((state) => state.mark)
   const [fonts, setFonts] = useState<FontRow[] | null>(null)
 
   useEffect(() => {
@@ -550,7 +554,15 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
         <div className="min-w-0 flex-1">
           <FontPicker value={v.font} fonts={fonts} onChange={(name) => put({ font: name })} />
         </div>
-        <SizeField pixels={Math.round(v.fontSize * height)} onChange={(value) => put({ fontSize: fraction(value) })} />
+        {/* Размер букв меняется и по ключам: часики рядом с полем. */}
+        <SizeField
+          pixels={Math.round(shownAt(v, playhead).fontSize! * height)}
+          onChange={(value) => {
+            mark()
+            applyValues(clip.id, { fontSize: fraction(value) })
+          }}
+        />
+        <AnimClock clip={clip} group="fontSize" />
       </div>
 
       {/* Цвет, начертание и выравнивание — одной строкой значков. */}
