@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { TEXT_DEFAULTS, useCompose, type ComposeClip } from '../composeStore'
 import { guidesOf, stick, type GridKind } from './ComposeFrameBox'
@@ -110,6 +110,40 @@ function useFace(name: string, bold: boolean, italic: boolean): LoadedFace | nul
   return face
 }
 
+/** Холст для замеров букв — один на всё окно. */
+let ruler: CanvasRenderingContext2D | null = null
+
+/**
+ * На сколько сдвинуть надпись вниз, чтобы посередине стояли сами буквы.
+ *
+ * Программа (`drawtext`) ставит в y середину нарисованных букв — от верха
+ * первой строки до низа последней. Окно же ставит туда середину строк
+ * шрифта, а буквы сидят в строке по-своему у каждого шрифта: у Arial почти
+ * посередине, у узких заголовочных — заметно ниже. Поэтому меряем буквы на
+ * холсте тем же шрифтом и выносим разницу. Строку браузер раскладывает по
+ * тем же меркам шрифта, что отдаёт холст (`fontBoundingBox…`).
+ */
+function inkShift(element: HTMLElement, text: string): number {
+  const style = getComputedStyle(element)
+  const size = parseFloat(style.fontSize)
+  const line = parseFloat(style.lineHeight)
+  if (!size || !line) return 0
+  ruler ??= document.createElement('canvas').getContext('2d')
+  if (!ruler) return 0
+  ruler.font = `${style.fontStyle} ${style.fontWeight} ${size}px ${style.fontFamily}`
+  const lines = text.split('\n')
+  const first = ruler.measureText(lines[0] || ' ')
+  const last = ruler.measureText(lines[lines.length - 1] || ' ')
+  const ascent = first.fontBoundingBoxAscent
+  const descent = first.fontBoundingBoxDescent
+  // Первая черта строки — от верха строк: половина запаса строки плюс
+  // высота шрифта над чертой.
+  const baseline = (line - (ascent + descent)) / 2 + ascent
+  const top = baseline - first.actualBoundingBoxAscent
+  const bottom = baseline + (lines.length - 1) * line + last.actualBoundingBoxDescent
+  return (line * lines.length) / 2 - (top + bottom) / 2
+}
+
 export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: GridKind }) {
   const box = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLDivElement>(null)
@@ -126,6 +160,15 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
 
   const v = { ...TEXT_DEFAULTS, ...clip }
   const face = useFace(v.font, v.bold, v.italic)
+
+  // Сдвиг до середины букв — меряем после каждой отрисовки: он зависит от
+  // текста, шрифта и размера, а шрифт приходит не сразу.
+  const [lift, setLift] = useState(0)
+  useLayoutEffect(() => {
+    if (!field.current) return
+    const next = inkShift(field.current, v.text)
+    if (Math.abs(next - lift) > 0.05) setLift(next)
+  })
 
   // Текст в поле ставим сами и только когда он пришёл снаружи: сменили клип,
   // отменили правку. Перезаписывать поле на каждую набранную букву нельзя —
@@ -236,6 +279,7 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
       style={{
         left: `calc(${v.x * 100}% + ${nudge})`,
         top: `${v.y * 100}%`,
+        marginTop: lift,
         transform: `translate(${shiftX}, -50%)`,
         // Рамка чуть шире букв: за неё надпись и таскают, когда в неё уже
         // пишут и нажатие внутри ставит курсор.
