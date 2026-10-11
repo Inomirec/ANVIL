@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react'
+import { useHandles } from '../lib/handles'
+import { BoxOutline } from './BoxOutline'
 import {
   clampPlace,
   clipRect,
@@ -282,12 +284,9 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
    * отодвигать. Поэтому у краёв ручка прижимается внутрь, а на серединах
    * сторон остаётся по центру.
    */
-  const along = (share: number) =>
-    share === 0
-      ? { pos: '0%', shift: '2px' }
-      : share === 1
-        ? { pos: '100%', shift: 'calc(-100% - 2px)' }
-        : { pos: '50%', shift: '-50%' }
+  // Размер ручек — экранный, у мелкой рамки они выходят наружу.
+  const fit = useHandles(box)
+  const along = fit.along
 
   const handle = (
     key: string,
@@ -298,8 +297,9 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
     <div
       key={key}
       title={hint}
-      className="absolute h-3 w-3 border border-base bg-accent-soft"
+      className="absolute bg-accent-soft"
       style={{
+        ...fit.size,
         left: along(at.x).pos,
         top: along(at.y).pos,
         transform: `translate(${along(at.x).shift}, ${along(at.y).shift})`,
@@ -325,7 +325,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       ref={box}
       // Без заливки: даже лёгкая пелена цвета программы поверх клипа делала
       // картинку тусклее, пока клип выделен. Хватает пунктирной рамки.
-      className="absolute cursor-move border border-dashed border-accent-soft/90"
+      className="absolute cursor-move"
       style={{
         left: `${(middleX - wide / 2) * 100}%`,
         top: `${(middleY - tall / 2) * 100}%`,
@@ -356,6 +356,8 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         }
       }}
     >
+      {/* Линия рамки — точка экрана при любом приближении, как и ручки. */}
+      <BoxOutline color="var(--color-accent-soft)" dashed unit={fit.unit} />
       {CORNERS.map((corner) =>
         handle(
           corner.id,
@@ -379,7 +381,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
           растягивать некуда — они всё равно сохраняют свою форму, и уголков
           для размера достаточно. */}
       {clip.kind === 'color' &&
-        EDGES.map((edge) =>
+        EDGES.filter((edge) => (edge.x === 0.5 ? fit.midX : fit.midY)).map((edge) =>
         handle(
           edge.id,
           edge,
@@ -401,7 +403,8 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
 
       {/* Размер в пикселях, а не в долях кадра: «9 × 15%» человеку ничего не
           говорит, а «192 × 108» он сравнит с чем угодно. */}
-      <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] tabular-nums text-white/85">
+      <span style={fit.label}
+          className="pointer-events-none absolute left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] tabular-nums text-white/85">
         {Math.round(wide * frameW)} × {Math.round(tall * frameH)}
       </span>
     </div>

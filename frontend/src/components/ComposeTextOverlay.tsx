@@ -32,6 +32,9 @@ function withAlpha(hex: string, alpha: number): string {
 /** Место в долях кадра: как у программы, в долях высоты, но через `cqh`. */
 const share = (value: number) => `calc(${value} * 100cqh)`
 
+/** Отступ пунктирной рамки от букв, в точках. */
+const FRAME_PAD = 5
+
 /** Сколько теней кладём по кругу, чтобы из них сложилась обводка. */
 const RING = 24
 
@@ -213,6 +216,13 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
   // Выравнивание у программы задаёт, какая точка надписи стоит в x: левый
   // край, середина или правый край. Здесь то же самое.
   const shiftX = v.align === 'left' ? '0%' : v.align === 'right' ? '-100%' : '-50%'
+  // Но в x стоит край самих букв, а не пунктирной рамки вокруг них: между
+  // ними отступ рамки, её линия и подложка. Программа ставит в x буквы, а
+  // подложку рисует наружу, — поэтому при выравнивании по краю рамку
+  // выносим за x ровно на этот отступ. Иначе надпись в окне стояла левее
+  // (или правее), чем в готовом кадре.
+  const edge = `calc(${FRAME_PAD + 1}px + ${v.box ? v.boxPad : 0} * 100cqh)`
+  const nudge = v.align === 'left' ? `calc(-1 * ${edge})` : v.align === 'right' ? edge : '0px'
 
   const stroke = v.strokeOn && v.stroke > 0
   const shadow = v.shadowOn && v.shadowAlpha > 0
@@ -224,12 +234,12 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
         focused ? 'border-accent' : 'border-accent/70'
       }`}
       style={{
-        left: `${v.x * 100}%`,
+        left: `calc(${v.x * 100}% + ${nudge})`,
         top: `${v.y * 100}%`,
         transform: `translate(${shiftX}, -50%)`,
         // Рамка чуть шире букв: за неё надпись и таскают, когда в неё уже
         // пишут и нажатие внутри ставит курсор.
-        padding: 5,
+        padding: FRAME_PAD,
       }}
       title="Потяните за рамку, чтобы подвинуть. Нажмите на текст, чтобы писать"
       onMouseDown={(event) => {

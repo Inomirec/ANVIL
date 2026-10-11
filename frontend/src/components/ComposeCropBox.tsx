@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { clipRect, shownAt, useCompose, type ComposeClip } from '../composeStore'
+import { useHandles } from '../lib/handles'
+import { BoxOutline } from './BoxOutline'
 
 /**
  * Обрезка клипа прямо в окне просмотра.
@@ -42,6 +44,10 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
   const frameH = useCompose((state) => state.height)
   const setCropping = useCompose((state) => state.setCropping)
   const box = useRef<HTMLDivElement>(null)
+  // Окно обрезки: по нему меряются ручки — экранного размера, у мелкого
+  // окна снаружи.
+  const window_ = useRef<HTMLDivElement>(null)
+  const fit = useHandles(window_)
   const { w: wide, h: tall } = clipRect(clip, frameW, frameH)
 
   const left = clip.cropLeft ?? 0
@@ -129,12 +135,7 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
     return true
   }
 
-  const along = (share: number) =>
-    share === 0
-      ? { pos: '0%', shift: '-50%' }
-      : share === 1
-        ? { pos: '100%', shift: '-50%' }
-        : { pos: '50%', shift: '-50%' }
+  const along = (share: number) => fit.along(share, true)
 
   const shade = 'absolute bg-black/60 pointer-events-none'
 
@@ -164,7 +165,8 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
       <div className="pointer-events-none absolute inset-0 border border-dashed border-white/40" />
 
       <div
-        className="absolute cursor-move border-2 border-accent-soft"
+        ref={window_}
+        className="absolute cursor-move"
         style={{
           left: `${left * 100}%`,
           top: `${top * 100}%`,
@@ -180,11 +182,13 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
           drag.current = { kind: 'move', fromX: event.clientX, fromY: event.clientY, l: left, t: top, r: right, b: bottom }
         }}
       >
-        {HANDLES.map((handle) => (
+        <BoxOutline color="var(--color-accent-soft)" width={2} unit={fit.unit} />
+        {HANDLES.filter((handle) => (handle.x === 0.5 ? fit.midX : handle.y === 0.5 ? fit.midY : true)).map((handle) => (
           <div
             key={handle.id}
-            className="absolute h-3 w-3 border border-base bg-accent-soft"
+            className="absolute bg-accent-soft"
             style={{
+              ...fit.size,
               left: along(handle.x).pos,
               top: along(handle.y).pos,
               transform: `translate(${along(handle.x).shift}, ${along(handle.y).shift})`,
@@ -197,7 +201,8 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
           />
         ))}
         {/* Сколько останется в пикселях кадра — как у рамки размера. */}
-        <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] tabular-nums text-white/85">
+        <span style={fit.label}
+          className="pointer-events-none absolute left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] tabular-nums text-white/85">
           обрезка · {Math.round(wide * (1 - left - right) * frameW)} × {Math.round(tall * (1 - top - bottom) * frameH)}
         </span>
       </div>

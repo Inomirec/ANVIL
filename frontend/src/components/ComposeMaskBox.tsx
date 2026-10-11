@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { clipRect, useCompose, type ClipMask, type ComposeClip } from '../composeStore'
 import { POINTS } from '../composeAnim'
+import { useHandles } from '../lib/handles'
+import { BoxOutline } from './BoxOutline'
 
 /**
  * Маска клипа в окне просмотра: её двигают и растягивают прямо по кадру.
@@ -55,6 +57,11 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
   const frameH = useCompose((state) => state.height)
   const setMasking = useCompose((state) => state.setMasking)
   const box = useRef<HTMLDivElement>(null)
+  // Ручки и точки — экранного размера при любом приближении: внешняя рамка
+  // меряет картинку клипа, внутренняя — прямоугольник маски.
+  const maskArea = useRef<HTMLDivElement>(null)
+  const outer = useHandles(box)
+  const fit = useHandles(maskArea)
   const { w: wide, h: tall } = clipRect(clip, frameW, frameH)
   const mask = clip.mask
   // Точки своей формы, пока её рисуют, — в долях картинки клипа.
@@ -227,13 +234,20 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
         {draft.map(([x, y], index) => (
           <div
             key={index}
-            className={`pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-base ${
-              index === 0 && draft.length >= 3 ? 'h-3.5 w-3.5 bg-white' : 'h-2.5 w-2.5 bg-warn'
+            className={`pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full ${
+              index === 0 && draft.length >= 3 ? 'bg-white' : 'bg-warn'
             }`}
-            style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
+            style={{
+              ...outer.ring,
+              width: (index === 0 && draft.length >= 3 ? 14 : 10) * outer.unit,
+              height: (index === 0 && draft.length >= 3 ? 14 : 10) * outer.unit,
+              left: `${x * 100}%`,
+              top: `${y * 100}%`,
+            }}
           />
         ))}
-        <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] text-white/85">
+        <span style={outer.label}
+          className="pointer-events-none absolute left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] text-white/85">
           {draft.length < 3 ? 'ставьте точки' : 'нажмите по первой точке, чтобы замкнуть'}
         </span>
       </div>
@@ -247,6 +261,7 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
       {/* Граница картинки клипа — маска считается от неё. */}
       <div className="pointer-events-none absolute inset-0 border border-dashed border-white/30" />
       <div
+        ref={maskArea}
         className="absolute cursor-move"
         style={{
           left: `${(mask.x - mask.w / 2) * 100}%`,
@@ -280,8 +295,8 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
                 title="Точка формы — тяните, чтобы поправить"
                 // Над ручками рамки: крайние точки формы всегда лежат на её
                 // краю, и иначе точку перехватывала ручка размера.
-                className="absolute z-10 h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full border border-base bg-white"
-                style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
+                className="absolute z-10 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full bg-white"
+                style={{ ...fit.ring, width: 12 * fit.unit, height: 12 * fit.unit, left: `${x * 100}%`, top: `${y * 100}%` }}
                 onMouseDown={(event) => {
                   if (!begin(event)) return
                   drag.current = { kind: 'point', index, start: mask }
@@ -291,28 +306,31 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
           </>
         ) : (
           <>
-            <div
-              className={`pointer-events-none absolute inset-0 border-2 border-warn ${
-                mask.shape === 'ellipse' ? 'rounded-[50%]' : ''
-              }`}
-            />
+            <BoxOutline color="var(--color-warn)" width={2} ellipse={mask.shape === 'ellipse'} unit={fit.unit} />
             {mask.shape === 'ellipse' && (
               <div className="pointer-events-none absolute inset-0 border border-dashed border-warn/50" />
             )}
           </>
         )}
-        {HANDLES.map((handle) => (
+        {HANDLES.filter((handle) => (handle.x === 0.5 ? fit.midX : handle.y === 0.5 ? fit.midY : true)).map((handle) => (
           <div
             key={handle.id}
-            className="absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 border border-base bg-warn"
-            style={{ left: `${handle.x * 100}%`, top: `${handle.y * 100}%`, cursor: handle.cursor }}
+            className="absolute bg-warn"
+            style={{
+              ...fit.size,
+              left: fit.along(handle.x, true).pos,
+              top: fit.along(handle.y, true).pos,
+              transform: `translate(${fit.along(handle.x, true).shift}, ${fit.along(handle.y, true).shift})`,
+              cursor: handle.cursor,
+            }}
             onMouseDown={(event) => {
               if (!begin(event)) return
               drag.current = { kind: 'sides', sides: handle.sides, start: mask }
             }}
           />
         ))}
-        <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] text-white/85">
+        <span style={fit.label}
+          className="pointer-events-none absolute left-0 whitespace-nowrap rounded bg-black/60 px-1.5 font-mono text-[9.5px] leading-[15px] text-white/85">
           маска
         </span>
       </div>
