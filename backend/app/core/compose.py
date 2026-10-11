@@ -1032,7 +1032,8 @@ def build_segment(
         if abs(project.master_volume - 1.0) > 1e-6:
             mixed += f",volume={project.master_volume:.3g}"
         if project.loudnorm:
-            mixed += ",loudnorm=I=-16:TP=-1.5:LRA=11"
+            # loudnorm отдаёт 192 кГц — возвращаем к 48, как у всего монтажа.
+            mixed += ",loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000"
         if audio_only:
             # Тишина в конце отрезка тоже часть файла: без добивки звук
             # кончился бы вместе с последним клипом. Время после сведения

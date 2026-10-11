@@ -89,13 +89,23 @@ def build_video_filters(
     return filters
 
 
+def normal_rate(sample_rate: int | None) -> int:
+    """Обычная частота звука: как у исходника, если она из привычных, иначе 48 кГц."""
+    return sample_rate if sample_rate in {44100, 48000} else 48000
+
+
 def build_audio_filters(
     options: AudioOptions,
     *,
     tempo: float = 1.0,
     duration: float | None = None,
+    sample_rate: int | None = None,
 ) -> list[str]:
-    """Цепочка аудиофильтров: темп, нормализация громкости, фейды."""
+    """Цепочка аудиофильтров: темп, нормализация громкости, фейды.
+
+    ``sample_rate`` — частота звука исходника: к ней звук возвращается после
+    выравнивания громкости.
+    """
     filters: list[str] = []
 
     if tempo and abs(tempo - 1.0) > 1e-6:
@@ -122,6 +132,11 @@ def build_audio_filters(
             f"LRA={options.loudnorm_lra:g}",
         ]
         filters.append("loudnorm=" + ":".join(params))
+        # loudnorm работает и отдаёт звук на 192 кГц. Opus всё равно пишет 48,
+        # а AAC брал самое большое, что умеет, — 96 кГц, и монтажные
+        # программы такой файл читали неверно: звук повторялся и не сходился
+        # с картинкой по длине. Возвращаем частоту исходника.
+        filters.append(f"aresample={normal_rate(sample_rate)}")
 
     # curve=qsin — четверть синусоиды: громкость по ней уходит равномерно на
     # слух, а не «проваливается» в конце, как при линейном затухании. Именно
@@ -470,10 +485,13 @@ def build_command(
         if has_audio:
             args += audio_codec_args(request.audio)
             if request.audio.codec not in {"copy", "none"}:
+                tracks = info.audio_tracks if info else []
+                chosen = tracks[request.audio.track] if 0 <= request.audio.track < len(tracks) else None
                 audio_filters = build_audio_filters(
                     request.audio,
                     tempo=1.0 if audio_only else request.video.tempo,
                     duration=duration,
+                    sample_rate=chosen.sample_rate if chosen else None,
                 )
                 if audio_filters:
                     args += ["-af", ",".join(audio_filters)]
