@@ -288,7 +288,7 @@ IMAGE_PRESETS: list[dict[str, Any]] = [
         "Подходит почти всегда: постеры, кадры, фотографии, схемы. "
         "Разницу на глаз почти не видно.",
         quality=94,
-        max_dimension=1600,
+        max_dimension=0,
         effort=4,
     ),
     _image(
@@ -298,7 +298,7 @@ IMAGE_PRESETS: list[dict[str, Any]] = [
         "включая предпросмотр в редакторе пака.",
         fmt="jpg",
         quality=85,
-        max_dimension=1600,
+        max_dimension=0,
         accent="sky",
     ),
     _image(

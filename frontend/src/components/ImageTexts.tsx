@@ -10,6 +10,19 @@ export interface ImageTextMark {
   /** Высота букв (кегль) в пикселях оригинала. */
   size: number
   color: string
+  /** Толщина обводки в пикселях оригинала; 0 или нет — без обводки. */
+  stroke?: number
+  strokeColor?: string
+}
+
+/** Обводка кольцом теней — скруглённая и снаружи букв, как у программы. */
+function ring(width: number, colour: string): string {
+  const shadows: string[] = []
+  for (let step = 0; step < 24; step += 1) {
+    const angle = (step / 24) * Math.PI * 2
+    shadows.push(`${(Math.cos(angle) * width).toFixed(2)}px ${(Math.sin(angle) * width).toFixed(2)}px 0 ${colour}`)
+  }
+  return shadows.join(', ')
 }
 
 /** Насколько сдвинуть мышь, чтобы нажатие стало перетаскиванием. */
@@ -37,7 +50,10 @@ export function ImageTexts({
   onChange,
   onCommit,
   onCreate,
+  onRemove,
 }: {
+  /** Стёрли все буквы — надпись больше не нужна. */
+  onRemove: (index: number) => void
   /** Номер только что поставленной надписи. */
   fresh: number | null
   texts: ImageTextMark[]
@@ -87,6 +103,7 @@ export function ImageTexts({
           onSelect={() => onSelect(index)}
           onChange={(patch) => onChange(index, patch)}
           onCommit={onCommit}
+          onRemove={() => onRemove(index)}
         />
       ))}
     </div>
@@ -104,7 +121,9 @@ function TextItem({
   onSelect,
   onChange,
   onCommit,
+  onRemove,
 }: {
+  onRemove: () => void
   /** Только что поставленная: сразу открыть для набора. */
   fresh: boolean
   mark: ImageTextMark
@@ -130,23 +149,37 @@ function TextItem({
     }
   }, [mark.text])
 
-  // Новая надпись сразу открывается для набора с выделенным текстом.
+  /** Открыть надпись для набора, выделив её текст целиком. */
+  const startEditing = () => {
+    setEditing(true)
+    setTimeout(() => {
+      const element = field.current
+      if (!element) return
+      element.focus()
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    }, 0)
+  }
+
+  // Новая надпись сразу открывается для набора.
   useEffect(() => {
-    if (fresh && field.current) {
-      setEditing(true)
-      setTimeout(() => {
-        const element = field.current
-        if (!element) return
-        element.focus()
-        const range = document.createRange()
-        range.selectNodeContents(element)
-        const selection = window.getSelection()
-        selection?.removeAllRanges()
-        selection?.addRange(range)
-      }, 0)
-    }
+    if (fresh && field.current) startEditing()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fresh])
+  // Сняли выбор — набор закончился.
+  useEffect(() => {
+    if (!chosen && editing) {
+      // Поле могло уже потерять фокус — тогда «ушли из поля» не придёт, и
+      // надпись так и осталась бы в наборе, не давая себя таскать.
+      setEditing(false)
+      field.current?.blur()
+      if (!mark.text.trim()) onRemove()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosen])
 
   const [lift, setLift] = useState(0)
   useLayoutEffect(() => {
@@ -155,8 +188,12 @@ function TextItem({
     if (Math.abs(next - lift) > 0.05) setLift(next)
   })
 
+  // Одно нажатие — выбрать и таскать, двойное — печатать. Пока печатают,
+  // таскают за поле вокруг букв: внутри букв нажатие ставит курсор.
+  const frame = useRef<HTMLDivElement>(null)
   const begin = (event: React.MouseEvent) => {
-    if (!interactive || event.button !== 0 || editing) return
+    if (!interactive || event.button !== 0) return
+    if (editing && event.target !== frame.current) return
     event.preventDefault()
     event.stopPropagation()
     onSelect()
@@ -179,11 +216,6 @@ function TextItem({
     const drop = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', drop)
-      // Не сдвинули — это нажатие по уже выбранной надписи: открыть для набора.
-      if (!moved && chosen) {
-        setEditing(true)
-        setTimeout(() => field.current?.focus(), 0)
-      }
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', drop)
@@ -191,8 +223,11 @@ function TextItem({
 
   return (
     <div
+      ref={frame}
       className="absolute"
       style={{
+        // Поле вокруг букв — за него таскают и во время набора.
+        padding: 6 / zoom,
         left: `${(mark.x / natural.width) * 100}%`,
         top: `${(mark.y / natural.height) * 100}%`,
         marginTop: lift,
@@ -200,10 +235,15 @@ function TextItem({
         pointerEvents: interactive ? 'auto' : 'none',
         // Рамка — контуром: он не занимает места и не сдвигает буквы.
         outline: chosen && interactive ? `${1 / zoom}px dashed var(--color-accent-soft)` : undefined,
-        outlineOffset: 4 / zoom,
-        cursor: interactive ? (editing ? 'text' : 'move') : undefined,
+        outlineOffset: -1 / zoom,
+        cursor: interactive ? 'move' : undefined,
       }}
       onMouseDown={begin}
+      onDoubleClick={(event) => {
+        if (!interactive || editing) return
+        event.stopPropagation()
+        startEditing()
+      }}
     >
       <div
         ref={field}
@@ -212,13 +252,18 @@ function TextItem({
         spellCheck={false}
         className="select-text whitespace-pre text-center outline-none"
         style={{
+          cursor: editing ? 'text' : undefined,
+          textShadow: mark.stroke ? ring(mark.stroke * scale, mark.strokeColor ?? '#000000') : undefined,
           fontFamily: face ? `"${face.family}"` : `"${mark.font}", Arial, sans-serif`,
           fontSize: mark.size * scale,
           lineHeight: face?.lineHeight ?? 1.2,
           color: mark.color,
         }}
         onFocus={onCommit}
-        onBlur={() => setEditing(false)}
+        onBlur={(event) => {
+          setEditing(false)
+          if (!event.currentTarget.innerText.trim()) onRemove()
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') (event.target as HTMLElement).blur()
           // Клавиши редактора (Delete, Ctrl+Z) — тексту, а не картинке.

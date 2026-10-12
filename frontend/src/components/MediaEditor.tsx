@@ -1,17 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Camera,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   Maximize2,
   Pause,
   Play,
   Repeat,
   Scissors,
-  SkipBack,
-  SkipForward,
   Volume2,
   VolumeX,
 } from 'lucide-react'
@@ -382,7 +376,9 @@ export function MediaEditor({
       : null
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    // Контейнер: на узком окне второстепенное в панели плеера прячется
+    // (громкость ползунком, скорость), а не обрезается вместе с кнопками.
+    <div className="@container flex h-full min-h-0 flex-col gap-3">
       {/* Область просмотра */}
       <div
         ref={zoom.shell}
@@ -492,52 +488,32 @@ export function MediaEditor({
       </div>
 
       {/* Панель управления */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl bg-surface px-3 py-2 ring-1 ring-line-soft">
-        <IconButton onClick={() => seek(0)} title="В начало (Home)">
-          <SkipBack size={16} />
-        </IconButton>
-        <IconButton onClick={() => nudge(-5)} title="Назад 5 с (Ctrl+←)">
-          <ChevronsLeft size={16} />
-        </IconButton>
-        {isVideo && (
-          <IconButton onClick={() => nudge(-1 / fps)} title="Кадр назад (←). Shift+← — к предыдущей смене сцены">
-            <ChevronLeft size={16} />
-          </IconButton>
-        )}
+      {/* Одна строка: кнопки перемотки убраны — их заменяют стрелки, Home и
+          End, а лишняя строка съедала место у кадра. */}
+      <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-xl bg-surface px-3 py-2 ring-1 ring-line-soft">
         <button
           type="button"
           onClick={togglePlay}
           title="Воспроизведение / пауза (Пробел)"
-          className="mx-1 flex h-9 w-9 items-center justify-center rounded-full bg-accent text-white transition-colors hover:bg-accent-soft"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition-colors hover:bg-accent-soft"
         >
           {playing ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
         </button>
-        {isVideo && (
-          <IconButton onClick={() => nudge(1 / fps)} title="Кадр вперёд (→). Shift+→ — к следующей смене сцены">
-            <ChevronRight size={16} />
-          </IconButton>
-        )}
-        <IconButton onClick={() => nudge(5)} title="Вперёд 5 с (Ctrl+→)">
-          <ChevronsRight size={16} />
-        </IconButton>
-        <IconButton onClick={() => seek(duration)} title="В конец (End)">
-          <SkipForward size={16} />
-        </IconButton>
 
-        <span className="ml-2 font-mono text-[12px] tabular-nums text-ink-dim">
+        <span className="ml-1 font-mono text-[12px] tabular-nums text-ink-dim">
           <span title={isVideo ? 'Минуты, секунды и номер кадра в секунде' : undefined}>
             {isVideo ? frameCode(time, fps) : timecode(time, true)}
           </span>{' '}
-          <span className="text-ink-faint">/ {timecode(duration)}</span>
+          <span className="hidden text-ink-faint @[580px]:inline">/ {timecode(duration)}</span>
         </span>
 
-        <div className="mx-2 h-5 w-px bg-line" />
+        <div className="mx-1 h-5 w-px shrink-0 bg-line" />
 
         <button
           type="button"
           onClick={setIn}
           title="Метка начала (I)"
-          className="w-[92px] rounded-lg bg-surface-3 px-2.5 py-1.5 text-[12px] font-medium hover:bg-line"
+          className="shrink-0 rounded-lg bg-surface-3 px-2 py-1.5 text-[12px] font-medium hover:bg-line"
         >
           <span className="text-accent-soft">In</span>{' '}
           <span className="tabular-nums text-ink-faint">
@@ -548,7 +524,7 @@ export function MediaEditor({
           type="button"
           onClick={setOut}
           title="Метка конца (O)"
-          className="w-[104px] rounded-lg bg-surface-3 px-2.5 py-1.5 text-[12px] font-medium hover:bg-line"
+          className="shrink-0 rounded-lg bg-surface-3 px-2 py-1.5 text-[12px] font-medium hover:bg-line"
         >
           <span className="text-accent-soft">Out</span>{' '}
           <span className="tabular-nums text-ink-faint">
@@ -576,16 +552,16 @@ export function MediaEditor({
             type="button"
             onClick={() => onTrimChange({ in: 0, out: duration })}
             title="Вернуть метки на края файла"
-            className="chip bg-accent/15 text-accent-soft hover:bg-accent/25"
+            className="chip hidden shrink-0 bg-accent/15 text-accent-soft hover:bg-accent/25 @[640px]:inline-flex"
           >
             <Scissors size={11} />
             {timecode(Math.max(selectionLength, 0), true)}
           </button>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <select
-            className="rounded-lg bg-surface-3 px-2 py-1 text-[12px] text-ink-dim outline-none"
+            className="hidden rounded-lg bg-surface-3 px-2 py-1 text-[12px] text-ink-dim outline-none @[640px]:block"
             value={rate}
             onChange={(event) => setRate(Number(event.target.value))}
             title="Скорость просмотра (не влияет на экспорт)"
@@ -611,7 +587,7 @@ export function MediaEditor({
               setMuted(value === 0)
               localStorage.setItem(VOLUME_KEY, String(value))
             }}
-            className="w-20"
+            className="hidden w-16 @[720px]:block"
           />
           {isVideo && (
             <IconButton
@@ -652,9 +628,6 @@ export function MediaEditor({
         ) : (
           <span className="text-warn">без звуковой дорожки</span>
         )}
-        <span className="ml-auto text-ink-faint/70">
-          Пробел — играть · ← → — кадр · Shift+← → — смена сцены · I / O — метки · L — зациклить · S — кадр · уголки дорожек тянут затухание
-        </span>
       </div>
     </div>
   )

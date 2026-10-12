@@ -97,6 +97,9 @@ def _text_filter(mark: ImageText) -> str:
     where = fonts.path_for(mark.font, False, False)
     if where:
         parts.append(f"fontfile={compose._escaped(where)}")
+    if mark.stroke:
+        # Обводка снаружи букв, скруглённая — как кольцо теней в окне.
+        parts += [f"borderw={mark.stroke}", f"bordercolor={_ffmpeg_color(mark.stroke_color)}"]
     parts += [
         f"fontsize={mark.size}",
         f"fontcolor={_ffmpeg_color(mark.color)}",

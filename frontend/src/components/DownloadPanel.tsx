@@ -321,10 +321,6 @@ export function DownloadPanel() {
       <div className="min-w-0 flex-1 space-y-5 overflow-y-auto px-6 py-6">
       <header>
         <h1 className="text-[20px] font-semibold">Загрузка</h1>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">
-          Каждая ссылка — своя строка. Значок плёнки открывает видео прямо здесь: можно
-          выбрать нужный отрезок, и скачается только он. Без разметки скачивается целиком.
-        </p>
       </header>
 
       {/* Список ссылок */}
@@ -449,7 +445,7 @@ export function DownloadPanel() {
       </div>
 
       <QuietHints>
-      <aside className="flex w-[340px] shrink-0 flex-col border-l border-line-soft bg-surface">
+      <aside className="flex w-[clamp(280px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5">
           <Section title="Формат">
             <Segmented<Mode>

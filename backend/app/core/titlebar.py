@@ -37,8 +37,6 @@ SC_MAXIMIZE = 0xF030
 SC_RESTORE = 0xF120
 SC_CLOSE = 0xF060
 GWLP_WNDPROC = -4
-SM_CYFRAME = 33
-SM_CXPADDEDBORDER = 92
 SWP_FLAGS = 0x0001 | 0x0002 | 0x0004 | 0x0020  # NOSIZE | NOMOVE | NOZORDER | FRAMECHANGED
 
 #: Окно, которому заменили заголовок, и как исполнять код в его потоке.
@@ -46,6 +44,18 @@ _hwnd = 0
 _invoke: Callable[[Callable[[], None]], None] | None = None
 #: Ссылки держим, иначе сборщик мусора уберёт обработчик из-под окна.
 _keep: list[Any] = []
+
+
+MONITOR_DEFAULTTONEAREST = 2
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
 
 
 class _NCCALCSIZE_PARAMS(ctypes.Structure):
@@ -60,6 +70,9 @@ def _user32():
     user32.CallWindowProcW.argtypes = [
         ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
     ]
+    user32.MonitorFromWindow.restype = ctypes.c_void_p
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     return user32
 
@@ -84,13 +97,20 @@ def install(hwnd: int, invoke: Callable[[Callable[[], None]], None]) -> bool:
             params = ctypes.cast(lparam, ctypes.POINTER(_NCCALCSIZE_PARAMS)).contents
             top = params.rgrc[0].top
             result = user32.CallWindowProcW(original[0], window, message, wparam, lparam)
-            # Всё как у обычной рамки, кроме верха: там была строка заголовка.
-            # Развёрнутое окно Windows выносит за край экрана на толщину
-            # рамки — сверху её надо вернуть, иначе срежется наша панель.
-            frame = 0
             if user32.IsZoomed(window):
-                frame = user32.GetSystemMetrics(SM_CYFRAME) + user32.GetSystemMetrics(SM_CXPADDEDBORDER)
-            params.rgrc[0].top = top + frame
+                # Развёрнутое окно Windows выносит за край экрана на толщину
+                # рамки, а толщина у каждого монитора своя (разный масштаб):
+                # считая её по главному, на втором мониторе получали белые
+                # полосы по краям. Поэтому страница занимает ровно рабочую
+                # область того монитора, где стоит окно.
+                monitor = user32.MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST)
+                info = _MONITORINFO()
+                info.cbSize = ctypes.sizeof(_MONITORINFO)
+                if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                    params.rgrc[0] = info.rcWork
+                    return result
+            # Всё как у обычной рамки, кроме верха: там была строка заголовка.
+            params.rgrc[0].top = top
             return result
         return user32.CallWindowProcW(original[0], window, message, wparam, lparam)
 

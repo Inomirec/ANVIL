@@ -10,7 +10,6 @@ import {
   Play,
   RotateCw,
   Search,
-  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react'
@@ -43,12 +42,11 @@ import { ClipAddBar, ComposeClipPanel } from './ComposeClipPanel'
 import { CROP_FIELDS, withoutGroup } from '../composeAnim'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
-  ComposeRenderSettings,
+  ComposeRenderPanel,
   DEFAULT_RENDER,
   AUDIO_FILE,
   presetName,
   renderSummary,
-  type RenderPreset,
   type RenderSettings,
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
@@ -229,21 +227,14 @@ export function ComposeTab() {
       return DEFAULT_RENDER
     }
   })
-  const [renderOpen, setRenderOpen] = useState(false)
+  const updateRender = (next: RenderSettings) => {
+    setRender(next)
+    localStorage.setItem('sgh.composeRender', JSON.stringify(next))
+  }
   // Картинки на таймлайне нет (оставили от ролика один звук) — соберётся
   // звуковой файл, а не видео с чёрным кадром. Сервер решает так же.
   const allClips = tracks.flatMap((track) => track.clips)
   const soundOnly = allClips.length > 0 && !allClips.some((clip) => clip.kind !== 'audio')
-  // Свои наборы сборки — чтобы под кнопкой писать название набора. Читаем
-  // заново, когда окно настроек закрыли: там могли сохранить новый.
-  const [myPresets, setMyPresets] = useState<RenderPreset[]>([])
-  useEffect(() => {
-    if (renderOpen) return
-    api
-      .composeRenderPresets()
-      .then((data) => setMyPresets(data.presets ?? []))
-      .catch(() => setMyPresets([]))
-  }, [renderOpen])
   // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
   // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
   const [outputName, setOutputName] = useState('')
@@ -1010,7 +1001,7 @@ export function ComposeTab() {
       {/* Описания настроек в колонке — при наведении, как и в панелях
           обработки: текстом под каждой галочкой они занимали место. */}
       <QuietHints>
-      <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-soft bg-surface">
+      <aside className="flex w-[clamp(260px,22vw,300px)] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
           {/* Пока выделена надпись, здесь её настройки, а не кадра: так их
               не надо искать, и экран просмотра остаётся открытым — цвет и
@@ -1097,13 +1088,14 @@ export function ComposeTab() {
             )}
           </div>
 
-          {/* Выравнивание — про весь монтаж, а не про отдельный клип, поэтому
-              живёт рядом с кадром, а не в эффектах клипа. */}
-          <Toggle
-            checked={loudnorm}
-            onChange={setLoudnorm}
-            label="Выровнять громкость"
-            hint="Готовый файл получит обычную для видео в интернете громкость: тихий монтаж станет громче, слишком громкий — тише, и на пиках звук не захрипит. Уровень подстраивается плавно по ходу видео, поэтому очень тихие и очень громкие места немного сблизятся. Слышно и в просмотре."
+          {/* Сборка — тут же, когда ничего не выбрано: колонка пустовала ровно
+              тогда, когда пора собирать, а отдельное окно было лишним шагом.
+              Выравнивание громкости — про весь монтаж, оно тоже здесь. */}
+          <ComposeRenderPanel
+            value={render}
+            onChange={updateRender}
+            loudnorm={loudnorm}
+            onLoudnorm={setLoudnorm}
           />
           </>
           )}
@@ -1117,25 +1109,21 @@ export function ComposeTab() {
           {/* Добавить эффект, обрезку, маску — неброско, над сборкой: большая
               кнопка наверху колонки забирала на себя всё внимание. */}
           {mediaClip && !textClip && !fillClip && <ClipAddBar clip={mediaClip} />}
-          <div>
-            <button
-              type="button"
-              onClick={() => setRenderOpen(true)}
-              className="field flex w-full items-center gap-2 text-left hover:border-line"
-            >
-              <SlidersHorizontal size={14} className="shrink-0 text-accent-soft" />
-              <span className="flex-1 text-[12.5px]">Настройки сборки</span>
-            </button>
-            {/* Только название набора: полное описание (кодек, качество,
-                звук) не помещалось в строку. Подробности — при наведении. */}
-            <p className="mt-1 truncate text-[11px] leading-snug text-ink-faint" title={renderSummary(render)}>
-              {soundOnly && !render.audioOnly
-                ? render.audioCodec === 'none'
-                  ? 'Картинки нет, а звук выключен — выберите кодек звука'
-                  : `Картинки нет — соберётся только звук · ${AUDIO_FILE[render.audioCodec] ?? 'M4A'}`
-                : presetName(render, myPresets)}
-            </p>
-          </div>
+          {/* Чем соберётся — одной строкой. Настройки — в колонке, когда
+              ничего не выбрано; нажатие по строке снимает выбор и их открывает. */}
+          <button
+            type="button"
+            onClick={() => useCompose.getState().select([])}
+            disabled={!(textClip || fillClip || mediaClip)}
+            className="block w-full truncate text-left text-[11px] leading-snug text-ink-faint enabled:hover:text-ink-dim"
+            title={`${renderSummary(render)}${textClip || fillClip || mediaClip ? '. Нажмите, чтобы открыть настройки сборки' : ''}`}
+          >
+            {soundOnly && !render.audioOnly
+              ? render.audioCodec === 'none'
+                ? 'Картинки нет, а звук выключен — выберите кодек звука'
+                : `Картинки нет — соберётся только звук · ${AUDIO_FILE[render.audioCodec] ?? 'M4A'}`
+              : `Сборка: ${presetName(render)}`}
+          </button>
 
           {/* Имя и папка — одной строкой: это про один и тот же файл. */}
           <div className="flex items-center gap-2">
@@ -1232,15 +1220,6 @@ export function ComposeTab() {
       />
 
 
-      <ComposeRenderSettings
-        open={renderOpen}
-        onClose={() => setRenderOpen(false)}
-        value={render}
-        onChange={(next) => {
-          setRender(next)
-          localStorage.setItem('sgh.composeRender', JSON.stringify(next))
-        }}
-      />
 
       <FolderPicker
         open={pickingFolder}

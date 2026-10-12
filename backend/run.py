@@ -324,6 +324,27 @@ def _enable_file_drop(window) -> None:
         log.warning("перетаскивание файлов включить не удалось", exc_info=True)
 
 
+#: Меньше этого (в точках интерфейса) окно не сжимается: на 1280 × 720
+#: панели ещё помещаются в одну строку, дальше начинают обрезаться.
+MIN_WIDTH, MIN_HEIGHT = 1280, 720
+
+
+def _minimum_size() -> tuple[int, int]:
+    """Наименьший размер окна в точках экрана.
+
+    Окно меряется точками экрана, а страница — точками интерфейса, и при
+    масштабе Windows 125% их отношение 1.25: заданные «как есть» 1280 точек
+    давали интерфейсу всего 1024. Переводим по масштабу главного экрана и
+    прибавляем невидимую рамку, за которую окно тянут (по 8 точек).
+    """
+    scale = 1.0
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            ctypes.windll.shcore.GetScaleFactorForDevice.restype = ctypes.c_int
+            scale = max(1.0, ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100)
+    return round(MIN_WIDTH * scale) + 16, round(MIN_HEIGHT * scale) + 16
+
+
 def launch_window(url: str, port: int) -> bool:
     """Пытается открыть нативное окно. Возвращает False, если PyWebView недоступен."""
     try:
@@ -356,7 +377,7 @@ def launch_window(url: str, port: int) -> bool:
         url,
         width=1500,
         height=940,
-        min_size=(1080, 680),
+        min_size=_minimum_size(),
         background_color="#0b0d12",
         text_select=True,
     )

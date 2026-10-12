@@ -12,7 +12,7 @@ import { Button, MarkIcons, Modal, QuietHints, Section, Segmented, Select, Toggl
 const DEFAULT_IMAGE: ImageOptions = {
   format: 'avif',
   quality: 94,
-  max_dimension: 1600,
+  max_dimension: 0,
   effort: 4,
   boxes: [],
   box_color: 'black',
@@ -74,7 +74,15 @@ export function ImagePanel({
   // в общем хранилище — иначе всё сбрасывалось бы на каждой картинке.
   const [options, setOptions] = useState<ImageOptions>(() => {
     const prefs = loadPrefs()
-    return { ...DEFAULT_IMAGE, ...prefs.image } as ImageOptions
+    const saved = { ...DEFAULT_IMAGE, ...prefs.image } as ImageOptions
+    // Раньше по умолчанию стояло «до 1600 px», и оно запомнилось у всех, кто
+    // ни разу не трогал размер. Теперь умолчание — «как есть»; переводим один
+    // раз, дальше выбор человека снова запоминается как обычно.
+    if (!prefs.imageSizeAsIs) {
+      savePrefs({ imageSizeAsIs: true })
+      if (saved.max_dimension === 1600) saved.max_dimension = 0
+    }
+    return saved
   })
   // Удаление исходника — не настройка сжатия, а решение про файл, поэтому
   // живёт отдельно от options и уходит в запрос, а не в параметры кодека.
@@ -124,7 +132,7 @@ export function ImagePanel({
   }, [showPreview])
 
   const hasEdits =
-    Boolean(edit.crop) || edit.boxes.length > 0 || edit.strokes.length > 0 || (edit.texts?.length ?? 0) > 0
+    Boolean(edit.crop) || edit.boxes.length > 0 || edit.strokes.length > 0 || (edit.texts ?? []).some((mark) => mark.text.trim())
 
   const editPayload = useMemo(
     () => ({
@@ -416,34 +424,6 @@ export function ImagePanel({
           />
         </Section>
 
-        {hasEdits && (
-          <Section title="Правки кадра">
-            <div className="space-y-1.5 rounded-xl bg-accent/10 px-3 py-2.5 text-[12px] text-ink-dim ring-1 ring-accent/25">
-              {edit.crop && (
-                <p>
-                  Обрезка до{' '}
-                  <span className="font-mono text-ink">
-                    {edit.crop.width}×{edit.crop.height}
-                  </span>
-                </p>
-              )}
-              {(edit.texts?.length ?? 0) > 0 && (
-                <p>
-                  Надписей: <span className="font-mono text-ink">{edit.texts.length}</span>
-                </p>
-              )}
-              {edit.boxes.length > 0 && (
-                <p>
-                  Закрашено областей:{' '}
-                  <span className="font-mono text-ink">{edit.boxes.length}</span>
-                </p>
-              )}
-              <p className="text-[11px] leading-snug text-ink-faint">
-                Применяются только к этой картинке — отмеченные рядом уйдут без правок.
-              </p>
-            </div>
-          </Section>
-        )}
       </div>
 
       <div className="border-t border-line-soft bg-surface px-4 py-3">

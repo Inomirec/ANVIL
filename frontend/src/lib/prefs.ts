@@ -14,6 +14,8 @@ export interface Prefs {
   loudnorm?: boolean
   mono?: boolean
   videoPreset?: string
+  /** Размер картинки один раз переведён с прежнего умолчания на «как есть». */
+  imageSizeAsIs?: boolean
   /** Пресет для GIF: видео или движущийся WebP. */
   gifPreset?: string
   audioPreset?: string

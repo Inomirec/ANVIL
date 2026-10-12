@@ -1,17 +1,15 @@
-import { useEffect, useState } from 'react'
-import { Check, Pencil, Plus, Trash2 } from 'lucide-react'
-import { api } from '../lib/api'
-import { useStore } from '../store'
-import { Button, Modal, Segmented, Select, Slider, Toggle } from './ui'
+import { useState } from 'react'
+import { Check, ChevronDown } from 'lucide-react'
+import { SliderNumber } from './ComposeTextPanel'
+import { Dropdown, Section, Segmented, Toggle } from './ui'
 
 /**
- * Настройки сборки монтажа.
+ * Настройки сборки монтажа — прямо в правой колонке, когда ничего не выбрано.
  *
  * Пресеты остальных вкладок сюда не годятся: они про то, как ужать чужой файл
  * до веса пака. Монтаж человек собирает начисто и сам решает, что ему нужно,
- * поэтому здесь настройки заданы прямо, а готовых наборов всего два — по
- * одному на каждый из привычных кодеков. Свои наборы человек складывает сам и
- * они лежат рядом с настройками программы.
+ * поэтому здесь три готовых набора и под ними все настройки. Своих наборов
+ * нет: программа просто помнит последние настройки (`sgh.composeRender`).
  */
 export interface RenderSettings {
   videoCodec: string
@@ -33,15 +31,13 @@ export interface RenderPreset extends RenderSettings {
   label: string
 }
 
-/** Готовые наборы. Их не удалить и не переписать — только взять за основу. */
-/** Название своего набора — не длиннее: оно стоит в строку под кнопкой сборки. */
-export const PRESET_NAME_LIMIT = 28
-
 /** Как называется набор, с которым совпадают настройки, — или «Свои настройки». */
-export function presetName(value: RenderSettings, mine: RenderPreset[]): string {
-  const found = [...BUILTIN_PRESETS, ...mine].find((preset) => sameAs(value, preset))
-  return found ? found.label.slice(0, PRESET_NAME_LIMIT) : 'Свои настройки'
+export function presetName(value: RenderSettings): string {
+  const found = BUILTIN_PRESETS.find((preset) => sameAs(value, preset))
+  return found ? found.label : 'Свои настройки'
 }
+
+/** Готовые наборы. Их не переписать — только взять за основу. */
 
 export const BUILTIN_PRESETS: RenderPreset[] = [
   {
@@ -109,17 +105,41 @@ export function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
 export const AUDIO_FILE: Record<string, string> = { mp3: 'MP3', aac: 'M4A', opus: 'Opus', flac: 'FLAC' }
 
 const VIDEO_CODECS = [
-  { value: 'av1_svt', label: 'AV1 — меньше вес при том же качестве' },
-  { value: 'h265', label: 'H.265 (HEVC) — между AV1 и H.264' },
-  { value: 'h264', label: 'H.264 — играет везде, даже в старом' },
+  { value: 'av1_svt', label: 'AV1', title: 'Меньше вес при том же качестве' },
+  { value: 'h265', label: 'H.265', title: 'Между AV1 и H.264' },
+  { value: 'h264', label: 'H.264', title: 'Играет везде, даже в старом' },
 ]
 
-const AUDIO_CODECS = [
-  { value: 'opus', label: 'Opus — лучше всех при малом весе' },
-  { value: 'aac', label: 'AAC — играет везде' },
-  { value: 'mp3', label: 'MP3 — играет везде, даже в старом' },
-  { value: 'flac', label: 'FLAC — без потерь, тяжёлый' },
-  { value: 'none', label: 'Без звука' },
+/**
+ * Кодеки звука и подписи битрейта у каждого свои: 96 кбит/с у Opus — обычный
+ * выбор, а у MP3 — уже слышно.
+ */
+const AUDIO_CODECS: {
+  value: string
+  label: string
+  title: string
+  min: number
+  max: number
+  normal: number
+  marks: { value: number; label: string }[]
+}[] = [
+  {
+    value: 'opus', label: 'Opus', title: 'Лучше всех при малом весе',
+    min: 32, max: 320, normal: 160,
+    marks: [{ value: 64, label: 'речь' }, { value: 128, label: 'обычно' }, { value: 192, label: 'музыка' }, { value: 256, label: 'отлично' }],
+  },
+  {
+    value: 'aac', label: 'AAC', title: 'Играет везде',
+    min: 64, max: 320, normal: 192,
+    marks: [{ value: 96, label: 'речь' }, { value: 160, label: 'обычно' }, { value: 256, label: 'музыка' }, { value: 320, label: 'отлично' }],
+  },
+  {
+    value: 'mp3', label: 'MP3', title: 'Играет везде, даже в старом',
+    min: 96, max: 320, normal: 256,
+    marks: [{ value: 128, label: 'речь' }, { value: 192, label: 'обычно' }, { value: 256, label: 'музыка' }, { value: 320, label: 'максимум' }],
+  },
+  { value: 'flac', label: 'FLAC', title: 'Без потерь — тяжёлый', min: 0, max: 0, normal: 0, marks: [] },
+  { value: 'none', label: 'Нет', title: 'Без звука', min: 0, max: 0, normal: 0, marks: [] },
 ]
 
 const CONTAINERS = [
@@ -182,12 +202,30 @@ const QUALITY_SCALE = {
  * ставит, а нужные подписи налезали друг на друга.
  */
 const BITRATE_MAX = 14000
-const BITRATE_MARKS = [
-  { at: 1500, label: 'мало' },
-  { at: 4000, label: '720p' },
-  { at: 8000, label: '1080p' },
-  { at: 12000, label: 'с запасом' },
-]
+/**
+ * Подписи битрейта у каждого кодека свои: AV1 той же картинке нужно вдвое
+ * меньше, чем H.264, и одна шкала на всех врала бы двум из трёх.
+ */
+const BITRATE_MARKS: Record<string, { value: number; label: string }[]> = {
+  av1_svt: [
+    { value: 1000, label: 'мало' },
+    { value: 2500, label: '720p' },
+    { value: 4500, label: '1080p' },
+    { value: 8000, label: 'с запасом' },
+  ],
+  h265: [
+    { value: 1500, label: 'мало' },
+    { value: 3500, label: '720p' },
+    { value: 6000, label: '1080p' },
+    { value: 10000, label: 'с запасом' },
+  ],
+  h264: [
+    { value: 2000, label: 'мало' },
+    { value: 5000, label: '720p' },
+    { value: 8000, label: '1080p' },
+    { value: 12000, label: 'с запасом' },
+  ],
+}
 
 /** Какая подпись подходит нынешнему числу качества. */
 function qualityWord(codec: string, crf: number): string {
@@ -225,7 +263,7 @@ export function renderSummary(value: RenderSettings): string {
     return `Только звук · ${AUDIO_FILE[value.audioCodec] ?? 'M4A'} ${value.audioCodec === 'flac' ? '' : value.audioBitrateKbps + ' кбит/с'}`.trim()
   }
   const video = VIDEO_CODECS.find((item) => item.value === value.videoCodec)
-  const name = video ? video.label.split(' —')[0] : value.videoCodec
+  const name = video ? video.label : value.videoCodec
   const weight =
     value.bitrateKbps > 0
       ? `${value.bitrateKbps} кбит/с`
@@ -235,45 +273,6 @@ export function renderSummary(value: RenderSettings): string {
       ? 'без звука'
       : `${value.audioCodec.toUpperCase()} ${value.audioBitrateKbps} кбит/с`
   return `${name} · ${weight} · ${sound} · ${value.container.toUpperCase()}`
-}
-
-/** Поле для числа: набранное применяется по Enter или когда поле оставили. */
-function NumberEntry({
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  value: number
-  min: number
-  max: number
-  onChange: (value: number) => void
-}) {
-  const [draft, setDraft] = useState<string | null>(null)
-  const apply = () => {
-    if (draft === null) return
-    const next = Number(draft)
-    setDraft(null)
-    if (Number.isFinite(next) && next >= min) onChange(Math.min(max, Math.round(next)))
-  }
-  return (
-    <span className="flex items-baseline gap-1">
-      <input
-        type="number"
-        value={draft ?? value}
-        min={min}
-        max={max}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={apply}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') apply()
-          if (event.key === 'Escape') setDraft(null)
-        }}
-        className="w-[76px] rounded-md border border-line-soft bg-surface-2 px-1.5 py-0.5 text-right font-mono text-[12px] tabular-nums text-ink outline-none focus:border-accent"
-      />
-      <span className="text-[11px] text-ink-faint">кбит/с</span>
-    </span>
-  )
 }
 
 /**
@@ -321,105 +320,66 @@ function ScaleMarks({
   )
 }
 
-export function ComposeRenderSettings({
-  open,
-  onClose,
+/** Список-кнопка в строку: скорость, формат файла. */
+function Choice({
+  label,
   value,
+  options,
   onChange,
 }: {
-  open: boolean
-  onClose: () => void
+  label: string
+  value: string
+  options: { value: string; label: string }[]
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="min-w-0 flex-1">
+      <span className="label">{label}</span>
+      <Dropdown
+        value={value}
+        options={options}
+        onChange={onChange}
+        className="field flex w-full items-center gap-1 text-left text-[12.5px] hover:border-line"
+      >
+        <span className="min-w-0 flex-1 truncate">
+          {options.find((item) => item.value === value)?.label ?? value}
+        </span>
+        <ChevronDown size={13} className="shrink-0 text-ink-faint" />
+      </Dropdown>
+    </div>
+  )
+}
+
+export function ComposeRenderPanel({
+  value,
+  onChange,
+  loudnorm,
+  onLoudnorm,
+}: {
   value: RenderSettings
   onChange: (value: RenderSettings) => void
+  loudnorm: boolean
+  onLoudnorm: (value: boolean) => void
 }) {
-  const toast = useStore((state) => state.toast)
-  const [mine, setMine] = useState<RenderPreset[]>([])
-  const [name, setName] = useState('')
-  /** Какой набор сейчас переименовывают. */
-  const [renaming, setRenaming] = useState<string | null>(null)
-  const [renamed, setRenamed] = useState('')
-
-  useEffect(() => {
-    if (!open) return
-    api
-      .composeRenderPresets()
-      .then((data) => setMine(data.presets ?? []))
-      .catch(() => setMine([]))
-  }, [open])
-
   const set = (patch: Partial<RenderSettings>) => onChange({ ...value, ...patch })
-
-  async function keep(list: RenderPreset[]) {
-    setMine(list)
-    try {
-      await api.composeRenderPresetsSave(list)
-    } catch (error) {
-      toast((error as Error).message, 'error')
-    }
-  }
-
-  async function addMine() {
-    const label = name.trim()
-    if (!label) return
-    const preset: RenderPreset = { ...value, id: `my-${Date.now().toString(36)}`, label }
-    await keep([...mine.filter((item) => item.label !== label), preset])
-    setName('')
-    toast(`Набор «${label}» сохранён`, 'ok')
-  }
-
   const scale = QUALITY_SCALE[value.videoCodec] ?? QUALITY_SCALE.h264
   const byBitrate = value.bitrateKbps > 0
+  const sound = AUDIO_CODECS.find((item) => item.value === value.audioCodec) ?? AUDIO_CODECS[0]
+  // Последний битрейт, заданный руками, — чтобы переключение «качеством /
+  // битрейтом» туда и обратно его не теряло.
+  const [lastBitrate, setLastBitrate] = useState(value.bitrateKbps || 6000)
 
-  /** Кнопка набора: подсвечена, пока настройки совпадают с ним. */
-  const presetRow = (preset: RenderPreset, own: boolean) => {
-    const picked = sameAs(value, preset)
-    return (
-      <div key={preset.id} className="flex items-center gap-1">
-        {renaming === preset.id ? (
-          <>
-            <input
-              autoFocus
-              className="field min-w-0 flex-1 py-1.5 text-[12.5px]"
-              value={renamed}
-              maxLength={PRESET_NAME_LIMIT}
-              onChange={(event) => setRenamed(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') setRenaming(null)
-                if (event.key !== 'Enter') return
-                const label = renamed.trim()
-                if (label) {
-                  void keep(
-                    mine.map((item) =>
-                      item.id === preset.id ? { ...item, label } : item,
-                    ),
-                  )
-                }
-                setRenaming(null)
-              }}
-            />
+  return (
+    <Section title="Сборка" id="compose.render" summary={presetName(value)}>
+      <div className="space-y-1">
+        {BUILTIN_PRESETS.map((preset) => {
+          const picked = sameAs(value, preset)
+          return (
             <button
-              type="button"
-              title="Готово"
-              onClick={() => {
-                const label = renamed.trim()
-                if (label) {
-                  void keep(
-                    mine.map((item) => (item.id === preset.id ? { ...item, label } : item)),
-                  )
-                }
-                setRenaming(null)
-              }}
-              className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-surface-3 hover:text-ink"
-            >
-              <Check size={14} />
-            </button>
-          </>
-        ) : (
-          <>
-            <button
+              key={preset.id}
               type="button"
               onClick={() => onChange(settingsOf(preset))}
-              className={`flex min-w-0 flex-1 items-center gap-2 truncate rounded-lg border px-2.5 py-2 text-left text-[12.5px] transition-colors ${
+              className={`flex w-full items-center gap-2 truncate rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
                 picked
                   ? 'border-accent bg-accent/15 text-accent-soft'
                   : 'border-line-soft text-ink-dim hover:border-line hover:text-ink'
@@ -428,68 +388,14 @@ export function ComposeRenderSettings({
               {picked && <Check size={13} className="shrink-0" />}
               <span className="truncate">{preset.label}</span>
             </button>
-            {own && (
-              <>
-                <button
-                  type="button"
-                  title="Переименовать"
-                  onClick={() => {
-                    setRenaming(preset.id)
-                    setRenamed(preset.label)
-                  }}
-                  className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-surface-3 hover:text-ink"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  type="button"
-                  title="Убрать свой набор"
-                  onClick={() => void keep(mine.filter((item) => item.id !== preset.id))}
-                  className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-surface-3 hover:text-danger"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </>
-            )}
-          </>
-        )}
+          )
+        })}
       </div>
-    )
-  }
 
-  const known = [...BUILTIN_PRESETS, ...mine].some((preset) => sameAs(value, preset))
-
-  return (
-    <Modal open={open} onClose={onClose} title="Настройки сборки">
-      <div className="space-y-5">
-        <div>
-          <span className="label">Наборы настроек</span>
-          <div className="space-y-1">
-            {BUILTIN_PRESETS.map((preset) => presetRow(preset, false))}
-            {mine.map((preset) => presetRow(preset, true))}
-            {!known && (
-              <p className="px-1 pt-1 text-[11px] text-ink-faint">
-                Настройки изменены вручную — сохраните их своим набором, чтобы вернуться
-                к ним потом.
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="space-y-3 border-t border-line-soft pt-4">
-          <Toggle
-            checked={Boolean(value.audioOnly)}
-            onChange={(audioOnly) =>
-              set({ audioOnly, ...(audioOnly && value.audioCodec === 'none' ? { audioCodec: 'mp3' } : {}) })
-            }
-            label="Только звук — без картинки"
-            hint="Соберётся звуковой файл (MP3, M4A, Opus или FLAC — по кодеку звука), например чтобы достать звук из ролика. Если на таймлайне нет ни видео, ни картинок, ни надписей, звуком соберётся и без этой галочки."
-          />
-
-          {!value.audioOnly && (
-          <>
-          <Select
-            label="Кодек видео"
+      {!value.audioOnly && (
+        <div className="space-y-2">
+          <Segmented
+            columns={3}
             value={value.videoCodec}
             options={VIDEO_CODECS}
             onChange={(codec) =>
@@ -500,73 +406,43 @@ export function ComposeRenderSettings({
                 // из середины его шкалы, чтобы число не значило вдруг другое.
                 speedPreset: speedOptions(codec)[2].value,
                 crf: (QUALITY_SCALE[codec] ?? QUALITY_SCALE.h264).marks[1].at,
+                ...(byBitrate ? { bitrateKbps: (BITRATE_MARKS[codec] ?? BITRATE_MARKS.h264)[2].value } : {}),
               })
             }
           />
-
-          <div>
-            <span className="label">Чем задавать вес файла</span>
-            <Segmented
-              value={byBitrate ? 'bitrate' : 'quality'}
-              onChange={(mode) =>
-                set(mode === 'bitrate' ? { bitrateKbps: 6000 } : { bitrateKbps: 0 })
-              }
-              options={[
-                {
-                  value: 'quality',
-                  label: 'Качеством',
-                  title:
-                    'Кодировщик сам решает, сколько потратить на каждый кадр. Вес заранее неизвестен, зато картинка ровная.',
-                },
-                {
-                  value: 'bitrate',
-                  label: 'Битрейтом',
-                  title:
-                    'Вес файла известен заранее: примерно битрейт, умноженный на длину. На сложных сценах картинка просядет.',
-                },
-              ]}
-            />
-          </div>
-
+          {/* Чем задавать вес: качеством — картинка ровная, вес заранее
+              неизвестен; битрейтом — вес известен, сложные сцены просядут. */}
+          <Segmented
+            value={byBitrate ? 'bitrate' : 'quality'}
+            onChange={(mode) => set({ bitrateKbps: mode === 'bitrate' ? lastBitrate : 0 })}
+            options={[
+              { value: 'quality', label: 'Качеством', title: 'Кодировщик сам решает, сколько потратить на кадр: картинка ровная, вес заранее неизвестен' },
+              { value: 'bitrate', label: 'Битрейтом', title: 'Вес известен заранее — примерно битрейт на длину; на сложных сценах картинка просядет' },
+            ]}
+          />
           {byBitrate ? (
-            <div>
-              <div className="mb-1.5 flex items-baseline justify-between gap-2">
-                <span className="label mb-0">Битрейт видео</span>
-                {/* Число можно вписать руками: ползунок кончается на разумном
-                    для 1080p, а кому нужно больше — наберёт сам. */}
-                <NumberEntry
-                  value={value.bitrateKbps}
-                  min={200}
-                  max={200000}
-                  onChange={(bitrateKbps) => set({ bitrateKbps })}
-                />
-              </div>
-              <input
-                type="range"
-                className="w-full"
-                min={500}
-                max={BITRATE_MAX}
-                step={250}
-                value={Math.min(value.bitrateKbps, BITRATE_MAX)}
-                onChange={(event) => set({ bitrateKbps: Number(event.target.value) })}
-              />
-              <ScaleMarks
-                marks={BITRATE_MARKS}
-                min={500}
-                max={BITRATE_MAX}
-                at={Math.min(value.bitrateKbps, BITRATE_MAX)}
-              />
-            </div>
+            <SliderNumber
+              stacked
+              label="Битрейт видео"
+              unit="кбит/с"
+              value={value.bitrateKbps}
+              min={500}
+              max={BITRATE_MAX}
+              step={250}
+              reset={(BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264)[2].value}
+              marks={BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264}
+              onChange={(bitrateKbps) => {
+                setLastBitrate(bitrateKbps)
+                set({ bitrateKbps })
+              }}
+            />
           ) : (
             <div>
               {/* Ползунок перевёрнут: вправо — лучше. Внутри у кодеков всё
-                  наоборот, меньше число значит лучше картинку, но человеку
-                  привычно, что «больше вправо» это «больше качества». */}
+                  наоборот, меньше число значит лучше картинку. */}
               <div className="mb-1.5 flex items-baseline justify-between">
                 <span className="label mb-0">Качество</span>
-                <span className="text-[12px] text-ink">
-                  {qualityWord(value.videoCodec, value.crf)}
-                </span>
+                <span className="text-[12px] text-ink">{qualityWord(value.videoCodec, value.crf)}</span>
               </div>
               <input
                 type="range"
@@ -577,10 +453,7 @@ export function ComposeRenderSettings({
                 onChange={(event) => set({ crf: scale.max - Number(event.target.value) })}
               />
               <ScaleMarks
-                marks={[...scale.marks].map((mark) => ({
-                  at: scale.max - mark.at,
-                  label: mark.label,
-                }))}
+                marks={[...scale.marks].map((mark) => ({ at: scale.max - mark.at, label: mark.label }))}
                 min={0}
                 max={scale.max}
                 at={scale.max - value.crf}
@@ -588,77 +461,81 @@ export function ComposeRenderSettings({
               />
             </div>
           )}
+        </div>
+      )}
 
-          <Select
-            label="Скорость кодирования"
+      <div className="space-y-2">
+        <span className="label">Звук</span>
+        <Segmented
+          columns={value.audioOnly ? 4 : 5}
+          value={sound.value}
+          options={AUDIO_CODECS.filter((item) => !value.audioOnly || item.value !== 'none').map((item) => ({
+            value: item.value,
+            label: item.label,
+            title: item.title,
+          }))}
+          onChange={(audioCodec) => {
+            const next = AUDIO_CODECS.find((item) => item.value === audioCodec)!
+            set({ audioCodec, ...(next.normal ? { audioBitrateKbps: next.normal } : {}) })
+          }}
+        />
+        {sound.max > 0 && (
+          <SliderNumber
+            stacked
+            label="Битрейт звука"
+            unit="кбит/с"
+            value={value.audioBitrateKbps}
+            min={sound.min}
+            max={sound.max}
+            step={8}
+            reset={sound.normal}
+            marks={sound.marks}
+            onChange={(audioBitrateKbps) => set({ audioBitrateKbps })}
+          />
+        )}
+      </div>
+
+      {!value.audioOnly && (
+        <div className="flex gap-2">
+          <Choice
+            label="Скорость"
             value={value.speedPreset}
             options={speedOptions(value.videoCodec)}
             onChange={(speedPreset) => set({ speedPreset })}
-            hint="На картинку не влияет — влияет на вес и время. Чем медленнее, тем лучше кодировщик ищет, как ужать: тот же кадр выйдет легче, но ждать дольше."
           />
+          <Choice
+            label="Файл"
+            value={value.container}
+            options={CONTAINERS}
+            onChange={(container) => set({ container })}
+          />
+        </div>
+      )}
 
+      <div className="space-y-1">
+        {!value.audioOnly && (
           <Toggle
             checked={value.useGpu}
             onChange={(useGpu) => set({ useGpu })}
             label="Кодировать на видеокарте"
             hint="Быстрее в разы, но при том же качестве файл обычно тяжелее. Подходящий кодировщик программа подберёт сама."
           />
-          </>
-          )}
-
-          <Select
-            label="Кодек звука"
-            value={value.audioCodec}
-            options={value.audioOnly ? AUDIO_CODECS.filter((item) => item.value !== 'none') : AUDIO_CODECS}
-            onChange={(audioCodec) => set({ audioCodec })}
-          />
-
-          {value.audioCodec !== 'none' && value.audioCodec !== 'flac' && (
-            <Slider
-              label="Битрейт звука"
-              value={value.audioBitrateKbps}
-              min={32}
-              max={512}
-              step={16}
-              onChange={(audioBitrateKbps) => set({ audioBitrateKbps })}
-              suffix=" кбит/с"
-            />
-          )}
-
-          {value.audioOnly ? (
-            <p className="text-[11.5px] text-ink-faint">
-              Файл: {AUDIO_FILE[value.audioCodec] ?? 'M4A'}
-            </p>
-          ) : (
-            <Select
-              label="Контейнер"
-              value={value.container}
-              options={CONTAINERS}
-              onChange={(container) => set({ container })}
-            />
-          )}
-        </div>
-
-        <div className="flex items-end gap-2 border-t border-line-soft pt-4">
-          <label className="flex-1">
-            <span className="label">Сохранить нынешние настройки своим набором</span>
-            <input
-              className="field"
-              value={name}
-              maxLength={PRESET_NAME_LIMIT}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => event.key === 'Enter' && void addMine()}
-              placeholder="Например: для архива"
-            />
-          </label>
-          <Button onClick={() => void addMine()} disabled={!name.trim()}>
-            <Plus size={14} />
-            Сохранить
-          </Button>
-        </div>
-
-        <p className="text-[11px] text-ink-faint">{renderSummary(value)}</p>
+        )}
+        <Toggle
+          checked={loudnorm}
+          onChange={onLoudnorm}
+          label="Выровнять громкость"
+          hint="Готовый файл получит обычную для видео в интернете громкость: тихий монтаж станет громче, слишком громкий — тише, и на пиках звук не захрипит. Слышно и в просмотре."
+        />
+        <Toggle
+          checked={Boolean(value.audioOnly)}
+          onChange={(audioOnly) =>
+            set({ audioOnly, ...(audioOnly && value.audioCodec === 'none' ? { audioCodec: 'mp3', audioBitrateKbps: 256 } : {}) })
+          }
+          label="Только звук"
+          hint="Соберётся звуковой файл (MP3, M4A, Opus или FLAC — по кодеку звука), например чтобы достать звук из ролика. Если на таймлайне нет ни видео, ни картинок, ни надписей, звуком соберётся и без этой галочки."
+        />
       </div>
-    </Modal>
+    </Section>
   )
 }

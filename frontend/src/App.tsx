@@ -264,7 +264,7 @@ export default function App() {
 
         {/* Правая панель настроек экспорта */}
         {tab === 'library' && activeInfo && (
-          <aside className="flex w-[340px] shrink-0 flex-col border-l border-line-soft bg-surface">
+          <aside className="flex w-[clamp(280px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
             {activeInfo.kind === 'image' && !isGif(activeInfo) ? (
               <ImagePanel
                 key={activeInfo.path}

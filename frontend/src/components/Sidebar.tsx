@@ -168,7 +168,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
   }, [files, sort, layout])
 
   return (
-    <aside className="flex w-[336px] shrink-0 flex-col overflow-hidden border-r border-line-soft bg-surface">
+    <aside className="flex w-[clamp(250px,20vw,336px)] shrink-0 flex-col overflow-hidden border-r border-line-soft bg-surface">
       {/* Рабочая папка */}
       <div className="border-b border-line-soft px-3 py-2.5">
         <button
@@ -254,12 +254,12 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
               void select(paths[0])
             }
           }}
-          className="flex items-center gap-1.5 rounded px-1.5 py-1 enabled:hover:bg-surface-3 enabled:hover:text-ink-dim disabled:cursor-not-allowed disabled:opacity-45"
+          className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 py-1 enabled:hover:bg-surface-3 enabled:hover:text-ink-dim disabled:cursor-not-allowed disabled:opacity-45"
         >
           {allChecked ? <CheckSquare size={13} /> : <Square size={13} />}
           {checked.length ? `Выбрано: ${checked.length}` : 'Выбрать все'}
         </button>
-        <span className="ml-auto tabular-nums">{humanSize(totalSize)}</span>
+        <span className="ml-auto whitespace-nowrap tabular-nums">{humanSize(totalSize)}</span>
         <span className="relative">
           <IconButton
             onClick={() => setSortOpen((value) => !value)}

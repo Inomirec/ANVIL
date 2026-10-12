@@ -36,14 +36,22 @@ export const emptyImageEdit: ImageEdit = { crop: null, boxes: [], strokes: [], t
 /** Как выглядит следующая надпись — запоминается между картинками. */
 const TEXT_STYLE_KEY = 'sgh.imageText'
 
-function readTextStyle(): { font: string; size: number; color: string } {
+interface TextStyle {
+  font: string
+  size: number
+  color: string
+  stroke: number
+  strokeColor: string
+}
+
+function readTextStyle(): TextStyle {
   try {
     const saved = JSON.parse(localStorage.getItem(TEXT_STYLE_KEY) ?? 'null')
-    if (saved && typeof saved.font === 'string') return saved
+    if (saved && typeof saved.font === 'string') return { stroke: 0, strokeColor: '#000000', ...saved }
   } catch {
     // Испорченная запись — берём обычные.
   }
-  return { font: 'Arial', size: 64, color: '#ffffff' }
+  return { font: 'Arial', size: 64, color: '#ffffff', stroke: 0, strokeColor: '#000000' }
 }
 
 /** Инструменты редактора: значок, название и для чего он. */
@@ -105,6 +113,7 @@ export function ImageEditor({
   const [textStyle, setTextStyle] = useState(readTextStyle)
   const [fonts, setFonts] = useState<FontRow[] | null>(null)
   const textColorRef = useRef<HTMLInputElement>(null)
+  const strokeColorRef = useRef<HTMLInputElement>(null)
   const textSession = useRef(false)
   // Точек окна на пиксель оригинала: по нему растут буквы надписей.
   const [scale, setScale] = useState(1)
@@ -182,8 +191,11 @@ export function ImageEditor({
   )
 
   /** Вид надписи на панели: у выбранной — её, иначе — следующей. */
-  const shownStyle = textSel !== null && texts[textSel] ? texts[textSel] : textStyle
-  const applyStyle = (patch: Partial<{ font: string; size: number; color: string }>) => {
+  const chosenText = textSel !== null ? texts[textSel] : undefined
+  const shownStyle: TextStyle = chosenText
+    ? { ...textStyle, ...chosenText, stroke: chosenText.stroke ?? 0, strokeColor: chosenText.strokeColor ?? '#000000' }
+    : textStyle
+  const applyStyle = (patch: Partial<TextStyle>) => {
     const next = { ...textStyle, ...patch }
     setTextStyle(next)
     try {
@@ -449,7 +461,16 @@ export function ImageEditor({
       // code не зависит от раскладки (на русской это «я»), но синтетические
       // события иногда его не проставляют — поэтому проверяем и key.
       const isZ = event.code === 'KeyZ' || event.key?.toLowerCase() === 'z'
-      if ((event.ctrlKey || event.metaKey) && isZ) {
+      const isA = event.code === 'KeyA' || event.key?.toLowerCase() === 'a'
+      if ((event.ctrlKey || event.metaKey) && isA) {
+        // Выделить всю картинку, а не всю страницу программы: всё
+        // нарисованное попадает в рамку, и его можно убрать разом.
+        if (target?.isContentEditable || !natural.width) return
+        event.preventDefault()
+        setTool('select')
+        setSelection(null)
+        markArea({ x: 0, y: 0, width: natural.width, height: natural.height })
+      } else if ((event.ctrlKey || event.metaKey) && isZ) {
         event.preventDefault()
         undo()
       } else if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -472,7 +493,7 @@ export function ImageEditor({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [undo, removeSelected, removeMarked, selection, marked, textSel, texts, edit, onEditChange, commit])
+  }, [undo, removeSelected, removeMarked, selection, marked, textSel, texts, edit, onEditChange, commit, markArea, natural.width, natural.height])
 
   const hasEdits = Boolean(edit.crop) || edit.boxes.length > 0 || texts.length > 0
 
@@ -577,6 +598,10 @@ export function ImageEditor({
               }}
               onChange={patchText}
               onCommit={commit}
+              onRemove={(index) => {
+                onEditChange({ ...edit, texts: texts.filter((_, i) => i !== index) })
+                setTextSel(null)
+              }}
               onCreate={(x, y) => {
                 // Нажали мимо надписей: снимаем выбор, а если ничего не было
                 // выбрано — ставим новую там, где нажали.
@@ -598,6 +623,20 @@ export function ImageEditor({
             </div>
           )}
         </div>
+
+        {/* Масштаб — в углу картинки, как у видео: на панели инструментов
+            ему не хватало места. Нажатие возвращает картинку на место. */}
+        {(zoom !== 1 || pan.x !== 0 || pan.y !== 0) && (
+          <button
+            type="button"
+            onClick={resetView}
+            title="Вписать — вернуть картинку в исходное положение. Колесо — приблизить, средняя кнопка или пробел — двигать"
+            className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
+          >
+            <Maximize2 size={11} />
+            {Math.round(zoom * 100)}%
+          </button>
+        )}
 
         {preview && (
           <div className="absolute bottom-3 left-3 flex overflow-hidden rounded-lg ring-1 ring-line-soft">
@@ -628,7 +667,7 @@ export function ImageEditor({
       {/* Инструменты */}
       {/* Одна строка: сведения о файле справа сжимаются, а не переносят
           панель на вторую строку. */}
-      <div className="flex items-center gap-x-3 rounded-xl bg-surface px-3 py-2 text-[11px] text-ink-faint ring-1 ring-line-soft">
+      <div className="flex items-center gap-x-2 rounded-xl bg-surface px-2.5 py-2 text-[11px] text-ink-faint ring-1 ring-line-soft">
         <span className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line-soft">
           {TOOLS.map((item) => (
             <button
@@ -655,7 +694,7 @@ export function ImageEditor({
             надпись, а без выбора — следующую. */}
         {(tool === 'text' || textSel !== null) && (
           <span className="flex items-center gap-1.5">
-            <span className="w-36">
+            <span className="w-24">
               <FontPicker
                 up
                 value={shownStyle.font}
@@ -705,6 +744,67 @@ export function ImageEditor({
                 tabIndex={-1}
               />
             </button>
+            {/* Обводка: буква с контуром включает её, рядом — цвет и толщина. */}
+            <button
+              type="button"
+              onClick={() => {
+                textSession.current = false
+                applyStyle({ stroke: shownStyle.stroke ? 0 : Math.max(2, Math.round(shownStyle.size / 16)) })
+              }}
+              title={shownStyle.stroke ? 'Обводка включена — нажмите, чтобы убрать' : 'Обводка букв'}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg text-[15px] font-bold transition-colors ${
+                shownStyle.stroke ? 'bg-accent/20' : 'hover:bg-surface-3'
+              }`}
+              style={{
+                color: 'transparent',
+                WebkitTextStroke: `1.2px ${shownStyle.stroke ? 'var(--color-accent-soft)' : 'var(--color-ink-dim)'}`,
+              }}
+            >
+              A
+            </button>
+            {shownStyle.stroke > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    textSession.current = false
+                    strokeColorRef.current?.click()
+                  }}
+                  title="Цвет обводки"
+                  className="flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3"
+                >
+                  <span className="h-4 w-4 rounded-[3px] ring-1 ring-line" style={{ background: shownStyle.strokeColor }} />
+                  <input
+                    ref={strokeColorRef}
+                    type="color"
+                    value={shownStyle.strokeColor}
+                    onChange={(event) => applyStyle({ strokeColor: event.target.value })}
+                    className="h-0 w-0 opacity-0"
+                    tabIndex={-1}
+                  />
+                </button>
+                <label
+                  className="flex items-center rounded-lg bg-surface-2 px-1.5 ring-1 ring-line-soft"
+                  title="Толщина обводки в пикселях картинки"
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={shownStyle.stroke}
+                    onFocus={() => {
+                      textSession.current = false
+                    }}
+                    onChange={(event) => {
+                      const value = Number(event.target.value)
+                      if (value >= 1 && value <= 200) applyStyle({ stroke: value })
+                    }}
+                    className="w-9 bg-transparent py-1 text-right font-mono text-[12px] text-ink outline-none"
+                  />
+                  <span className="ml-0.5 text-[10px]">px</span>
+                </label>
+              </>
+            )}
           </span>
         )}
 
@@ -758,18 +858,6 @@ export function ImageEditor({
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={resetView}
-          disabled={zoom === 1 && pan.x === 0 && pan.y === 0}
-          title="Вписать — вернуть картинку в исходное положение. Колесо — приблизить, средняя кнопка или пробел — двигать"
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-surface-3 hover:text-ink-dim disabled:opacity-30 disabled:hover:bg-transparent"
-        >
-          <Maximize2 size={12} />
-          <span className="w-9 text-right font-mono tabular-nums text-ink">
-            {Math.round(zoom * 100)}%
-          </span>
-        </button>
 
         <button
           type="button"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 MediaKind = Literal["video", "audio", "image", "other"]
@@ -117,6 +117,10 @@ class ImageText(BaseModel):
     #: Высота букв в пикселях оригинала.
     size: int = Field(default=48, ge=4, le=2000)
     color: str = "#ffffff"
+    #: Толщина обводки в пикселях оригинала, 0 — без обводки.
+    stroke: int = Field(default=0, ge=0, le=200)
+    #: Окно присылает имя в своём написании — понимаем оба.
+    stroke_color: str = Field(default="#000000", validation_alias=AliasChoices("strokeColor", "stroke_color"))
 
 
 class ImageOptions(BaseModel):
