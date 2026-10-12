@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ClipboardPaste,
   Download,
@@ -7,13 +7,14 @@ import {
   Images,
   Loader2,
   Plus,
+  Eraser,
   Scissors,
   Trash2,
   X,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
-import type { GalleryItem } from '../lib/types'
+import type { GalleryItem, Preset } from '../lib/types'
 import { useStore } from '../store'
 import { FolderPicker } from './FolderPicker'
 import { LinkPreview } from './LinkPreview'
@@ -69,14 +70,27 @@ export function DownloadPanel() {
   // Показываем только те пресеты, которые подходят к выбранному типу
   // загрузки: выбрав «Кадры», человек раньше видел в списке сжатие видео
   // и звука, выбирал его — и не понимал, почему ничего не происходит.
-  const autoPresets =
+  //
+  // «Без сжатия» в списке не нужен вовсе: это то же самое, что «Просто
+  // скачать». К видео добавляем звук — бывает, что из ролика нужен один звук.
+  const videoPresets = (presets.video ?? []).filter((preset) => !preset.options.stream_copy)
+  const groups: { title: string; items: Preset[] }[] =
     mode === 'images'
-      ? (presets.image ?? [])
+      ? [{ title: 'Картинки', items: presets.image ?? [] }]
       : mode === 'audio'
-        ? (presets.audio ?? [])
-        // В «Авто» тип заранее неизвестен, поэтому показываем всё:
-          // в свёрнутом списке длина не мешает.
-          : [...(presets.video ?? []), ...(presets.audio ?? []), ...(presets.image ?? [])]
+        ? [{ title: 'Звук', items: presets.audio ?? [] }]
+        : mode === 'video'
+          ? [
+              { title: 'Видео', items: videoPresets },
+              { title: 'Звук', items: presets.audio ?? [] },
+            ]
+          // В «Авто» тип заранее неизвестен — всё, но разложенное по видам.
+          : [
+              { title: 'Видео', items: videoPresets },
+              { title: 'Звук', items: presets.audio ?? [] },
+              { title: 'Картинки', items: presets.image ?? [] },
+            ]
+  const autoPresets = groups.flatMap((group) => group.items)
 
   // Сменили тип — выбранный пресет мог стать неподходящим, снимаем его.
   useEffect(() => {
@@ -308,9 +322,8 @@ export function DownloadPanel() {
       <header>
         <h1 className="text-[20px] font-semibold">Загрузка</h1>
         <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">
-          Каждая ссылка — своя строка. Нажмите «Предпросмотр с разметкой», чтобы открыть видео прямо здесь и
-          выбрать нужный отрезок: скачается только он, а не весь ролик. Без разметки скачивается
-          целиком.
+          Каждая ссылка — своя строка. Значок плёнки открывает видео прямо здесь: можно
+          выбрать нужный отрезок, и скачается только он. Без разметки скачивается целиком.
         </p>
       </header>
 
@@ -351,6 +364,20 @@ export function DownloadPanel() {
           >
             <Plus size={13} />
             Пустая строка
+          </button>
+          <button
+            type="button"
+            disabled={!filled.length && rows.length < 2}
+            onClick={() => {
+              setRows([emptyRow()])
+              setGallery(null)
+              setPicked([])
+            }}
+            title="Стереть все ссылки"
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-line px-3 py-2 text-[12px] text-ink-faint transition-colors hover:border-danger/50 hover:text-danger disabled:opacity-35 disabled:hover:border-line disabled:hover:text-ink-faint"
+          >
+            <Eraser size={13} />
+            Очистить
           </button>
         </div>
       </div>
@@ -470,13 +497,19 @@ export function DownloadPanel() {
               value={autoPreset}
               onChange={setAutoPreset}
               options={[
-                { value: '', label: 'Не сжимать — просто скачать' },
-                // К названию приписываем, чем именно жмём: в выпадающем списке
-                // подсказки не покажешь, а выбирать вслепую неудобно.
-                ...autoPresets.map((preset) => ({
-                  value: preset.id,
-                  label: preset.tech ? `${preset.label} — ${preset.tech}` : preset.label,
-                })),
+                { value: '', label: 'Просто скачать' },
+                // Виды разделены строками, которые нельзя выбрать. Одного вида —
+                // разделитель не нужен. К названию приписываем, чем именно
+                // жмём: в выпадающем списке подсказки не покажешь.
+                ...groups.flatMap((group) => [
+                  ...(groups.length > 1
+                    ? [{ value: `--${group.title}`, label: `──── ${group.title} ────`, disabled: true }]
+                    : []),
+                  ...group.items.map((preset) => ({
+                    value: preset.id,
+                    label: preset.tech ? `${preset.label} — ${preset.tech}` : preset.label,
+                  })),
+                ]),
               ]}
             />
           </Section>
@@ -593,115 +626,94 @@ function LinkRow({
   probing: boolean
 }) {
   const [editingTime, setEditingTime] = useState(false)
-  const areaRef = useRef<HTMLTextAreaElement>(null)
 
   const hasUrl = Boolean(row.url.trim())
   const hasSection = row.start !== null || row.end !== null
+  const icon =
+    'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-35'
 
-  // Поле растёт вниз вместе с длинной ссылкой, но номер строки остаётся один.
-  function autoGrow(element: HTMLTextAreaElement) {
-    element.style.height = 'auto'
-    element.style.height = `${Math.min(element.scrollHeight, 120)}px`
-  }
-
+  // Всё в одну строку: ссылка, отрезок и значки справа. Две строки на ссылку
+  // съедали место, а ссылок за раз бывает много. Поля отрезка открываются
+  // тут же, сдвигая ссылку, а не новой строкой.
   return (
-    <div className="rounded-xl border border-line-soft bg-surface-2 px-3 py-2.5">
-      <div className="flex gap-2.5">
-        <span className="mt-1.5 w-5 shrink-0 text-right text-[12px] font-semibold tabular-nums text-ink-faint">
-          {number}
-        </span>
+    <div className="flex items-center gap-2 rounded-xl border border-line-soft bg-surface-2 px-2.5 py-1.5">
+      <span className="w-5 shrink-0 text-right text-[12px] font-semibold tabular-nums text-ink-faint">
+        {number}
+      </span>
 
-        <textarea
-          ref={areaRef}
-          rows={1}
-          spellCheck={false}
-          value={row.url}
-          placeholder="https://…"
-          className="field min-h-0 resize-none overflow-hidden break-all py-1.5 font-mono text-[12px] leading-snug"
-          onChange={(event) => {
-            onChange({ url: event.target.value })
-            autoGrow(event.target)
-          }}
-          onPaste={(event) => {
-            const text = event.clipboardData.getData('text')
-            if (onPasteMany(text)) event.preventDefault()
-          }}
-          onInput={(event) => autoGrow(event.currentTarget)}
-        />
+      <input
+        spellCheck={false}
+        value={row.url}
+        placeholder="https://…"
+        className="field min-w-0 flex-1 py-1 font-mono text-[12px]"
+        onChange={(event) => onChange({ url: event.target.value })}
+        onPaste={(event) => {
+          const text = event.clipboardData.getData('text')
+          if (onPasteMany(text)) event.preventDefault()
+        }}
+      />
 
-        <button
-          type="button"
-          onClick={onRemove}
-          title="Убрать строку"
-          className="mt-0.5 h-7 w-7 shrink-0 rounded-lg text-ink-faint transition-colors hover:bg-surface-3 hover:text-danger"
-        >
-          <Trash2 size={13} className="mx-auto" />
-        </button>
-      </div>
+      {editingTime && (
+        <>
+          <TimeField label="с" value={row.start} onChange={(value) => onChange({ start: value })} />
+          <TimeField label="по" value={row.end} onChange={(value) => onChange({ end: value })} />
+        </>
+      )}
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-[30px]">
-        <button
-          type="button"
-          disabled={!hasUrl || disabled}
-          onClick={onPreview}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-surface-3 px-2 py-1 text-[11px] text-ink-dim transition-colors hover:bg-line hover:text-ink disabled:opacity-35"
-        >
-          <Film size={12} />
-          Предпросмотр с разметкой
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setEditingTime((value) => !value)}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-colors ${
-            hasSection
-              ? 'bg-accent/15 text-accent-soft hover:bg-accent/25'
-              : 'bg-surface-3 text-ink-faint hover:bg-line hover:text-ink-dim'
-          }`}
-        >
-          <Scissors size={11} />
-          {hasSection
-            ? `${timecode(row.start ?? 0, true)} → ${row.end !== null ? timecode(row.end, true) : 'конец'}`
-            : 'Указать тайминги'}
-        </button>
-
-        {hasSection && (
+      {hasSection && !editingTime && (
+        <span className="flex shrink-0 items-center gap-1 rounded-lg bg-accent/15 py-0.5 pl-2 pr-1 font-mono text-[11px] text-accent-soft">
+          {timecode(row.start ?? 0, true)} → {row.end !== null ? timecode(row.end, true) : 'конец'}
           <button
             type="button"
             onClick={() => onChange({ start: null, end: null })}
-            className="rounded px-1.5 py-1 text-[11px] text-ink-faint hover:text-ink"
+            title="Скачать целиком"
+            className="rounded p-0.5 hover:bg-accent/25"
           >
-            сбросить
+            <X size={11} />
           </button>
-        )}
-
-        {galleryReady && (
-          <button
-            type="button"
-            disabled={!hasUrl || probing}
-            onClick={onGallery}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-ink-faint transition-colors hover:bg-surface-3 hover:text-ink-dim disabled:opacity-35"
-          >
-            <Images size={12} />
-            Картинки поста
-          </button>
-        )}
-      </div>
-
-      {editingTime && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 pl-[30px]">
-          <TimeField
-            label="с"
-            value={row.start}
-            onChange={(value) => onChange({ start: value })}
-          />
-          <TimeField label="по" value={row.end} onChange={(value) => onChange({ end: value })} />
-          <span className="text-[11px] text-ink-faint">
-            Формат: <span className="font-mono">1:23</span> или{' '}
-            <span className="font-mono">83</span>. Пусто — от начала / до конца.
-          </span>
-        </div>
+        </span>
       )}
+
+      <button
+        type="button"
+        disabled={!hasUrl || disabled}
+        onClick={onPreview}
+        title="Предпросмотр с разметкой: открыть видео здесь и выбрать отрезок"
+        className={`${icon} text-ink-faint hover:bg-surface-3 hover:text-ink`}
+      >
+        <Film size={13} />
+      </button>
+      <button
+        type="button"
+        onClick={() => setEditingTime((value) => !value)}
+        title="Указать тайминги вручную: 1:23 или 83, пусто — от начала или до конца"
+        className={`${icon} ${
+          editingTime || hasSection
+            ? 'bg-accent/15 text-accent-soft hover:bg-accent/25'
+            : 'text-ink-faint hover:bg-surface-3 hover:text-ink'
+        }`}
+      >
+        <Scissors size={13} />
+      </button>
+      {galleryReady && (
+        <button
+          type="button"
+          disabled={!hasUrl || probing}
+          onClick={onGallery}
+          title="Картинки поста: показать, что в нём есть, и выбрать нужные"
+          className={`${icon} text-ink-faint hover:bg-surface-3 hover:text-ink`}
+        >
+          <Images size={13} />
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        title="Убрать строку"
+        className={`${icon} text-ink-faint hover:bg-surface-3 hover:text-danger`}
+      >
+        <Trash2 size={13} />
+      </button>
     </div>
   )
 }
@@ -718,10 +730,10 @@ function TimeField({
   const [text, setText] = useState(value === null ? '' : timecode(value, true))
 
   return (
-    <label className="flex items-center gap-1.5 text-[11px] text-ink-faint">
+    <label className="flex shrink-0 items-center gap-1 text-[11px] text-ink-faint">
       {label}
       <input
-        className="field w-24 py-1 text-center font-mono text-[12px]"
+        className="field w-[72px] py-1 text-center font-mono text-[12px]"
         value={text}
         placeholder="—"
         onChange={(event) => setText(event.target.value)}

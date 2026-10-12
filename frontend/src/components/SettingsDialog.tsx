@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { plural } from '../lib/format'
 import type { ToolInfo } from '../lib/types'
 import { useStore } from '../store'
-import { Button, Modal, NumberField, Section, Segmented, Select, Spinner, Toggle } from './ui'
+import { Button, Modal, NumberField, QuietHints, Section, Segmented, Select, Spinner, Toggle } from './ui'
 
 /** Инструменты, которые протухают и требуют обновления. */
 const UPDATABLE = new Set(['yt-dlp', 'gallery-dl'])
@@ -193,7 +193,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <div className="space-y-7">
             <Section title="Инструменты">
               <div className="space-y-1.5">
-                {Object.entries(status?.tools ?? {}).map(([name, tool]) => (
+                {/* Только то, что обновлять нужно: загрузчики ломаются вместе
+                    с сайтами. ffmpeg и Deno от сайтов не зависят — их видно,
+                    только если с ними беда. */}
+                {Object.entries(status?.tools ?? {})
+                  .filter(([name, tool]) => UPDATABLE.has(name) || !tool.available)
+                  .map(([name, tool]) => (
                   <ToolRow
                     key={name}
                     tool={tool}
@@ -204,11 +209,6 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                   />
                 ))}
               </div>
-              <p className="text-[11px] leading-snug text-ink-faint">
-                Сайты постоянно меняются и ломают загрузчики, поэтому у yt-dlp и gallery-dl
-                проверяется свежесть. ffmpeg и Deno от сайтов не зависят — их обновлять
-                не нужно.
-              </p>
               <Button onClick={() => void recheck()} disabled={checking} className="w-full">
                 {checking ? <Spinner size={13} /> : <RefreshCw size={13} />}
                 Проверить обновления
@@ -326,12 +326,14 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             <Section title="Загрузка">
               <CookiesField />
 
-              <Toggle
-                checked={settings.download.proxy_enabled}
-                onChange={(value) => void patch({ download: { proxy_enabled: value } })}
-                label="Качать через прокси"
-                hint="Адрес сохраняется, даже когда переключатель выключен — стирать его не нужно."
-              />
+              <QuietHints>
+                <Toggle
+                  checked={settings.download.proxy_enabled}
+                  onChange={(value) => void patch({ download: { proxy_enabled: value } })}
+                  label="Качать через прокси"
+                  hint="Адрес сохраняется, даже когда переключатель выключен — стирать его не нужно."
+                />
+              </QuietHints>
               <input
                 className="field font-mono text-[12px]"
                 value={settings.download.proxy ?? ''}
@@ -341,22 +343,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               />
             </Section>
 
-            {/* Папка результатов переехала сюда из «Обработки»: левая колонка
-                была длиннее правой, и до этой настройки приходилось листать,
-                хотя справа оставалось пустое место. */}
-            <Section title="Результаты">
-              <div>
-                <span className="label">Папка для результатов</span>
-                <input
-                  className="field font-mono text-[12px]"
-                  value={settings.export.output_folder}
-                  onChange={(event) => void patch({ export: { output_folder: event.target.value } })}
-                />
-                <p className="mt-1 text-[11px] text-ink-faint">
-                  Создаётся рядом с исходником. Оригиналы никогда не перезаписываются, кроме
-                  случая, когда это включено вручную для картинок.
-                </p>
-              </div>
+            <Section title="Название создаваемой подпапки">
+              <input
+                className="field font-mono text-[12px]"
+                value={settings.export.output_folder}
+                onChange={(event) => void patch({ export: { output_folder: event.target.value } })}
+              />
             </Section>
 
           </div>
@@ -508,37 +500,33 @@ function CookiesField() {
 
   return (
     <div>
-      <span className="label">Доступ к сайтам</span>
-      <p className="mb-2 text-[11px] leading-snug text-ink-faint">
-        YouTube и другие крупные сайты давно не отдают файлы кому попало: они
-        проверяют, что запрос идёт из настоящего браузера, где кто-то вошёл в
-        аккаунт. Без такого подтверждения часть роликов не скачается вовсе, а
-        возрастные и закрытые — тем более. Подтверждение и есть те самые «куки».
+      <p className="mb-3 text-[11px] leading-snug text-ink-faint">
+        YouTube очень внимательно следит за тем, чтобы видео с их платформы никто
+        не мог скачать. Все подозрительные запросы тут же отклоняются. Чтобы
+        обойти систему защиты, программе необходимо притвориться пользователем.
+        Здесь-то и пригодятся cookies.
       </p>
 
+      <span className="label">Откуда программе брать cookies?</span>
+      {/* Переключение убирает загруженный файл — так задумано, чтобы не
+          гадать, какой из двух способов сработал. Об этом — в подсказке. */}
       <Segmented<'off' | 'firefox' | 'file'>
         value={mode}
         onChange={(value) => void choose(value)}
         options={[
-          { value: 'off', label: 'Не нужно', title: 'Пока всё качается — можно не трогать' },
+          { value: 'off', label: 'Без них', title: 'Пока всё качается — можно не трогать' },
           {
             value: 'firefox',
-            label: 'Из Firefox',
-            title: 'Программа сама прочитает ваш Firefox. Загруженный файл при этом убирается',
+            label: 'Firefox',
+            title: 'Программа сама прочитает ваш Firefox. Загруженный файл при этом убирается из программы',
           },
-          { value: 'file', label: 'Файлом', title: 'Подходит любому браузеру' },
+          {
+            value: 'file',
+            label: 'Файл',
+            title: 'Подходит любому браузеру. Выбор другого способа потом уберёт файл из программы — ваш исходный файл останется на месте',
+          },
         ]}
       />
-
-      {/* Переключение убирает загруженный файл — так задумано, чтобы не
-          гадать, какой из двух способов сработал. Но со стороны это выглядит
-          как пропажа, поэтому предупреждаем заранее. */}
-      {mode === 'file' && (
-        <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">
-          Выбор другого способа уберёт загруженный файл из программы — ваш
-          исходный файл при этом остаётся на месте, его можно загрузить снова.
-        </p>
-      )}
 
       {mode === 'file' && (
         <>
@@ -603,9 +591,10 @@ function CookiesField() {
 
       {mode === 'firefox' && (
         <p className="mt-2 text-[11px] leading-snug text-ink-faint">
-          Firefox должен быть установлен, и в нём нужно быть авторизованным.
-          Chrome, Edge, Opera и Vivaldi так прочитать нельзя — они шифруют своё
-          хранилище. Для них выберите «Файлом».
+          Недостаточно лишь скачать браузер. Для корректной работы вы также
+          должны быть авторизованы на странице, откуда собираетесь скачивать
+          медиафайл. К сожалению, другие браузеры шифруют cookies, так что они
+          не подойдут.
         </p>
       )}
 
@@ -626,7 +615,7 @@ function CookiesField() {
         </summary>
         <ol className="mt-1.5 list-decimal space-y-1.5 pl-4">
           <li>
-            Поставьте расширение{' '}
+            Установите расширение{' '}
             <button
               type="button"
               onClick={() => void api.openLink('cookies-extension-chrome')}
@@ -634,32 +623,22 @@ function CookiesField() {
             >
               Get cookies.txt LOCALLY
             </button>{' '}
-            — откроется его страница в магазине Chrome (подойдёт также для Edge,
-            Opera и Vivaldi). Для{' '}
+            для браузера. Для Firefox есть своя{' '}
             <button
               type="button"
               onClick={() => void api.openLink('cookies-extension-firefox')}
               className="text-accent-soft underline decoration-dotted underline-offset-2 hover:text-accent"
             >
-              Firefox
-            </button>{' '}
-            есть своя версия.
+              версия
+            </button>
+            .
           </li>
+          <li>Откройте расширение.</li>
           <li>
-            Убедитесь, что вы вошли в аккаунт на тех сайтах, откуда собираетесь
-            скачивать. Файл сохранит подтверждения сразу для всех открытых вами
-            сайтов — отдельный файл под каждый не нужен.
+            Нажмите <span className="text-ink-dim">«Export All Cookies»</span>.
           </li>
-          <li>
-            Нажмите значок расширения и кнопку <span className="text-ink-dim">Export</span> —
-            сохранится <span className="font-mono text-ink-dim">cookies.txt</span>.
-          </li>
-          <li>Вернитесь сюда, нажмите «Файлом» и выберите этот файл.</li>
+          <li>Скачанный файл скормите программе через кнопку «Файл».</li>
         </ol>
-        <p className="mt-1.5">
-          Файл лежит только на вашем компьютере и никуда не отправляется. Если
-          вы вышли из аккаунта или сменили пароль, выгрузите его заново.
-        </p>
       </details>
     </div>
   )
