@@ -243,7 +243,7 @@ def _custom_titlebar(window) -> None:
         from app.core import titlebar
 
         handle = int(form.Handle.ToInt64())
-        if titlebar.install(handle, lambda job: form.Invoke(Action(job))):
+        if titlebar.install(handle, lambda job: form.Invoke(Action(job)), _minimum_size()):
             # Страница уже нарисована со строкой заголовка — пусть узнает,
             # что теперь кнопки окна её.
             window.evaluate_js("window.dispatchEvent(new Event('sgh:titlebar'))")
@@ -332,26 +332,14 @@ MIN_WIDTH, MIN_HEIGHT = 1150, 720
 START_WIDTH, START_HEIGHT = 1280, 800
 
 
-def _screen_scale() -> float:
-    """Масштаб Windows на главном экране: 1.25 при 125%."""
-    scale = 1.0
-    if sys.platform == "win32":
-        with contextlib.suppress(Exception):
-            ctypes.windll.shcore.GetScaleFactorForDevice.restype = ctypes.c_int
-            scale = max(1.0, ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100)
-    return scale
-
-
 def _minimum_size() -> tuple[int, int]:
-    """Наименьший размер окна в точках экрана.
+    """Наименьший размер окна — с невидимой рамкой, за которую окно тянут.
 
-    Окно меряется точками экрана, а страница — точками интерфейса, и при
-    масштабе Windows 125% их отношение 1.25: заданные «как есть» 1280 точек
-    давали интерфейсу всего 1024. Переводим по масштабу главного экрана и
-    прибавляем невидимую рамку, за которую окно тянут (по 8 точек).
+    Размеры задаются точками интерфейса: окно, знающее масштаб каждого
+    монитора, само умножает их на масштаб того монитора, где стоит. Своё
+    умножение сверху дало бы окно в 1.25 раза больше при 125%.
     """
-    scale = _screen_scale()
-    return round(MIN_WIDTH * scale) + 16, round(MIN_HEIGHT * scale) + 16
+    return MIN_WIDTH + 20, MIN_HEIGHT + 18
 
 
 def launch_window(url: str, port: int) -> bool:
@@ -380,14 +368,26 @@ def launch_window(url: str, port: int) -> bool:
                 "личность приложения: %s", current.value
             )
 
+    # Масштаб — у каждого монитора свой. pywebview объявляет окно знающим
+    # только масштаб главного монитора, и на мониторе с другим масштабом
+    # Windows растягивала готовую картинку окна: всё мылилось, а по краям
+    # развёрнутого окна просачивалась белая полоса в точку. Объявленное
+    # раньше остаётся в силе — его вызов после нашего уже ничего не меняет.
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+
     title = f"SiGame Helper {__version__}"
     window = webview.create_window(
         title,
         url,
-        # Тоже точки экрана: умножаем на масштаб, как и наименьший размер.
-        width=round(START_WIDTH * _screen_scale()) + 16,
-        height=round(START_HEIGHT * _screen_scale()) + 16,
-        min_size=_minimum_size(),
+        # Точки интерфейса, как и наименьший размер: на масштаб умножает окно.
+        width=START_WIDTH + 16,
+        height=START_HEIGHT + 16,
+        # Наименьший размер держит своя строка заголовка (``titlebar``) — по
+        # масштабу монитора, где окно стоит. Форма считала его один раз и на
+        # другом мониторе путалась; ей оставляем только страховку.
+        min_size=(400, 300),
         background_color="#0b0d12",
         text_select=True,
     )

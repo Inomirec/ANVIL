@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import logging
 import sys
@@ -28,6 +29,7 @@ from typing import Any, Callable
 log = logging.getLogger("sigame-helper")
 
 WM_NCCALCSIZE = 0x0083
+WM_GETMINMAXINFO = 0x0024
 WM_NCLBUTTONDOWN = 0x00A1
 WM_SYSCOMMAND = 0x0112
 HTCAPTION = 2
@@ -58,6 +60,16 @@ class _MONITORINFO(ctypes.Structure):
     ]
 
 
+class _MINMAXINFO(ctypes.Structure):
+    _fields_ = [
+        ("ptReserved", wintypes.POINT),
+        ("ptMaxSize", wintypes.POINT),
+        ("ptMaxPosition", wintypes.POINT),
+        ("ptMinTrackSize", wintypes.POINT),
+        ("ptMaxTrackSize", wintypes.POINT),
+    ]
+
+
 class _NCCALCSIZE_PARAMS(ctypes.Structure):
     _fields_ = [("rgrc", wintypes.RECT * 3), ("lppos", ctypes.c_void_p)]
 
@@ -77,11 +89,20 @@ def _user32():
     return user32
 
 
-def install(hwnd: int, invoke: Callable[[Callable[[], None]], None]) -> bool:
+def install(
+    hwnd: int,
+    invoke: Callable[[Callable[[], None]], None],
+    minimum: tuple[int, int] | None = None,
+) -> bool:
     """Убирает системную строку заголовка у окна ``hwnd``.
 
     ``invoke`` исполняет функцию в потоке окна: подменять обработку
-    сообщений и начинать перетаскивание надо оттуда.
+    сообщений и начинать перетаскивание надо оттуда. ``minimum`` —
+    наименьший размер окна в точках интерфейса: его переводим в точки
+    экрана по масштабу того монитора, где окно стоит сейчас. Сама форма
+    считает его один раз, при открытии, — и на мониторе с другим масштабом
+    окно не сжималось до нужного (при 100% после 125% — 1437 точек вместо
+    1150).
     """
     global _hwnd, _invoke
     if sys.platform != "win32" or not hwnd:
@@ -93,6 +114,21 @@ def install(hwnd: int, invoke: Callable[[Callable[[], None]], None]) -> bool:
     original: list[int] = [0]
 
     def procedure(window, message, wparam, lparam):
+        if message == WM_GETMINMAXINFO and minimum:
+            result = user32.CallWindowProcW(original[0], window, message, wparam, lparam)
+            # Масштаб монитора, на котором окно сейчас (большей частью), а не
+            # окна: окно узнаёт о переезде позже, чем его уже тянут.
+            dpi_x, dpi_y = ctypes.c_uint(96), ctypes.c_uint(96)
+            with contextlib.suppress(Exception):
+                ctypes.windll.shcore.GetDpiForMonitor(
+                    ctypes.c_void_p(user32.MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST)),
+                    0, ctypes.byref(dpi_x), ctypes.byref(dpi_y),
+                )
+            scale = (dpi_x.value or 96) / 96
+            info = ctypes.cast(lparam, ctypes.POINTER(_MINMAXINFO)).contents
+            info.ptMinTrackSize.x = round(minimum[0] * scale)
+            info.ptMinTrackSize.y = round(minimum[1] * scale)
+            return result
         if message == WM_NCCALCSIZE and wparam:
             params = ctypes.cast(lparam, ctypes.POINTER(_NCCALCSIZE_PARAMS)).contents
             top = params.rgrc[0].top

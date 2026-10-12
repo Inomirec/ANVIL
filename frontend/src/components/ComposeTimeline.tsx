@@ -1037,6 +1037,9 @@ export function ComposeTimeline({
             renderOut={renderOut}
             duration={duration}
             onSeek={(at) => {
+              // Нажатие по линейке заодно снимает выделение клипов: иначе
+              // ради этого приходилось искать пустое место на дорожке.
+              select([])
               drag.current = { kind: 'playhead' }
               setPlayhead(at)
             }}
@@ -1127,6 +1130,14 @@ export function ComposeTimeline({
                     // Запоминаем монтаж до правки: одно Ctrl+Z вернёт всё
                     // перетаскивание целиком, а не по пикселю.
                     state.mark()
+                    // Ctrl + нажатие по выбранному клипу снимает его из
+                    // выделения (вместе с группой) — без похода на пустое
+                    // место дорожки и обратно.
+                    if (where === 'move' && (event.ctrlKey || event.metaKey) && state.selected.includes(clip.id)) {
+                      const family = withGroups(state.tracks, [clip.id])
+                      select(state.selected.filter((id) => !family.includes(id)))
+                      return
+                    }
                     const many = event.ctrlKey || event.shiftKey
                     const ids = many
                       ? [...new Set([...state.selected, clip.id])]
