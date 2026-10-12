@@ -8,6 +8,7 @@ import { DownloadPanel } from './components/DownloadPanel'
 import { ExportPanel } from './components/ExportPanel'
 import { FolderPicker } from './components/FolderPicker'
 import { GifView } from './components/GifView'
+import { TopResizeEdge, WindowButtons, useWindowChrome } from './components/WindowBar'
 import { ImageEditor, ImagePanel, emptyImageEdit, type ImageEdit } from './components/ImageEditor'
 import type { FileInfo, ImagePreview } from './lib/types'
 import { JobQueue } from './components/JobQueue'
@@ -105,6 +106,9 @@ export default function App() {
     }
   }, [openExternal, toast])
 
+  // Наша верхняя панель — она же строка заголовка окна.
+  const chrome = useWindowChrome()
+
   // Метки In/Out и правки кадра привязаны к конкретному файлу — при смене сбрасываем.
   useEffect(() => {
     setTrim({ in: null, out: null })
@@ -119,10 +123,21 @@ export default function App() {
   }, [activePath])
 
   if (!ready) {
+    // Пока программа запускается, строку заголовка всё равно надо держать:
+    // системной уже нет, а окно должно таскаться и закрываться.
     return (
-      <div className="flex h-full items-center justify-center gap-3 text-ink-dim">
-        <Spinner size={18} />
-        Запуск…
+      <div className="flex h-full flex-col">
+        <div
+          className="relative flex h-12 shrink-0 select-none items-center justify-end px-4"
+          onMouseDown={chrome.onMouseDown}
+        >
+          <TopResizeEdge show={chrome.custom && !chrome.maximized} />
+          {chrome.custom && <WindowButtons maximized={chrome.maximized} />}
+        </div>
+        <div className="flex flex-1 items-center justify-center gap-3 text-ink-dim">
+          <Spinner size={18} />
+          Запуск…
+        </div>
       </div>
     )
   }
@@ -132,10 +147,19 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       {/* Верхняя панель */}
-      <header className="relative flex h-12 shrink-0 items-center gap-3 border-b border-line-soft bg-surface px-4">
+      {/* Она же строка заголовка окна: за пустое место окно таскают, справа
+          кнопки окна (см. WindowBar). */}
+      <header
+        className="relative flex h-12 shrink-0 select-none items-center gap-3 border-b border-line-soft bg-surface px-4"
+        onMouseDown={chrome.onMouseDown}
+      >
+        <TopResizeEdge show={chrome.custom && !chrome.maximized} />
         <div className="flex items-center gap-2">
-          <img src="/icon.png" alt="" className="h-[19px] w-[19px] rounded-[5px]" />
+          <img src="/icon.png" alt="" draggable={false} className="h-[19px] w-[19px] rounded-[5px]" />
           <span className="text-[14px] font-semibold tracking-tight">SiGame Helper</span>
+          {status?.version && (
+            <span className="font-mono text-[11px] text-ink-faint">{status.version}</span>
+          )}
         </div>
 
         {/* Вкладки по центру: в углу их принимали за украшение и не замечали,
@@ -189,6 +213,7 @@ export default function App() {
           >
             <SettingsIcon size={15} />
           </button>
+          {chrome.custom && <WindowButtons maximized={chrome.maximized} />}
         </div>
       </header>
 

@@ -83,6 +83,26 @@ async def show_window() -> dict:
     return {"shown": appwindow.show()}
 
 
+@router.get("/window/state")
+async def window_state() -> dict:
+    """Своя ли у окна строка заголовка и развёрнуто ли оно."""
+    from ..core import titlebar
+
+    return titlebar.state()
+
+
+@router.post("/window/{action}")
+async def window_action(action: str) -> dict:
+    """Кнопки окна в нашей верхней панели и перетаскивание за неё."""
+    from ..core import titlebar
+
+    if action not in {"drag", "resize-top", "minimize", "maximize", "close"}:
+        raise HTTPException(status_code=404, detail="Нет такого действия с окном")
+    # Действие исполняется в потоке окна и ждёт его — не в цикле сервера.
+    done = await asyncio.to_thread(titlebar.act, action)
+    return {"done": done}
+
+
 @router.post("/pools")
 async def apply_pools() -> dict:
     """Приводит очереди в соответствие с настройками без перезапуска.

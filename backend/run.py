@@ -226,6 +226,31 @@ def _set_window_icon(window, icon: Path) -> None:
         log.warning("не удалось поставить иконку окна", exc_info=True)
 
 
+def _custom_titlebar(window) -> None:
+    """Меняет белую системную строку заголовка на нашу верхнюю панель.
+
+    Как именно — в ``app/core/titlebar.py``. Не вышло — остаётся обычная
+    строка, а страница своих кнопок окна не рисует.
+    """
+    log = logging.getLogger("sigame-helper")
+    form = getattr(window, "native", None)
+    if form is None:
+        return
+    try:
+        import clr  # noqa: F401 - подключает мост к .NET
+        from System import Action  # type: ignore[import-not-found]
+
+        from app.core import titlebar
+
+        handle = int(form.Handle.ToInt64())
+        if titlebar.install(handle, lambda job: form.Invoke(Action(job))):
+            # Страница уже нарисована со строкой заголовка — пусть узнает,
+            # что теперь кнопки окна её.
+            window.evaluate_js("window.dispatchEvent(new Event('sgh:titlebar'))")
+    except Exception:
+        log.warning("своя строка заголовка не поставлена", exc_info=True)
+
+
 #: Подписка на перетаскивание живёт ровно один раз: страница у нас одна,
 #: а событие «страница загрузилась» приходит и при обновлении окна.
 _drop_ready = False
@@ -351,6 +376,10 @@ def launch_window(url: str, port: int) -> bool:
     if icon.exists() and sys.platform == "win32":
         # Ждём штатного события: раньше показа окна ставить значок не на что.
         window.events.shown += lambda: _set_window_icon(window, icon)
+
+    # Своя строка заголовка — когда у окна уже есть дескриптор.
+    if sys.platform == "win32":
+        window.events.shown += lambda: _custom_titlebar(window)
 
     # Перетаскивание файлов из проводника. Ждём именно загрузки страницы:
     # обработчик вешается на её document, а до этого вешать не на что.

@@ -57,6 +57,9 @@ const post = <T,>(path: string, body?: unknown) =>
 
 export const api = {
   status: (refresh = false) => request<SystemStatus>(`/api/status?refresh=${refresh}`),
+  windowState: () => request<{ custom: boolean; maximized: boolean }>('/api/window/state'),
+  windowAction: (action: 'drag' | 'resize-top' | 'minimize' | 'maximize' | 'close') =>
+    post<{ done: boolean }>(`/api/window/${action}`),
   presets: () => request<Record<string, Preset[]>>('/api/presets'),
   updateTool: (tool: string) =>
     post<{ ok: boolean; output: string; version: string | null }>(`/api/tools/${tool}/update`),
