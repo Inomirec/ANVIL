@@ -445,7 +445,7 @@ export function DownloadPanel() {
       </div>
 
       <QuietHints>
-      <aside className="flex w-[clamp(280px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
+      <aside className="flex w-[clamp(260px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5">
           <Section title="Формат">
             <Segmented<Mode>

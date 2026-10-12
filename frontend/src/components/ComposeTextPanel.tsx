@@ -371,22 +371,32 @@ export function SliderNumber({
   ) : (
     range
   )
+  // Поле числа. В строке с ползунком ему тесно: «кбит/с» не влезало, и
+  // нельзя было понять, 700 там или 7000, — поэтому у подписанного сверху
+  // ползунка число стоит в строке названия, где места хватает.
+  const entry = (
+    <label
+      className={`flex shrink-0 items-center rounded-md border border-line-soft bg-surface-2 px-1.5 ${
+        stacked ? '' : 'w-[60px]'
+      }`}
+    >
+      <input
+        value={draft ?? String(Math.round(value * 10) / 10)}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={apply}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') apply()
+        }}
+        className={`${stacked ? 'w-[52px]' : 'w-full'} min-w-0 bg-transparent py-1 text-right font-mono text-[11.5px] tabular-nums outline-none`}
+      />
+      <span className="ml-0.5 whitespace-nowrap text-[10px] text-ink-faint">{unit}</span>
+    </label>
+  )
   const row = (
     <div className={`flex gap-2 ${marks?.length ? 'items-start' : 'items-center'}`}>
       {!stacked && <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>}
       {scale}
-      <label className="flex w-[60px] shrink-0 items-center rounded-md border border-line-soft bg-surface-2 px-1.5">
-        <input
-          value={draft ?? String(Math.round(value * 10) / 10)}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={apply}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') apply()
-          }}
-          className="w-full min-w-0 bg-transparent py-1 text-right font-mono text-[11.5px] tabular-nums outline-none"
-        />
-        <span className="ml-0.5 text-[10px] text-ink-faint">{unit}</span>
-      </label>
+      {!stacked && entry}
     </div>
   )
   if (!stacked) return row
@@ -394,6 +404,7 @@ export function SliderNumber({
     <div className="space-y-1">
       <div className="flex items-center gap-1">
         <span className="block min-w-0 flex-1 text-[11.5px] text-ink-dim">{label}</span>
+        {entry}
         {aside}
       </div>
       {row}

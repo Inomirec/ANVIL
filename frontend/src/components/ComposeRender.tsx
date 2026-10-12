@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { SliderNumber } from './ComposeTextPanel'
 import { Dropdown, Section, Segmented, Toggle } from './ui'
@@ -45,7 +44,7 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
     label: 'AV1 · Opus — лучшее качество',
     videoCodec: 'av1_svt',
     crf: 22,
-    bitrateKbps: 0,
+    bitrateKbps: 6000,
     speedPreset: '5',
     useGpu: false,
     audioCodec: 'opus',
@@ -57,7 +56,7 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
     label: 'H.264 · AAC — лучшее качество',
     videoCodec: 'h264',
     crf: 16,
-    bitrateKbps: 0,
+    bitrateKbps: 12000,
     speedPreset: 'slow',
     useGpu: false,
     audioCodec: 'aac',
@@ -69,7 +68,7 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
     label: 'Только звук · MP3',
     videoCodec: 'h264',
     crf: 16,
-    bitrateKbps: 0,
+    bitrateKbps: 12000,
     speedPreset: 'slow',
     useGpu: false,
     audioCodec: 'mp3',
@@ -88,17 +87,26 @@ function settingsOf(preset: RenderPreset): RenderSettings {
 
 /**
  * Совпадают ли нынешние настройки с набором — по этому его и подсвечиваем.
- *
- * Способ задания веса (качеством или битрейтом) в счёт не идёт: набор — это
- * кодеки и их настройки, а чем крутить вес, человек решает отдельно. Иначе
- * одно переключение снимало подсветку, хотя по сути ничего не менялось.
+ * Качество (crf) в счёт не идёт: вес задаётся битрейтом. У одного звука не
+ * важно и всё, что про картинку.
  */
 export function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
   const settings = settingsOf(preset)
+  if (Boolean(value.audioOnly) !== Boolean(settings.audioOnly)) return false
+  const picture: (keyof RenderSettings)[] = ['videoCodec', 'bitrateKbps', 'speedPreset', 'useGpu', 'container']
   return (Object.keys(settings) as (keyof RenderSettings)[])
-    .filter((key) => key !== 'bitrateKbps')
-    .every((key) => (key === 'audioOnly' ? Boolean(value.audioOnly) === Boolean(settings.audioOnly) : value[key] === settings[key]))
-    && Boolean(value.audioOnly) === Boolean(settings.audioOnly)
+    .filter((key) => key !== 'crf' && key !== 'audioOnly' && !(settings.audioOnly && picture.includes(key)))
+    .every((key) => value[key] === settings[key])
+}
+
+/**
+ * Настройки, запомненные прежней версией: вес там мог задаваться качеством
+ * (битрейт 0). Теперь он задаётся только битрейтом — ставим обычный для
+ * кодека, иначе сборка молча шла бы по качеству, которого не видно.
+ */
+export function normalizeRender(value: RenderSettings): RenderSettings {
+  if (value.bitrateKbps > 0) return value
+  return { ...value, bitrateKbps: bitrateNormal(value.videoCodec) }
 }
 
 /** Каким файлом выйдет сборка одного звука — по кодеку звука. */
@@ -108,6 +116,7 @@ const VIDEO_CODECS = [
   { value: 'av1_svt', label: 'AV1', title: 'Меньше вес при том же качестве' },
   { value: 'h265', label: 'H.265', title: 'Между AV1 и H.264' },
   { value: 'h264', label: 'H.264', title: 'Играет везде, даже в старом' },
+  { value: 'none', label: 'Нет', title: 'Без картинки — соберётся один звук: MP3, M4A, Opus или FLAC по кодеку звука' },
 ]
 
 /**
@@ -149,50 +158,6 @@ const CONTAINERS = [
 ]
 
 /**
- * Шкала качества у каждого кодека своя.
- *
- * Одно и то же число у AV1 и H.264 означает совсем разную картинку, поэтому у
- * каждого свои отметки. Слова описывают саму картинку, а не сравнение с
- * исходником: «как оригинал» говорить нельзя — исходников на таймлайне может
- * быть сколько угодно, и все они разные.
- *
- * Шкала кончается там же, где кончаются слова. Раньше после самой верхней
- * отметки оставался ещё кусок ползунка, и было непонятно, что он значит.
- */
-const QUALITY_SCALE = {
-  av1_svt: {
-    max: 58,
-    marks: [
-      { at: 18, label: 'наивысшее' },
-      { at: 28, label: 'высокое' },
-      { at: 38, label: 'среднее' },
-      { at: 48, label: 'низкое' },
-      { at: 58, label: 'плохое' },
-    ],
-  },
-  h265: {
-    max: 42,
-    marks: [
-      { at: 16, label: 'наивысшее' },
-      { at: 22, label: 'высокое' },
-      { at: 28, label: 'среднее' },
-      { at: 34, label: 'низкое' },
-      { at: 42, label: 'плохое' },
-    ],
-  },
-  h264: {
-    max: 40,
-    marks: [
-      { at: 14, label: 'наивысшее' },
-      { at: 20, label: 'высокое' },
-      { at: 26, label: 'среднее' },
-      { at: 32, label: 'низкое' },
-      { at: 40, label: 'плохое' },
-    ],
-  },
-} as Record<string, { max: number; marks: { at: number; label: string }[] }>
-
-/**
  * Подписи к шкале битрейта.
  *
  * Голое число кбит/с ничего не говорит. Шкала кончается на четырнадцати
@@ -201,40 +166,33 @@ const QUALITY_SCALE = {
  * тридцать тысяч, три четверти ползунка занимали значения, которые никто не
  * ставит, а нужные подписи налезали друг на друга.
  */
-const BITRATE_MAX = 14000
+const BITRATE_MAX = 16000
 /**
  * Подписи битрейта у каждого кодека свои: AV1 той же картинке нужно вдвое
- * меньше, чем H.264, и одна шкала на всех врала бы двум из трёх.
+ * меньше, чем H.264, и одна шкала на всех врала бы двум из трёх. Подписей
+ * по три и далеко друг от друга — в узкой колонке четыре налезали.
  */
 const BITRATE_MARKS: Record<string, { value: number; label: string }[]> = {
   av1_svt: [
-    { value: 1000, label: 'мало' },
-    { value: 2500, label: '720p' },
+    { value: 2000, label: '720p' },
     { value: 4500, label: '1080p' },
-    { value: 8000, label: 'с запасом' },
+    { value: 9000, label: 'с запасом' },
   ],
   h265: [
-    { value: 1500, label: 'мало' },
-    { value: 3500, label: '720p' },
+    { value: 3000, label: '720p' },
     { value: 6000, label: '1080p' },
-    { value: 10000, label: 'с запасом' },
+    { value: 11000, label: 'с запасом' },
   ],
   h264: [
-    { value: 2000, label: 'мало' },
-    { value: 5000, label: '720p' },
+    { value: 4000, label: '720p' },
     { value: 8000, label: '1080p' },
-    { value: 12000, label: 'с запасом' },
+    { value: 14000, label: 'с запасом' },
   ],
 }
 
-/** Какая подпись подходит нынешнему числу качества. */
-function qualityWord(codec: string, crf: number): string {
-  const scale = QUALITY_SCALE[codec] ?? QUALITY_SCALE.h264
-  let word = scale.marks[0].label
-  for (const mark of scale.marks) {
-    if (crf >= mark.at) word = mark.label
-  }
-  return crf === 0 ? 'без потерь' : word
+/** Обычный битрейт для кодека — его ставим при смене кодека. */
+function bitrateNormal(codec: string): number {
+  return (BITRATE_MARKS[codec] ?? BITRATE_MARKS.h264)[1].value
 }
 
 /** Названия скоростей: у AV1 это числа, у остальных — слова. */
@@ -264,60 +222,12 @@ export function renderSummary(value: RenderSettings): string {
   }
   const video = VIDEO_CODECS.find((item) => item.value === value.videoCodec)
   const name = video ? video.label : value.videoCodec
-  const weight =
-    value.bitrateKbps > 0
-      ? `${value.bitrateKbps} кбит/с`
-      : `качество ${value.crf} (${qualityWord(value.videoCodec, value.crf)})`
+  const weight = `${value.bitrateKbps} кбит/с`
   const sound =
     value.audioCodec === 'none'
       ? 'без звука'
       : `${value.audioCodec.toUpperCase()} ${value.audioBitrateKbps} кбит/с`
   return `${name} · ${weight} · ${sound} · ${value.container.toUpperCase()}`
-}
-
-/**
- * Подписи под ползунком.
- *
- * Ближайшая к нынешнему значению подсвечена: по ней и понятно, что сейчас
- * выбрано, без оглядки на само число.
- */
-function ScaleMarks({
-  marks,
-  min,
-  max,
-  at,
-  active,
-}: {
-  marks: { at: number; label: string }[]
-  min: number
-  max: number
-  at: number
-  /** Подсветить именно эту подпись, а не ближайшую по расстоянию. */
-  active?: string
-}) {
-  let near = marks[0]
-  for (const mark of marks) {
-    if (Math.abs(mark.at - at) < Math.abs(near.at - at)) near = mark
-  }
-  if (active) near = marks.find((mark) => mark.label === active) ?? near
-  return (
-    <div className="relative mt-1 h-7">
-      {marks.map((mark) => (
-        <span
-          key={mark.at}
-          className={`absolute top-0 -translate-x-1/2 whitespace-nowrap text-[9px] leading-tight ${
-            mark === near ? 'text-accent-soft' : 'text-ink-faint/70'
-          }`}
-          style={{
-            left: `${Math.min(94, Math.max(6, ((mark.at - min) / (max - min)) * 100))}%`,
-          }}
-        >
-          <span className="block text-center">|</span>
-          {mark.label}
-        </span>
-      ))}
-    </div>
-  )
 }
 
 /** Список-кнопка в строку: скорость, формат файла. */
@@ -362,12 +272,7 @@ export function ComposeRenderPanel({
   onLoudnorm: (value: boolean) => void
 }) {
   const set = (patch: Partial<RenderSettings>) => onChange({ ...value, ...patch })
-  const scale = QUALITY_SCALE[value.videoCodec] ?? QUALITY_SCALE.h264
-  const byBitrate = value.bitrateKbps > 0
   const sound = AUDIO_CODECS.find((item) => item.value === value.audioCodec) ?? AUDIO_CODECS[0]
-  // Последний битрейт, заданный руками, — чтобы переключение «качеством /
-  // битрейтом» туда и обратно его не теряло.
-  const [lastBitrate, setLastBitrate] = useState(value.bitrateKbps || 6000)
 
   return (
     <Section title="Сборка" id="compose.render" summary={presetName(value)}>
@@ -392,77 +297,45 @@ export function ComposeRenderPanel({
         })}
       </div>
 
-      {!value.audioOnly && (
-        <div className="space-y-2">
-          <Segmented
-            columns={3}
-            value={value.videoCodec}
-            options={VIDEO_CODECS}
-            onChange={(codec) =>
-              set({
-                videoCodec: codec,
-                // У AV1 и H.264 скорости называются по-разному: чужое имя
-                // кодировщик не примет. Качество тоже своё у каждого — берём
-                // из середины его шкалы, чтобы число не значило вдруг другое.
-                speedPreset: speedOptions(codec)[2].value,
-                crf: (QUALITY_SCALE[codec] ?? QUALITY_SCALE.h264).marks[1].at,
-                ...(byBitrate ? { bitrateKbps: (BITRATE_MARKS[codec] ?? BITRATE_MARKS.h264)[2].value } : {}),
-              })
-            }
+      <div className="space-y-2">
+        <span className="label">Видео</span>
+        {/* «Нет» — собрать один звук: так же, как «Нет» у звука. */}
+        <Segmented
+          columns={4}
+          value={value.audioOnly ? 'none' : value.videoCodec}
+          options={VIDEO_CODECS}
+          onChange={(codec) =>
+            codec === 'none'
+              ? set({
+                  audioOnly: true,
+                  ...(value.audioCodec === 'none' ? { audioCodec: 'mp3', audioBitrateKbps: 256 } : {}),
+                })
+              : set({
+                  audioOnly: false,
+                  videoCodec: codec,
+                  // У AV1 и H.264 скорости называются по-разному: чужое имя
+                  // кодировщик не примет. Битрейт — обычный для кодека.
+                  ...(codec !== value.videoCodec
+                    ? { speedPreset: speedOptions(codec)[2].value, bitrateKbps: bitrateNormal(codec) }
+                    : {}),
+                })
+          }
+        />
+        {!value.audioOnly && (
+          <SliderNumber
+            stacked
+            label="Битрейт видео"
+            unit="кбит/с"
+            value={value.bitrateKbps}
+            min={500}
+            max={BITRATE_MAX}
+            step={250}
+            reset={bitrateNormal(value.videoCodec)}
+            marks={BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264}
+            onChange={(bitrateKbps) => set({ bitrateKbps: Math.max(200, Math.round(bitrateKbps)) })}
           />
-          {/* Чем задавать вес: качеством — картинка ровная, вес заранее
-              неизвестен; битрейтом — вес известен, сложные сцены просядут. */}
-          <Segmented
-            value={byBitrate ? 'bitrate' : 'quality'}
-            onChange={(mode) => set({ bitrateKbps: mode === 'bitrate' ? lastBitrate : 0 })}
-            options={[
-              { value: 'quality', label: 'Качеством', title: 'Кодировщик сам решает, сколько потратить на кадр: картинка ровная, вес заранее неизвестен' },
-              { value: 'bitrate', label: 'Битрейтом', title: 'Вес известен заранее — примерно битрейт на длину; на сложных сценах картинка просядет' },
-            ]}
-          />
-          {byBitrate ? (
-            <SliderNumber
-              stacked
-              label="Битрейт видео"
-              unit="кбит/с"
-              value={value.bitrateKbps}
-              min={500}
-              max={BITRATE_MAX}
-              step={250}
-              reset={(BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264)[2].value}
-              marks={BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264}
-              onChange={(bitrateKbps) => {
-                setLastBitrate(bitrateKbps)
-                set({ bitrateKbps })
-              }}
-            />
-          ) : (
-            <div>
-              {/* Ползунок перевёрнут: вправо — лучше. Внутри у кодеков всё
-                  наоборот, меньше число значит лучше картинку. */}
-              <div className="mb-1.5 flex items-baseline justify-between">
-                <span className="label mb-0">Качество</span>
-                <span className="text-[12px] text-ink">{qualityWord(value.videoCodec, value.crf)}</span>
-              </div>
-              <input
-                type="range"
-                className="w-full"
-                min={0}
-                max={scale.max}
-                value={scale.max - value.crf}
-                onChange={(event) => set({ crf: scale.max - Number(event.target.value) })}
-              />
-              <ScaleMarks
-                marks={[...scale.marks].map((mark) => ({ at: scale.max - mark.at, label: mark.label }))}
-                min={0}
-                max={scale.max}
-                at={scale.max - value.crf}
-                active={qualityWord(value.videoCodec, value.crf)}
-              />
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="space-y-2">
         <span className="label">Звук</span>
@@ -526,14 +399,6 @@ export function ComposeRenderPanel({
           onChange={onLoudnorm}
           label="Выровнять громкость"
           hint="Готовый файл получит обычную для видео в интернете громкость: тихий монтаж станет громче, слишком громкий — тише, и на пиках звук не захрипит. Слышно и в просмотре."
-        />
-        <Toggle
-          checked={Boolean(value.audioOnly)}
-          onChange={(audioOnly) =>
-            set({ audioOnly, ...(audioOnly && value.audioCodec === 'none' ? { audioCodec: 'mp3', audioBitrateKbps: 256 } : {}) })
-          }
-          label="Только звук"
-          hint="Соберётся звуковой файл (MP3, M4A, Opus или FLAC — по кодеку звука), например чтобы достать звук из ролика. Если на таймлайне нет ни видео, ни картинок, ни надписей, звуком соберётся и без этой галочки."
         />
       </div>
     </Section>

@@ -324,9 +324,22 @@ def _enable_file_drop(window) -> None:
         log.warning("перетаскивание файлов включить не удалось", exc_info=True)
 
 
-#: Меньше этого (в точках интерфейса) окно не сжимается: на 1280 × 720
-#: панели ещё помещаются в одну строку, дальше начинают обрезаться.
-MIN_WIDTH, MIN_HEIGHT = 1280, 720
+#: Меньше этого (в точках интерфейса) окно не сжимается: на 1150 × 720
+#: все панели ещё помещаются в одну строку, дальше начинают обрезаться.
+#: Уже всех — панель инструментов картинки с инструментом «Текст».
+MIN_WIDTH, MIN_HEIGHT = 1150, 720
+#: С каким размером окно открывается в первый раз.
+START_WIDTH, START_HEIGHT = 1280, 800
+
+
+def _screen_scale() -> float:
+    """Масштаб Windows на главном экране: 1.25 при 125%."""
+    scale = 1.0
+    if sys.platform == "win32":
+        with contextlib.suppress(Exception):
+            ctypes.windll.shcore.GetScaleFactorForDevice.restype = ctypes.c_int
+            scale = max(1.0, ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100)
+    return scale
 
 
 def _minimum_size() -> tuple[int, int]:
@@ -337,11 +350,7 @@ def _minimum_size() -> tuple[int, int]:
     давали интерфейсу всего 1024. Переводим по масштабу главного экрана и
     прибавляем невидимую рамку, за которую окно тянут (по 8 точек).
     """
-    scale = 1.0
-    if sys.platform == "win32":
-        with contextlib.suppress(Exception):
-            ctypes.windll.shcore.GetScaleFactorForDevice.restype = ctypes.c_int
-            scale = max(1.0, ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100)
+    scale = _screen_scale()
     return round(MIN_WIDTH * scale) + 16, round(MIN_HEIGHT * scale) + 16
 
 
@@ -375,8 +384,9 @@ def launch_window(url: str, port: int) -> bool:
     window = webview.create_window(
         title,
         url,
-        width=1500,
-        height=940,
+        # Тоже точки экрана: умножаем на масштаб, как и наименьший размер.
+        width=round(START_WIDTH * _screen_scale()) + 16,
+        height=round(START_HEIGHT * _screen_scale()) + 16,
         min_size=_minimum_size(),
         background_color="#0b0d12",
         text_select=True,

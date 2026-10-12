@@ -43,6 +43,7 @@ import { CROP_FIELDS, withoutGroup } from '../composeAnim'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderPanel,
+  normalizeRender,
   DEFAULT_RENDER,
   AUDIO_FILE,
   presetName,
@@ -222,7 +223,7 @@ export function ComposeTab() {
   const [render, setRender] = useState<RenderSettings>(() => {
     try {
       const saved = localStorage.getItem('sgh.composeRender')
-      return saved ? { ...DEFAULT_RENDER, ...JSON.parse(saved) } : DEFAULT_RENDER
+      return saved ? normalizeRender({ ...DEFAULT_RENDER, ...JSON.parse(saved) }) : DEFAULT_RENDER
     } catch {
       return DEFAULT_RENDER
     }

@@ -168,7 +168,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
   }, [files, sort, layout])
 
   return (
-    <aside className="flex w-[clamp(250px,20vw,336px)] shrink-0 flex-col overflow-hidden border-r border-line-soft bg-surface">
+    <aside className="flex w-[clamp(236px,20vw,336px)] shrink-0 flex-col overflow-hidden border-r border-line-soft bg-surface">
       {/* Рабочая папка */}
       <div className="border-b border-line-soft px-3 py-2.5">
         <button

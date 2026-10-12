@@ -113,7 +113,6 @@ export function ImageEditor({
   const [textStyle, setTextStyle] = useState(readTextStyle)
   const [fonts, setFonts] = useState<FontRow[] | null>(null)
   const textColorRef = useRef<HTMLInputElement>(null)
-  const strokeColorRef = useRef<HTMLInputElement>(null)
   const textSession = useRef(false)
   // Точек окна на пиксель оригинала: по нему растут буквы надписей.
   const [scale, setScale] = useState(1)
@@ -624,6 +623,25 @@ export function ImageEditor({
           )}
         </div>
 
+        {/* Сведения о картинке — на ней самой, справа внизу и полупрозрачно:
+            на панели инструментов им не хватало места. */}
+        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-lg bg-surface/70 px-2.5 py-1 text-[11px] text-ink-faint opacity-80 ring-1 ring-line-soft backdrop-blur">
+          {edit.boxes.length > 0 && <span className="text-accent-soft">масок: {edit.boxes.length}</span>}
+          {edit.crop && (
+            <span className="text-accent-soft">
+              обрезка {edit.crop.width}×{edit.crop.height}
+            </span>
+          )}
+          <span className="font-mono tabular-nums">{humanSize(file.size)}</span>
+          {natural.width > 0 && (
+            <span className="font-mono tabular-nums">
+              {natural.width}×{natural.height}
+            </span>
+          )}
+          <span>{file.ext.toUpperCase()}</span>
+          {media?.hasAlpha && <span className="text-accent-soft">прозрачность</span>}
+        </div>
+
         {/* Масштаб — в углу картинки, как у видео: на панели инструментов
             ему не хватало места. Нажатие возвращает картинку на место. */}
         {(zoom !== 1 || pan.x !== 0 || pan.y !== 0) && (
@@ -744,67 +762,17 @@ export function ImageEditor({
                 tabIndex={-1}
               />
             </button>
-            {/* Обводка: буква с контуром включает её, рядом — цвет и толщина. */}
-            <button
-              type="button"
-              onClick={() => {
+            {/* Обводка — во всплывающем окошке у буквы с контуром: в строке
+                панели ей не хватало места. */}
+            <StrokeButton
+              stroke={shownStyle.stroke}
+              color={shownStyle.strokeColor}
+              size={shownStyle.size}
+              onChange={(patch) => {
                 textSession.current = false
-                applyStyle({ stroke: shownStyle.stroke ? 0 : Math.max(2, Math.round(shownStyle.size / 16)) })
+                applyStyle(patch)
               }}
-              title={shownStyle.stroke ? 'Обводка включена — нажмите, чтобы убрать' : 'Обводка букв'}
-              className={`flex h-7 w-7 items-center justify-center rounded-lg text-[15px] font-bold transition-colors ${
-                shownStyle.stroke ? 'bg-accent/20' : 'hover:bg-surface-3'
-              }`}
-              style={{
-                color: 'transparent',
-                WebkitTextStroke: `1.2px ${shownStyle.stroke ? 'var(--color-accent-soft)' : 'var(--color-ink-dim)'}`,
-              }}
-            >
-              A
-            </button>
-            {shownStyle.stroke > 0 && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    textSession.current = false
-                    strokeColorRef.current?.click()
-                  }}
-                  title="Цвет обводки"
-                  className="flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3"
-                >
-                  <span className="h-4 w-4 rounded-[3px] ring-1 ring-line" style={{ background: shownStyle.strokeColor }} />
-                  <input
-                    ref={strokeColorRef}
-                    type="color"
-                    value={shownStyle.strokeColor}
-                    onChange={(event) => applyStyle({ strokeColor: event.target.value })}
-                    className="h-0 w-0 opacity-0"
-                    tabIndex={-1}
-                  />
-                </button>
-                <label
-                  className="flex items-center rounded-lg bg-surface-2 px-1.5 ring-1 ring-line-soft"
-                  title="Толщина обводки в пикселях картинки"
-                >
-                  <input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={shownStyle.stroke}
-                    onFocus={() => {
-                      textSession.current = false
-                    }}
-                    onChange={(event) => {
-                      const value = Number(event.target.value)
-                      if (value >= 1 && value <= 200) applyStyle({ stroke: value })
-                    }}
-                    className="w-9 bg-transparent py-1 text-right font-mono text-[12px] text-ink outline-none"
-                  />
-                  <span className="ml-0.5 text-[10px]">px</span>
-                </label>
-              </>
-            )}
+            />
           </span>
         )}
 
@@ -909,24 +877,6 @@ export function ImageEditor({
           </button>
         )}
 
-        <span className="ml-auto flex min-w-0 items-center gap-3 overflow-hidden whitespace-nowrap">
-          {edit.boxes.length > 0 && (
-            <span className="text-accent-soft">масок: {edit.boxes.length}</span>
-          )}
-          {edit.crop && (
-            <span className="text-accent-soft">
-              обрезка {edit.crop.width}×{edit.crop.height}
-            </span>
-          )}
-          <span className="text-ink-dim">{humanSize(file.size)}</span>
-          {natural.width > 0 && (
-            <span>
-              {natural.width}×{natural.height} px
-            </span>
-          )}
-          <span>{file.ext.toUpperCase()}</span>
-          {media?.hasAlpha && <span className="text-accent-soft">прозрачность</span>}
-        </span>
       </div>
 
       {menu && (
@@ -1028,5 +978,101 @@ function BoxMenu({
         Удалить
       </button>
     </div>
+  )
+}
+
+/**
+ * Обводка надписи: буква с контуром на панели, настройки — во всплывающем
+ * окошке над ней. Буква подсвечена, пока обводка включена.
+ */
+function StrokeButton({
+  stroke,
+  color,
+  size,
+  onChange,
+}: {
+  stroke: number
+  color: string
+  /** Кегль надписи — от него обычная толщина обводки. */
+  size: number
+  onChange: (patch: { stroke?: number; strokeColor?: string }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const holder = useRef<HTMLSpanElement>(null)
+  const colorRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const away = (event: MouseEvent) => {
+      if (!holder.current?.contains(event.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', away)
+    return () => window.removeEventListener('mousedown', away)
+  }, [open])
+
+  return (
+    <span ref={holder} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((was) => !was)}
+        title={stroke ? 'Обводка включена' : 'Обводка букв'}
+        className={`flex h-7 w-7 items-center justify-center rounded-lg text-[15px] font-bold transition-colors ${
+          stroke ? 'bg-accent/20' : 'hover:bg-surface-3'
+        }`}
+        style={{
+          color: 'transparent',
+          WebkitTextStroke: `1.2px ${stroke ? 'var(--color-accent-soft)' : 'var(--color-ink-dim)'}`,
+        }}
+      >
+        A
+      </button>
+      {open && (
+        <span className="absolute bottom-full left-1/2 z-40 mb-2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-xl border border-line bg-surface-2 px-2.5 py-2 text-[11px] text-ink-dim shadow-xl">
+          <label className="flex cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={stroke > 0}
+              onChange={(event) =>
+                onChange({ stroke: event.target.checked ? Math.max(2, Math.round(size / 16)) : 0 })
+              }
+            />
+            Обводка
+          </label>
+          <button
+            type="button"
+            onClick={() => colorRef.current?.click()}
+            title="Цвет обводки"
+            className="flex items-center rounded-lg p-1 transition-colors hover:bg-surface-3"
+          >
+            <span className="h-4 w-4 rounded-[3px] ring-1 ring-line" style={{ background: color }} />
+            <input
+              ref={colorRef}
+              type="color"
+              value={color}
+              onChange={(event) => onChange({ strokeColor: event.target.value, stroke: stroke || Math.max(2, Math.round(size / 16)) })}
+              className="h-0 w-0 opacity-0"
+              tabIndex={-1}
+            />
+          </button>
+          <label
+            className="flex items-center rounded-lg bg-surface px-1.5 ring-1 ring-line-soft"
+            title="Толщина обводки в пикселях картинки"
+          >
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={stroke || Math.max(2, Math.round(size / 16))}
+              onChange={(event) => {
+                const value = Number(event.target.value)
+                if (value >= 1 && value <= 200) onChange({ stroke: value })
+              }}
+              className="w-10 bg-transparent py-1 text-right font-mono text-[12px] text-ink outline-none"
+            />
+            <span className="ml-0.5 text-[10px]">px</span>
+          </label>
+        </span>
+      )}
+    </span>
   )
 }
