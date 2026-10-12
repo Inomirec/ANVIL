@@ -7,7 +7,7 @@ export type Grip = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move'
 
 export type Selection = { type: 'box'; index: number } | { type: 'crop' } | null
 
-export type Tool = 'view' | 'crop' | 'box' | 'brush' | 'eraser' | 'pick' | 'select'
+export type Tool = 'view' | 'crop' | 'box' | 'brush' | 'eraser' | 'pick' | 'select' | 'text'
 
 interface DragState {
   grip: Grip

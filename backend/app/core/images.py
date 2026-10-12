@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from ..models import ImageOptions
+from ..models import ImageOptions, ImageText
 from . import binaries
 from .jobs import failure_text
 from .probe import MediaInfo, probe
@@ -85,6 +85,28 @@ def _ffmpeg_color(value: str) -> str:
     return value or "black"
 
 
+def _text_filter(mark: ImageText) -> str:
+    """Надпись на картинке — тем же ``drawtext``, что и в монтаже.
+
+    В x и y стоит середина самих букв: ``drawtext`` считает ``text_h`` по
+    нарисованным буквам, и окно правки ставит надпись так же.
+    """
+    from . import compose, fonts
+
+    parts = [f"textfile={compose._escaped(str(compose.text_file(mark.text)))}"]
+    where = fonts.path_for(mark.font, False, False)
+    if where:
+        parts.append(f"fontfile={compose._escaped(where)}")
+    parts += [
+        f"fontsize={mark.size}",
+        f"fontcolor={_ffmpeg_color(mark.color)}",
+        "text_align=C",
+        f"x='{mark.x:.1f}-text_w/2'",
+        f"y='{mark.y:.1f}-text_h/2'",
+    ]
+    return "drawtext=" + ":".join(parts)
+
+
 def build_args(
     source: Path,
     output: Path,
@@ -107,7 +129,7 @@ def build_args(
     # Порядок фильтров важен: сначала закрашиваем и обрезаем в координатах
     # оригинала (их и рисует пользователь), и только потом уменьшаем.
     chain: list[str] = []
-    if options.boxes:
+    if options.boxes or options.texts:
         # Маски рисуем в обычном RGB. В «телевизионном» цветовом виде drawbox
         # укладывает цвет в диапазон 16-235, и заданный цвет оседает бледнее:
         # выбранный пипеткой фон переставал совпадать с самим фоном.
@@ -119,6 +141,10 @@ def build_args(
             f"drawbox=x={box.x}:y={box.y}:w={box.width}:h={box.height}"
             f":color={_ffmpeg_color(box.color or options.box_color)}:t=fill"
         )
+
+    for mark in options.texts:
+        if mark.text.strip():
+            chain.append(_text_filter(mark))
 
     source_width = info.video.width if info and info.video else None
     source_height = info.video.height if info and info.video else None

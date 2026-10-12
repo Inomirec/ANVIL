@@ -92,7 +92,7 @@ function loadFace(name: string, bold: boolean, italic: boolean): Promise<LoadedF
  * окно берёт тот же файл, что и сборка, и из него же — шаг строк: иначе
  * строки в окне и в файле стояли бы на разной высоте.
  */
-function useFace(name: string, bold: boolean, italic: boolean): LoadedFace | null {
+export function useFace(name: string, bold: boolean, italic: boolean): LoadedFace | null {
   const [face, setFace] = useState<LoadedFace | null>(null)
   useEffect(() => {
     let alive = true
@@ -123,7 +123,7 @@ let ruler: CanvasRenderingContext2D | null = null
  * холсте тем же шрифтом и выносим разницу. Строку браузер раскладывает по
  * тем же меркам шрифта, что отдаёт холст (`fontBoundingBox…`).
  */
-function inkShift(element: HTMLElement, text: string): number {
+export function inkShift(element: HTMLElement, text: string): number {
   const style = getComputedStyle(element)
   const size = parseFloat(style.fontSize)
   const line = parseFloat(style.lineHeight)

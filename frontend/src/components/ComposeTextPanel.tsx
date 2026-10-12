@@ -37,7 +37,7 @@ import {
  * разрешении, выглядел так же.
  */
 
-interface FontRow {
+export interface FontRow {
   name: string
   bold: boolean
   italic: boolean
@@ -95,14 +95,17 @@ function useOutside(open: boolean, ref: React.RefObject<HTMLElement>, close: () 
  * которыми пользуются постоянно, всегда под рукой. Каждое имя написано своим
  * же шрифтом: выбирают глазами, а не по названию.
  */
-function FontPicker({
+export function FontPicker({
   value,
   fonts,
   onChange,
+  up = false,
 }: {
   value: string
   fonts: FontRow[] | null
   onChange: (name: string) => void
+  /** Открывать список вверх — когда поле стоит у нижнего края окна. */
+  up?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -173,7 +176,11 @@ function FontPicker({
         <ChevronDown size={14} className="shrink-0 text-ink-faint" />
       </button>
       {open && (
-        <div className="absolute inset-x-0 top-full z-40 mt-1 overflow-hidden rounded-xl border border-line bg-surface-2 shadow-xl">
+        <div
+          className={`absolute left-0 right-0 z-40 min-w-[240px] overflow-hidden rounded-xl border border-line bg-surface-2 shadow-xl ${
+            up ? 'bottom-full mb-1' : 'top-full mt-1'
+          }`}
+        >
           <label className="flex items-center gap-2 border-b border-line-soft px-2.5 py-2">
             <Search size={13} className="shrink-0 text-ink-faint" />
             <input

@@ -107,6 +107,18 @@ class Rect(BaseModel):
     color: str | None = None
 
 
+class ImageText(BaseModel):
+    """Надпись на картинке. Место — середина букв в пикселях оригинала."""
+
+    x: float
+    y: float
+    text: str = Field(max_length=2000)
+    font: str = "Arial"
+    #: Высота букв в пикселях оригинала.
+    size: int = Field(default=48, ge=4, le=2000)
+    color: str = "#ffffff"
+
+
 class ImageOptions(BaseModel):
     format: ImageFormat = "avif"
     #: Закрашиваемые области (бренды, надписи, спойлеры). Координаты — в пикселях
@@ -118,6 +130,8 @@ class ImageOptions(BaseModel):
     #: Прямоугольником не закрыть надпись, идущую дугой, поэтому мазки
     #: приходят готовой картинкой и просто накладываются сверху.
     paint_png: str | None = None
+    #: Надписи — тоже в пикселях оригинала, до обрезки.
+    texts: list[ImageText] = Field(default_factory=list)
     #: Обрезка кадра. ``None`` = оставить как есть.
     crop: Rect | None = None
     #: Качество 1-100.

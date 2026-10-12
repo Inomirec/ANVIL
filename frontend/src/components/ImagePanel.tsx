@@ -123,12 +123,15 @@ export function ImagePanel({
     savePrefs({ imagePreview: showPreview })
   }, [showPreview])
 
-  const hasEdits = Boolean(edit.crop) || edit.boxes.length > 0 || edit.strokes.length > 0
+  const hasEdits =
+    Boolean(edit.crop) || edit.boxes.length > 0 || edit.strokes.length > 0 || (edit.texts?.length ?? 0) > 0
 
   const editPayload = useMemo(
     () => ({
       crop: edit.crop,
       boxes: edit.boxes,
+      // Пустые надписи ни к чему — их и рисовать нечем.
+      texts: (edit.texts ?? []).filter((mark) => mark.text.trim()),
       // Мазки превращаем в прозрачный PNG размером с оригинал: описывать
       // каждый из них фильтрами ffmpeg сложнее и хуже, чем наложить слой.
       paint_png: edit.strokes.length
@@ -182,6 +185,7 @@ export function ImagePanel({
       // Правки нарисованы для конкретной картинки — в пакет их не тащим.
       crop: withEdits ? editPayload.crop : null,
       boxes: withEdits ? editPayload.boxes : [],
+      texts: withEdits ? editPayload.texts : [],
       paint_png: withEdits ? editPayload.paint_png : null,
     },
     // Без подпапки результат ложится прямо туда, где лежал оригинал.
@@ -421,6 +425,11 @@ export function ImagePanel({
                   <span className="font-mono text-ink">
                     {edit.crop.width}×{edit.crop.height}
                   </span>
+                </p>
+              )}
+              {(edit.texts?.length ?? 0) > 0 && (
+                <p>
+                  Надписей: <span className="font-mono text-ink">{edit.texts.length}</span>
                 </p>
               )}
               {edit.boxes.length > 0 && (
