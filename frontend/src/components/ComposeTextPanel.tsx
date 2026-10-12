@@ -8,10 +8,12 @@ import {
   Bold,
   ChevronDown,
   Italic,
+  Pipette,
   Search,
   Star,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { requestColorPick, useColorPickOwner } from '../lib/colorPick'
 import {
   EFFECT_PIXELS,
   TEXT_DEFAULTS,
@@ -235,7 +237,11 @@ export function IconToggle({
   )
 }
 
-/** Цвет квадратиком: нажали — открылся выбор цвета. */
+/**
+ * Цвет квадратиком: нажали — открылся выбор цвета. Рядом пипетка: взять цвет
+ * прямо из кадра (`lib/colorPick.ts`) — у стандартного окошка своя пипетка
+ * во встроенном браузере не работает.
+ */
 export function ColorSquare({
   value,
   title,
@@ -245,19 +251,36 @@ export function ColorSquare({
   title: string
   onChange: (value: string) => void
 }) {
+  const owner = useRef({}).current
+  const picking = useColorPickOwner() === owner
   return (
-    <label
-      title={title}
-      className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line-soft hover:border-line"
-    >
-      <span className="h-5 w-5 rounded-[4px] ring-1 ring-black/40" style={{ background: value }} />
-      <input
-        type="color"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      />
-    </label>
+    <span className="flex shrink-0 items-center gap-1">
+      <label
+        title={title}
+        className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line-soft hover:border-line"
+      >
+        <span className="h-5 w-5 rounded-[4px] ring-1 ring-black/40" style={{ background: value }} />
+        <input
+          type="color"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          // Размер — явно: у поля цвета своя ширина, и одного «inset-0» мало —
+          // оно вылезало из квадратика и закрывало пипетку рядом.
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        />
+      </label>
+      <button
+        type="button"
+        data-color-pick
+        onClick={() => requestColorPick(owner, onChange)}
+        title={picking ? 'Нажмите на кадр, чтобы взять цвет. Esc — отмена' : 'Взять цвет из кадра'}
+        className={`flex h-8 w-6 shrink-0 items-center justify-center rounded-lg transition-colors ${
+          picking ? 'bg-accent/25 text-accent-soft' : 'text-ink-faint hover:bg-surface-3 hover:text-ink'
+        }`}
+      >
+        <Pipette className="h-3.5 w-3.5" />
+      </button>
+    </span>
   )
 }
 
@@ -282,8 +305,10 @@ export function SliderNumber({
   stacked = false,
   marks,
   aside,
+  readout,
 }: {
-  label: string
+  /** Подпись; у подписанного сверху ползунка это может быть и кнопка. */
+  label: React.ReactNode
   value: number
   min: number
   max: number
@@ -298,6 +323,11 @@ export function SliderNumber({
   marks?: { value: number; label: string }[]
   /** Что стоит справа от подписи — например, часики ключей. */
   aside?: React.ReactNode
+  /**
+   * Вместо поля числа — готовая подпись значения: у шкалы, где само число
+   * человеку ничего не говорит (качество сборки).
+   */
+  readout?: React.ReactNode
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const apply = () => {
@@ -313,7 +343,7 @@ export function SliderNumber({
         max={max}
         step={step}
         value={Math.min(max, Math.max(min, value))}
-        title={`Двойное нажатие вернёт ${reset} ${unit}`}
+        title={readout ? 'Двойное нажатие вернёт обычное значение' : `Двойное нажатие вернёт ${reset} ${unit}`}
         onMouseDown={(event) => {
           if (event.detail < 2) return
           event.preventDefault()
@@ -351,7 +381,7 @@ export function SliderNumber({
               key={mark.value}
               type="button"
               onClick={() => onChange(mark.value)}
-              title={`Поставить ${mark.value}${unit ? ' ' + unit : ''}`}
+              title={readout ? `Поставить «${mark.label}»` : `Поставить ${mark.value}${unit ? ' ' + unit : ''}`}
               className={`absolute top-0 whitespace-nowrap text-[9.5px] leading-none transition-colors ${
                 edge === 'middle' ? '-translate-x-1/2' : edge === 'end' ? '-translate-x-full' : ''
               } ${near ? 'text-accent-soft' : 'text-ink-faint hover:text-ink-dim'}`}
@@ -404,7 +434,7 @@ export function SliderNumber({
     <div className="space-y-1">
       <div className="flex items-center gap-1">
         <span className="block min-w-0 flex-1 text-[11.5px] text-ink-dim">{label}</span>
-        {entry}
+        {readout ?? entry}
         {aside}
       </div>
       {row}

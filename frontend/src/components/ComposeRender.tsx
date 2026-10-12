@@ -1,4 +1,5 @@
-import { Check, ChevronDown } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowLeftRight, Check, ChevronDown } from 'lucide-react'
 import { SliderNumber } from './ComposeTextPanel'
 import { Dropdown, Section, Segmented, Toggle } from './ui'
 
@@ -87,26 +88,20 @@ function settingsOf(preset: RenderPreset): RenderSettings {
 
 /**
  * Совпадают ли нынешние настройки с набором — по этому его и подсвечиваем.
- * Качество (crf) в счёт не идёт: вес задаётся битрейтом. У одного звука не
- * важно и всё, что про картинку.
+ *
+ * Способ задания веса в счёт не идёт: набор — это кодеки и их настройки, а
+ * чем крутить вес, человек решает отдельно. Поэтому сравнивается то, чем вес
+ * задан сейчас: битрейт — с битрейтом набора, качество — с качеством. У
+ * одного звука не важно и всё, что про картинку.
  */
 export function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
   const settings = settingsOf(preset)
   if (Boolean(value.audioOnly) !== Boolean(settings.audioOnly)) return false
-  const picture: (keyof RenderSettings)[] = ['videoCodec', 'bitrateKbps', 'speedPreset', 'useGpu', 'container']
+  const picture: (keyof RenderSettings)[] = ['videoCodec', 'crf', 'bitrateKbps', 'speedPreset', 'useGpu', 'container']
+  const unused: keyof RenderSettings = value.bitrateKbps > 0 ? 'crf' : 'bitrateKbps'
   return (Object.keys(settings) as (keyof RenderSettings)[])
-    .filter((key) => key !== 'crf' && key !== 'audioOnly' && !(settings.audioOnly && picture.includes(key)))
+    .filter((key) => key !== unused && key !== 'audioOnly' && !(settings.audioOnly && picture.includes(key)))
     .every((key) => value[key] === settings[key])
-}
-
-/**
- * Настройки, запомненные прежней версией: вес там мог задаваться качеством
- * (битрейт 0). Теперь он задаётся только битрейтом — ставим обычный для
- * кодека, иначе сборка молча шла бы по качеству, которого не видно.
- */
-export function normalizeRender(value: RenderSettings): RenderSettings {
-  if (value.bitrateKbps > 0) return value
-  return { ...value, bitrateKbps: bitrateNormal(value.videoCodec) }
 }
 
 /** Каким файлом выйдет сборка одного звука — по кодеку звука. */
@@ -190,6 +185,31 @@ const BITRATE_MARKS: Record<string, { value: number; label: string }[]> = {
   ],
 }
 
+/**
+ * Шкала качества у каждого кодека своя: одно и то же число у AV1 и H.264 —
+ * разная картинка. Ползунок перевёрнут (вправо — лучше), подписей по три —
+ * в узкой колонке больше не помещается. Слова описывают картинку, а не
+ * сравнение с исходником: исходников на таймлайне может быть сколько угодно.
+ */
+const QUALITY_SCALE: Record<string, { best: number; worst: number; marks: { crf: number; label: string }[] }> = {
+  av1_svt: { best: 16, worst: 52, marks: [{ crf: 46, label: 'низкое' }, { crf: 35, label: 'среднее' }, { crf: 24, label: 'высокое' }] },
+  h265: { best: 14, worst: 40, marks: [{ crf: 34, label: 'низкое' }, { crf: 27, label: 'среднее' }, { crf: 20, label: 'высокое' }] },
+  h264: { best: 12, worst: 38, marks: [{ crf: 32, label: 'низкое' }, { crf: 25, label: 'среднее' }, { crf: 18, label: 'высокое' }] },
+}
+
+function qualityScale(codec: string) {
+  return QUALITY_SCALE[codec] ?? QUALITY_SCALE.h264
+}
+
+/** Слово для нынешнего качества: середины между подписями — границы. */
+function qualityWord(codec: string, crf: number): string {
+  const [low, mid, high] = qualityScale(codec).marks
+  if (crf <= high.crf - 3) return 'наивысшее'
+  if (crf <= (high.crf + mid.crf) / 2) return 'высокое'
+  if (crf <= (mid.crf + low.crf) / 2) return 'среднее'
+  return 'низкое'
+}
+
 /** Обычный битрейт для кодека — его ставим при смене кодека. */
 function bitrateNormal(codec: string): number {
   return (BITRATE_MARKS[codec] ?? BITRATE_MARKS.h264)[1].value
@@ -222,7 +242,10 @@ export function renderSummary(value: RenderSettings): string {
   }
   const video = VIDEO_CODECS.find((item) => item.value === value.videoCodec)
   const name = video ? video.label : value.videoCodec
-  const weight = `${value.bitrateKbps} кбит/с`
+  const weight =
+    value.bitrateKbps > 0
+      ? `${value.bitrateKbps} кбит/с`
+      : `качество ${qualityWord(value.videoCodec, value.crf)} (crf ${value.crf})`
   const sound =
     value.audioCodec === 'none'
       ? 'без звука'
@@ -273,6 +296,31 @@ export function ComposeRenderPanel({
 }) {
   const set = (patch: Partial<RenderSettings>) => onChange({ ...value, ...patch })
   const sound = AUDIO_CODECS.find((item) => item.value === value.audioCodec) ?? AUDIO_CODECS[0]
+  const byBitrate = value.bitrateKbps > 0
+  const scale = qualityScale(value.videoCodec)
+  // Ползунок качества перевёрнут: вправо — лучше, а у кодека меньше число —
+  // лучше картинка.
+  const flip = (crf: number) => scale.best + scale.worst - crf
+  // Последние значения обоих способов — переключение туда и обратно их не теряет.
+  const [last, setLast] = useState({ bitrate: value.bitrateKbps || bitrateNormal(value.videoCodec), crf: value.crf })
+
+  // Способ задания веса — маленькой кнопкой на месте названия: отдельная
+  // строка ради переключателя занимала место в узкой колонке.
+  const modeButton = (
+    <button
+      type="button"
+      onClick={() => (byBitrate ? set({ bitrateKbps: 0, crf: last.crf }) : set({ bitrateKbps: last.bitrate }))}
+      title={
+        byBitrate
+          ? 'Вес задан битрейтом: известен заранее, на сложных сценах картинка просядет. Нажмите — задавать качеством'
+          : 'Вес задан качеством: картинка ровная, вес заранее неизвестен. Нажмите — задавать битрейтом'
+      }
+      className="inline-flex items-center gap-1 rounded-md border border-line-soft px-1.5 py-0.5 text-[11.5px] text-ink-dim transition-colors hover:border-line hover:text-ink"
+    >
+      {byBitrate ? 'Битрейт' : 'Качество'}
+      <ArrowLeftRight size={11} className="text-ink-faint" />
+    </button>
+  )
 
   return (
     <Section title="Сборка" id="compose.render" summary={presetName(value)}>
@@ -315,26 +363,57 @@ export function ComposeRenderPanel({
                   videoCodec: codec,
                   // У AV1 и H.264 скорости называются по-разному: чужое имя
                   // кодировщик не примет. Битрейт — обычный для кодека.
+                  // Качество тоже своё у каждого — берём «высокое» его шкалы.
                   ...(codec !== value.videoCodec
-                    ? { speedPreset: speedOptions(codec)[2].value, bitrateKbps: bitrateNormal(codec) }
+                    ? {
+                        speedPreset: speedOptions(codec)[2].value,
+                        crf: qualityScale(codec).marks[2].crf,
+                        ...(byBitrate ? { bitrateKbps: bitrateNormal(codec) } : {}),
+                      }
                     : {}),
                 })
           }
         />
-        {!value.audioOnly && (
-          <SliderNumber
-            stacked
-            label="Битрейт видео"
-            unit="кбит/с"
-            value={value.bitrateKbps}
-            min={500}
-            max={BITRATE_MAX}
-            step={250}
-            reset={bitrateNormal(value.videoCodec)}
-            marks={BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264}
-            onChange={(bitrateKbps) => set({ bitrateKbps: Math.max(200, Math.round(bitrateKbps)) })}
-          />
-        )}
+        {!value.audioOnly &&
+          (byBitrate ? (
+            <SliderNumber
+              stacked
+              label={modeButton}
+              unit="кбит/с"
+              value={value.bitrateKbps}
+              min={500}
+              max={BITRATE_MAX}
+              step={250}
+              reset={bitrateNormal(value.videoCodec)}
+              marks={BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264}
+              onChange={(bitrate) => {
+                const bitrateKbps = Math.max(200, Math.round(bitrate))
+                setLast((was) => ({ ...was, bitrate: bitrateKbps }))
+                set({ bitrateKbps })
+              }}
+            />
+          ) : (
+            <SliderNumber
+              stacked
+              label={modeButton}
+              unit=""
+              readout={
+                <span className="shrink-0 text-[12px] text-ink" title={`crf ${value.crf}: меньше число — лучше картинка`}>
+                  {qualityWord(value.videoCodec, value.crf)}
+                </span>
+              }
+              value={flip(value.crf)}
+              min={scale.best}
+              max={scale.worst}
+              reset={flip(scale.marks[2].crf)}
+              marks={scale.marks.map((mark) => ({ value: flip(mark.crf), label: mark.label }))}
+              onChange={(position) => {
+                const crf = Math.round(flip(position))
+                setLast((was) => ({ ...was, crf }))
+                set({ crf })
+              }}
+            />
+          ))}
       </div>
 
       <div className="space-y-2">

@@ -267,7 +267,10 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
     if codec == "av1_svt":
         return [
             "-c:v", "libsvtav1",
-            *by_quality(),
+            # Предел пика SVT-AV1 принимает только в режиме качества («Max
+            # Bitrate only supported with CRF mode») — с битрейтом даём одно
+            # среднее, кодировщик держит его сам.
+            *(by_quality() if rate <= 0 else ["-b:v", f"{rate}k"]),
             "-preset", str(options.speed_preset),
             # tune=0 оптимизирует под субъективное восприятие, а не под PSNR.
             "-svtav1-params", "tune=0",

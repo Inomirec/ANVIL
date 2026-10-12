@@ -41,9 +41,9 @@ import { ComposeFillPanel } from './ComposeFillPanel'
 import { ClipAddBar, ComposeClipPanel } from './ComposeClipPanel'
 import { CROP_FIELDS, withoutGroup } from '../composeAnim'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
+import { ComposeColorPick } from './ComposeColorPick'
 import {
   ComposeRenderPanel,
-  normalizeRender,
   DEFAULT_RENDER,
   AUDIO_FILE,
   presetName,
@@ -223,7 +223,7 @@ export function ComposeTab() {
   const [render, setRender] = useState<RenderSettings>(() => {
     try {
       const saved = localStorage.getItem('sgh.composeRender')
-      return saved ? normalizeRender({ ...DEFAULT_RENDER, ...JSON.parse(saved) }) : DEFAULT_RENDER
+      return saved ? { ...DEFAULT_RENDER, ...JSON.parse(saved) } : DEFAULT_RENDER
     } catch {
       return DEFAULT_RENDER
     }
@@ -246,6 +246,9 @@ export function ComposeTab() {
   // Окно сохранённых монтажей: программа сама помнит только последний.
   const [projectsOpen, setProjectsOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const frameImgRef = useRef<HTMLImageElement>(null)
+  // Пипетке — то, что сейчас видно: идущее видео или кадр под иглой.
+  const pickSource = useRef(() => videoRef.current && !videoRef.current.classList.contains('hidden') ? videoRef.current : frameImgRef.current).current
   const frameBox = useRef<HTMLDivElement>(null)
   const player = useComposePlayer(videoRef)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
@@ -931,7 +934,7 @@ export function ComposeTab() {
                   onError={() => player.stop()}
                 />
                 {!player.playing && frameUrl && (
-                  <img src={frameUrl} alt="" className="h-full w-full object-contain" />
+                  <img ref={frameImgRef} src={frameUrl} alt="" className="h-full w-full object-contain" />
                 )}
                 {/* Ошибка — в одном месте, посреди кадра: и кадра, и просмотра.
                     Прежде ошибка просмотра повторялась ещё и полосой внизу. Текст
@@ -963,6 +966,7 @@ export function ComposeTab() {
                 {!player.playing && liveText && (
                   <ComposeTextOverlay clip={shownAt(liveText, playhead)} grid={grid} />
                 )}
+                <ComposeColorPick source={pickSource} />
 
               </div>
 
