@@ -9,8 +9,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * прокручивалась бы вместе с приближением.
  *
  * ``resetKey`` — смена файла: новый файл открывается в обычном размере.
+ * ``min`` меньше единицы — можно и отдалить, как экран просмотра в монтаже:
+ * тогда видно, где кончается кадр.
  */
-export function useZoomPan(resetKey: unknown, max = 8) {
+export function useZoomPan(resetKey: unknown, max = 8, min = 1) {
   const shell = useRef<HTMLDivElement | null>(null)
   const [view, setView] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -31,7 +33,10 @@ export function useZoomPan(resetKey: unknown, max = 8) {
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       const { view: was, pan: moved } = state.current
-      const next = Math.min(max, Math.max(1, Number((was * (event.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(3))))
+      let next = Math.min(max, Math.max(min, Number((was * (event.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(3))))
+      // Обычный размер ловится сам: проходя через него, колесо на нём
+      // останавливается, а не проскакивает 98% и 113%.
+      if ((was < 1 && next > 1) || (was > 1 && next < 1) || Math.abs(next - 1) < 0.04) next = 1
       if (next === was) return
       if (next === 1) {
         state.current = { view: 1, pan: { x: 0, y: 0 } }
@@ -53,11 +58,11 @@ export function useZoomPan(resetKey: unknown, max = 8) {
     }
     box.addEventListener('wheel', onWheel, { passive: false })
     return () => box.removeEventListener('wheel', onWheel)
-  }, [max, reset])
+  }, [max, min, reset])
 
   /** Зажатое колесо таскает приближенную картинку. */
   const onMouseDown = useCallback((event: React.MouseEvent) => {
-    if (event.button !== 1 || state.current.view <= 1) return
+    if (event.button !== 1 || state.current.view === 1) return
     event.preventDefault()
     const from = { x: event.clientX, y: event.clientY }
     const was = { ...state.current.pan }

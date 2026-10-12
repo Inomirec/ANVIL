@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { Check, ChevronDown, X } from 'lucide-react'
+import { Check, ChevronDown, MoreHorizontal, X, type LucideIcon } from 'lucide-react'
 
 /* Мелкие переиспользуемые элементы интерфейса. */
 
@@ -603,5 +603,49 @@ export function Spinner({ size = 16 }: { size?: number }) {
       className="inline-block animate-spin rounded-full border-2 border-line border-t-accent"
       style={{ width: size, height: size }}
     />
+  )
+}
+
+/** Включённая галочка в свёрнутом разделе: значок и что он значит. */
+export interface Mark {
+  icon: LucideIcon
+  label: string
+  /** Опасное (удаление оригинала) — красным, чтобы не забыть. */
+  danger?: boolean
+}
+
+/**
+ * Значки всех включённых галочек — для заголовка свёрнутого раздела.
+ *
+ * Прежде там стоял один-два значка из нескольких, и по свёрнутому разделу
+ * нельзя было понять, что в нём включено. Теперь видны все, а если в одну
+ * строку с названием раздела они не помещаются — лишние уходят под «…», и
+ * их список — в подсказке. Опасные стоят первыми: их нельзя прятать.
+ */
+export function MarkIcons({ marks, max = 4 }: { marks: Mark[]; max?: number }) {
+  const sorted = [...marks.filter((mark) => mark.danger), ...marks.filter((mark) => !mark.danger)]
+  const shown = sorted.length > max ? sorted.slice(0, max - 1) : sorted
+  const hidden = sorted.slice(shown.length)
+  return (
+    <>
+      {shown.map((mark) => (
+        <span
+          key={mark.label}
+          title={mark.label}
+          className={
+            mark.danger
+              ? 'flex items-center rounded bg-danger/15 px-1 py-0.5 text-danger'
+              : 'flex items-center text-accent-soft'
+          }
+        >
+          <mark.icon size={13} />
+        </span>
+      ))}
+      {hidden.length > 0 && (
+        <span title={hidden.map((mark) => mark.label).join('\n')} className="flex items-center text-accent-soft">
+          <MoreHorizontal size={14} />
+        </span>
+      )}
+    </>
   )
 }

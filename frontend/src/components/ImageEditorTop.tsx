@@ -3,9 +3,10 @@ import {
   Brush,
   Crop,
   Eraser,
-  Eye,
   Maximize2,
+  MousePointer2,
   Pipette,
+  RotateCcw,
   Square,
   SquareDashedMousePointer,
   Trash2,
@@ -28,13 +29,14 @@ export const emptyImageEdit: ImageEdit = { crop: null, boxes: [], strokes: [] }
 
 /** Инструменты редактора: значок, название и для чего он. */
 const TOOLS: { value: Tool; label: string; hint: string; icon: typeof Square }[] = [
+  // Курсор первым, как в редакторах: с него начинают и к нему возвращаются.
+  { value: 'view', label: 'Курсор', hint: 'просто смотреть, ничего не рисуя', icon: MousePointer2 },
   { value: 'box', label: 'Закрасить', hint: 'прямоугольник: бренд, надпись, спойлер', icon: Square },
   { value: 'brush', label: 'Кисть', hint: 'закрасить от руки, для надписей дугой и наискось', icon: Brush },
   { value: 'eraser', label: 'Ластик', hint: 'стереть лишнее, что закрасили кистью', icon: Eraser },
   { value: 'crop', label: 'Обрезать', hint: 'отрезать пустые поля и чёрные края', icon: Crop },
   { value: 'select', label: 'Выделить', hint: 'обвести область и убрать всё лишнее разом', icon: SquareDashedMousePointer },
   { value: 'pick', label: 'Пипетка', hint: 'взять цвет прямо с картинки', icon: Pipette },
-  { value: 'view', label: 'Просмотр', hint: 'ничего не менять, просто смотреть', icon: Eye },
 ]
 
 /** Ключ запомненного цвета закраски. */
@@ -516,16 +518,10 @@ export function ImageEditor({
             </button>
           ))}
         </span>
-        {/* Название рядом с иконками: по одному значку инструмент не угадать,
-            а наводить курсор на каждый — не дело. */}
-        <span className="w-[76px] shrink-0 text-ink-dim">
-          {TOOLS.find((item) => item.value === tool)?.label}
-        </span>
 
         {(tool === 'brush' || tool === 'eraser') && (
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2" title="Толщина кисти">
             {tool === 'brush' ? <Brush size={12} /> : <Eraser size={12} />}
-            Толщина
             <input
               type="range"
               min={4}
@@ -557,7 +553,6 @@ export function ImageEditor({
               className="h-4 w-4 rounded-[3px] ring-1 ring-line"
               style={{ background: paintColor }}
             />
-            <span className="font-mono text-[10px] text-ink-dim">{paintColor}</span>
             {/* Настоящее поле выбора цвета прячем: системное окно открываем
                 своей кнопкой, чтобы оно не ломало вид панели. */}
             <input
@@ -578,11 +573,10 @@ export function ImageEditor({
           type="button"
           onClick={resetView}
           disabled={zoom === 1 && pan.x === 0 && pan.y === 0}
-          title="Вернуть картинку в исходное положение. Колесо — приблизить, средняя кнопка или пробел — двигать"
+          title="Вписать — вернуть картинку в исходное положение. Колесо — приблизить, средняя кнопка или пробел — двигать"
           className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-surface-3 hover:text-ink-dim disabled:opacity-30 disabled:hover:bg-transparent"
         >
           <Maximize2 size={12} />
-          Вписать
           <span className="w-9 text-right font-mono tabular-nums text-ink">
             {Math.round(zoom * 100)}%
           </span>
@@ -593,10 +587,10 @@ export function ImageEditor({
           onClick={undo}
           disabled={!history.length}
           title="Отменить последнее действие (Ctrl+Z)"
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-surface-3 hover:text-ink-dim disabled:opacity-30 disabled:hover:bg-transparent"
+          aria-label="Отменить"
+          className="inline-flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3 hover:text-ink-dim disabled:opacity-30 disabled:hover:bg-transparent"
         >
-          <Undo2 size={12} />
-          Отменить
+          <Undo2 size={13} />
         </button>
 
         {(marked.boxes.length > 0 || marked.strokes.length > 0) && (
@@ -607,7 +601,7 @@ export function ImageEditor({
             className="inline-flex items-center gap-1.5 rounded-lg bg-accent/15 px-2 py-1 text-accent-soft transition-colors hover:bg-accent/25"
           >
             <Trash2 size={12} />
-            Убрать выделенное: {marked.boxes.length + marked.strokes.length}
+            {marked.boxes.length + marked.strokes.length}
           </button>
         )}
 
@@ -616,10 +610,10 @@ export function ImageEditor({
           onClick={removeSelected}
           disabled={!selection}
           title="Удалить выделенное (Delete)"
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-surface-3 hover:text-danger disabled:opacity-30 disabled:hover:bg-transparent"
+          aria-label="Удалить"
+          className="inline-flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3 hover:text-danger disabled:opacity-30 disabled:hover:bg-transparent"
         >
-          <Trash2 size={12} />
-          Удалить
+          <Trash2 size={13} />
         </button>
 
         {hasEdits && (
@@ -630,44 +624,13 @@ export function ImageEditor({
               onEditChange(emptyImageEdit)
               setSelection(null)
             }}
-            className="rounded-lg px-2 py-1 transition-colors hover:bg-surface-3 hover:text-ink-dim"
+            title="Сбросить все правки картинки"
+            aria-label="Сбросить всё"
+            className="inline-flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3 hover:text-ink-dim"
           >
-            Сбросить всё
+            <RotateCcw size={13} />
           </button>
         )}
-
-        <span className="hidden items-center gap-1.5 2xl:inline-flex">
-          {tool === 'box' && (
-            <>
-              <Square size={11} />
-              Протяните прямоугольник поверх надписи. Маску можно двигать и тянуть за края.
-            </>
-          )}
-          {tool === 'crop' && (
-            <>
-              <Crop size={11} />
-              Протяните рамку. Её тоже можно двигать и растягивать.
-            </>
-          )}
-          {tool === 'select' && (
-            <>
-              <Square size={11} />
-              Обведите область — всё, что в неё попало, можно убрать разом.
-            </>
-          )}
-          {tool === 'pick' && (
-            <>
-              <Pipette size={11} />
-              Щёлкните по картинке — цвет перейдёт в палитру.
-            </>
-          )}
-          {tool === 'view' && (
-            <>
-              <Eye size={11} />
-              Правки видно поверх картинки, применятся при экспорте.
-            </>
-          )}
-        </span>
 
         <span className="ml-auto flex shrink-0 items-center gap-3">
           {edit.boxes.length > 0 && (

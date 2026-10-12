@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Play } from 'lucide-react'
+import { Eye, FileX2, FolderInput, Play } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
@@ -7,8 +7,7 @@ import { strokesToPng } from '../lib/paint'
 import type { FileInfo, ImageOptions, ImagePreview, Preset } from '../lib/types'
 import { useStore } from '../store'
 import type { ImageEdit } from './ImageEditorTop'
-import { DeleteMark } from './ExportPanel'
-import { Button, Modal, QuietHints, Section, Segmented, Select, Toggle } from './ui'
+import { Button, MarkIcons, Modal, QuietHints, Section, Segmented, Select, Toggle } from './ui'
 
 const DEFAULT_IMAGE: ImageOptions = {
   format: 'avif',
@@ -371,7 +370,15 @@ export function ImagePanel({
         <Section
           title="Остальные настройки"
           id="image.result"
-          summary={deleteOriginal ? <DeleteMark /> : undefined}
+          summary={
+            <MarkIcons
+              marks={[
+                ...(deleteOriginal ? [{ icon: FileX2, label: 'Оригинал уйдёт в корзину', danger: true }] : []),
+                ...(showPreview ? [{ icon: Eye, label: 'Показывать превью' }] : []),
+                ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
+              ]}
+            />
+          }
         >
           {showPreview && previewError && (
             <p className="rounded-xl bg-surface-2 px-3 py-2.5 text-[12px] text-danger ring-1 ring-line-soft">
@@ -488,13 +495,6 @@ export function ImagePanel({
             </p>
           </div>
         </Modal>
-        {/* Подпись идёт за галочкой: раньше она обещала подпапку всегда, даже
-            когда та выключена, и имя папки было вписано в текст намертво — а
-            задаётся оно в настройках. */}
-        <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">
-          Результат ляжет {intoSubfolder ? 'в подпапку рядом с исходником' : 'рядом с исходником'},
-          с припиской <span className="font-mono text-ink-dim">{SUFFIXES[options.format]}</span>.
-        </p>
       </div>
     </div>
     </QuietHints>

@@ -99,6 +99,20 @@ class MediaInfo:
             ("yuva", "rgba", "bgra", "argb", "abgr", "gbrap", "ya", "pal8")
         )
 
+    @property
+    def video_bit_rate(self) -> int | None:
+        """Битрейт картинки: из потока, а нет его — общий за вычетом звука."""
+        video = self.video
+        if not video:
+            return None
+        if video.bit_rate:
+            return video.bit_rate
+        if not self.bit_rate:
+            return None
+        sound = sum(s.bit_rate or 0 for s in self.streams if s.kind == "audio")
+        rest = self.bit_rate - sound
+        return rest if rest > 0 else None
+
     def to_dict(self) -> dict[str, Any]:
         video, audio = self.video, self.audio
         return {
@@ -113,6 +127,8 @@ class MediaInfo:
             "videoCodec": video.codec if video else None,
             "audioCodec": audio.codec if audio else None,
             "audioChannels": audio.channels if audio else None,
+            "videoBitRate": self.video_bit_rate,
+            "audioBitRate": audio.bit_rate if audio else None,
             "sampleRate": audio.sample_rate if audio else None,
             "hasAudio": self.has_audio,
             "hasAlpha": self.has_alpha,
@@ -368,7 +384,8 @@ async def probe(path: str | Path, use_cache: bool = True) -> MediaInfo:
                 fps=_parse_fps(raw.get("avg_frame_rate") or raw.get("r_frame_rate")),
                 channels=_to_int(raw.get("channels")),
                 sample_rate=_to_int(raw.get("sample_rate")),
-                bit_rate=_to_int(raw.get("bit_rate")),
+                # У MKV и WebM битрейт потока лежит не в поле, а в теге BPS.
+                bit_rate=_to_int(raw.get("bit_rate")) or _to_int((raw.get("tags") or {}).get("BPS")),
                 language=(raw.get("tags") or {}).get("language"),
                 title=(raw.get("tags") or {}).get("title"),
                 pix_fmt=raw.get("pix_fmt"),

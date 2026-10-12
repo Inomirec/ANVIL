@@ -44,6 +44,9 @@ export interface MediaInfo {
   videoCodec: string | null
   audioCodec: string | null
   audioChannels: number | null
+  /** Битрейт картинки и звука, бит/с. Нет в файле — null. */
+  videoBitRate?: number | null
+  audioBitRate?: number | null
   sampleRate: number | null
   hasAudio: boolean
   /** Звуковые дорожки файла по порядку. У аниме их часто две. */

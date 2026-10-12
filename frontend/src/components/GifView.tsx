@@ -9,20 +9,20 @@ import { useZoomPan } from '../lib/zoomPan'
  * показывать, чем дать крутить то, что ничего не меняет.
  */
 export function GifView({ file }: { file: FileInfo }) {
-  const zoom = useZoomPan(file.path)
+  const zoom = useZoomPan(file.path, 8, 0.4)
   const media = file.media
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div
         ref={zoom.shell}
         onMouseDown={zoom.onMouseDown}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-black ring-1 ring-line-soft"
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-surface-2/60 ring-1 ring-line-soft"
       >
         {zoom.view !== 1 && (
           <button
             type="button"
             onClick={zoom.reset}
-            title="Картинка приближена — на готовый файл это не влияет. Нажмите, чтобы вернуть обычный размер."
+            title="Масштаб просмотра — на готовый файл не влияет. Нажмите, чтобы вернуть обычный размер."
             className="absolute right-2 top-2 z-10 rounded-lg bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             {Math.round(zoom.view * 100)}%
@@ -33,7 +33,7 @@ export function GifView({ file }: { file: FileInfo }) {
           src={mediaUrl(file.path)}
           alt=""
           draggable={false}
-          className="max-h-full max-w-full object-contain"
+          className="max-h-full max-w-full object-contain shadow-xl ring-1 ring-line"
           style={{ transform: zoom.transform, imageRendering: zoom.view >= 3 ? 'pixelated' : undefined }}
         />
       </div>

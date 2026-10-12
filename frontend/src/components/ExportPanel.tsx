@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileX2, Headphones, Play, Terminal, Zap } from 'lucide-react'
+import { AudioLines, FileX2, FolderInput, Headphones, Play, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
-import { humanSize, parentDir, plural, timecode } from '../lib/format'
+import { parentDir, plural, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
 import type { AudioOptions, FileInfo, Preset, VideoOptions } from '../lib/types'
 import { useStore } from '../store'
 import type { TrimState } from './MediaEditor'
 import type { Fades } from './Timeline'
-import { Button, QuietHints, Section, Segmented, Select, Toggle } from './ui'
+import { SliderNumber } from './ComposeTextPanel'
+import { Button, MarkIcons, QuietHints, Section, Segmented, Select, Toggle } from './ui'
 
 const DEFAULT_VIDEO: VideoOptions = {
   codec: 'av1_svt',
@@ -65,6 +66,40 @@ const LANGUAGES: Record<string, string> = {
   jpn: 'японский', ja: 'японский',
   ukr: 'украинский', uk: 'украинский',
 }
+
+/**
+ * Звук: кодек и битрейт под готовыми наборами. Подписи шкалы — у каждого
+ * кодека свои: 96 кбит/с у Opus — обычный выбор, а у MP3 — уже слышно.
+ */
+const AUDIO_CODECS: {
+  value: string
+  label: string
+  title: string
+  min: number
+  max: number
+  normal: number
+  marks: { value: number; label: string }[]
+}[] = [
+  {
+    value: 'opus', label: 'Opus', title: 'Лучше всех звучит на малом весе. Играет в SIGame',
+    min: 32, max: 256, normal: 96,
+    marks: [{ value: 48, label: 'речь' }, { value: 96, label: 'обычно' }, { value: 128, label: 'музыка' }, { value: 192, label: 'отлично' }],
+  },
+  {
+    value: 'aac', label: 'AAC', title: 'Читается почти везде, весит чуть больше Opus',
+    min: 64, max: 320, normal: 128,
+    marks: [{ value: 96, label: 'речь' }, { value: 128, label: 'обычно' }, { value: 192, label: 'музыка' }, { value: 256, label: 'отлично' }],
+  },
+  {
+    value: 'mp3', label: 'MP3', title: 'Играет везде, даже в старом',
+    min: 96, max: 320, normal: 192,
+    marks: [{ value: 128, label: 'речь' }, { value: 192, label: 'обычно' }, { value: 256, label: 'музыка' }, { value: 320, label: 'максимум' }],
+  },
+  {
+    value: 'flac', label: 'FLAC', title: 'Без потерь: для архива, а не для пака — весит в разы больше',
+    min: 0, max: 0, normal: 0, marks: [],
+  },
+]
 
 /**
  * GIF можно перегнать и в видео, и в движущийся WebP — второе стоит в том же
@@ -423,25 +458,35 @@ export function ExportPanel({
         </Section>
 
 
+        {isAudio && !streamCopy && (
+          <AudioCodecSection
+            audio={audio}
+            // Тронули кодек или битрейт — набор погас: это уже свои настройки.
+            onChange={(next) => {
+              setAudio(next)
+              setPresetId('')
+            }}
+          />
+        )}
+
         <Section
           title="Остальные настройки"
           id="export.other"
           // Свёрнутый раздел не должен прятать то, о чём легко забыть: удаление
           // оригинала горит красным, остальное включённое — значками.
           summary={
-            <>
-              {!streamCopy && !isAudio && status?.gpuAvailable && video.use_gpu && (
-                <span title="Кодировать на видеокарте">
-                  <Zap size={13} className="text-accent-soft" />
-                </span>
-              )}
-              {!streamCopy && audio.mono && (
-                <span title="Звук в моно">
-                  <Headphones size={13} className="text-accent-soft" />
-                </span>
-              )}
-              {deleteOriginal && <DeleteMark />}
-            </>
+            <MarkIcons
+              marks={[
+                ...(deleteOriginal ? [{ icon: FileX2, label: 'Оригинал уйдёт в корзину', danger: true }] : []),
+                ...(!streamCopy && !isAudio && status?.gpuAvailable && video.use_gpu
+                  ? [{ icon: Zap, label: 'Кодировать на видеокарте' }]
+                  : []),
+                ...(!streamCopy && !gif && audio.loudnorm ? [{ icon: AudioLines, label: 'Выравнивание звука' }] : []),
+                ...(!streamCopy && !gif && audio.mono ? [{ icon: Headphones, label: 'Звук в моно' }] : []),
+                ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
+                ...(command !== null ? [{ icon: Terminal, label: 'Своя команда ffmpeg' }] : []),
+              ]}
+            />
           }
         >
           <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
@@ -550,23 +595,16 @@ export function ExportPanel({
 
       {/* Нижняя панель действий */}
       <div className="space-y-2 border-t border-line-soft bg-surface px-4 py-3">
-        <div className="flex items-center justify-between text-[11px] text-ink-faint">
-          <span>
-            {gif ? (
-              'GIF целиком'
-            ) : cutting ? (
-              <>
-                Отрезок:{' '}
-                <span className="tabular-nums text-ink-dim">
-                  {timecode(trim.in ?? 0, true)} → {timecode(trim.out ?? total, true)}
-                </span>
-              </>
-            ) : (
-              'Весь файл целиком'
-            )}
-          </span>
-          <span>{humanSize(file.size)}</span>
-        </div>
+        {/* Отрезок пишем, только когда метки что-то отрезают: «весь файл»
+            и его вес и так видны над плеером. */}
+        {cutting && !gif && (
+          <p className="text-[11px] text-ink-faint">
+            Отрезок:{' '}
+            <span className="tabular-nums text-ink-dim">
+              {timecode(trim.in ?? 0, true)} → {timecode(trim.out ?? total, true)}
+            </span>
+          </p>
+        )}
 
         <Button tone="primary" onClick={() => void run()} disabled={busy} className="w-full py-2.5">
           <Play size={15} />
@@ -594,14 +632,44 @@ export function ExportPanel({
   )
 }
 
-/** Значок «оригинал уйдёт в корзину» — для свёрнутого раздела настроек. */
-export function DeleteMark() {
+/** Кодек и битрейт звука — под готовыми наборами. */
+function AudioCodecSection({
+  audio,
+  onChange,
+}: {
+  audio: AudioOptions
+  onChange: (audio: AudioOptions) => void
+}) {
+  const current = AUDIO_CODECS.find((item) => item.value === audio.codec) ?? AUDIO_CODECS[0]
   return (
-    <span
-      title="Оригинал уйдёт в корзину"
-      className="flex items-center rounded bg-danger/15 px-1 py-0.5 text-danger"
+    <Section
+      title="Кодек и битрейт"
+      id="export.audioCodec"
+      summary={current.max ? `${current.label} · ${audio.bitrate_kbps} кбит/с` : current.label}
     >
-      <FileX2 size={13} />
-    </span>
+      <Segmented
+        columns={4}
+        value={current.value}
+        options={AUDIO_CODECS.map((item) => ({ value: item.value, label: item.label, title: item.title }))}
+        onChange={(value) => {
+          const next = AUDIO_CODECS.find((item) => item.value === value)!
+          onChange({ ...audio, codec: value, bitrate_kbps: next.normal || audio.bitrate_kbps })
+        }}
+      />
+      {current.max > 0 && (
+        <SliderNumber
+          stacked
+          label="Битрейт"
+          unit="кбит/с"
+          value={audio.bitrate_kbps}
+          min={current.min}
+          max={current.max}
+          step={8}
+          reset={current.normal}
+          marks={current.marks}
+          onChange={(value) => onChange({ ...audio, bitrate_kbps: value })}
+        />
+      )}
+    </Section>
   )
 }

@@ -100,7 +100,7 @@ export function MediaEditor({
   const isVideo = file.kind === 'video'
   // Колесо над кадром приближает его, зажатое колесо таскает: мелкую надпись
   // или край кадра иначе не разглядеть. На готовый файл не влияет.
-  const zoom = useZoomPan(file.path, isVideo ? 8 : 1)
+  const zoom = useZoomPan(file.path, isVideo ? 8 : 1, isVideo ? 0.4 : 1)
 
   /**
    * Метки должны существовать сразу, а не появляться после нажатия I/O:
@@ -387,13 +387,17 @@ export function MediaEditor({
       <div
         ref={zoom.shell}
         onMouseDown={zoom.onMouseDown}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-black ring-1 ring-line-soft"
+        // Вокруг кадра — цвет окна, у самого кадра — чёрный фон и рамка: иначе
+        // у вертикального ролика не понять, где кончается видео, а где поле.
+        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl ring-1 ring-line-soft ${
+          isVideo ? 'bg-surface-2/60' : 'bg-black'
+        }`}
       >
         {zoom.view !== 1 && (
           <button
             type="button"
             onClick={zoom.reset}
-            title="Кадр приближен — на готовый файл это не влияет. Нажмите, чтобы вернуть обычный размер."
+            title="Масштаб просмотра — на готовый файл не влияет. Нажмите, чтобы вернуть обычный размер."
             className="absolute right-2 top-2 z-10 rounded-lg bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             {Math.round(zoom.view * 100)}%
@@ -411,8 +415,10 @@ export function MediaEditor({
             key={file.path}
             ref={mediaRef as React.RefObject<HTMLVideoElement>}
             src={mediaUrl(file.path)}
-            className="max-h-full max-w-full"
-            style={{ transform: zoom.transform }}
+            className="max-h-full max-w-full bg-black shadow-xl ring-1 ring-line"
+            // Затухание картинки — потемнением самого кадра: вуаль поверх
+            // всего окна закрасила бы и поле вокруг.
+            style={{ transform: zoom.transform, filter: dim > 0.001 ? `brightness(${1 - dim})` : undefined }}
             onLoadedMetadata={(event) => {
               const total = event.currentTarget.duration || 0
               setDuration(total)
@@ -450,14 +456,6 @@ export function MediaEditor({
               onError={() => setError('Не удалось открыть этот файл в предпросмотре')}
             />
           </div>
-        )}
-
-        {/* Затухание картинки: чёрная вуаль поверх кадра */}
-        {dim > 0.001 && (
-          <div
-            className="pointer-events-none absolute inset-0 bg-black"
-            style={{ opacity: dim }}
-          />
         )}
 
         {error && (
@@ -636,14 +634,20 @@ export function MediaEditor({
         {media?.width && (
           <span>
             {media.width}×{media.height}
-            {media.fps ? ` · ${media.fps.toFixed(media.fps % 1 ? 2 : 0)} к/с` : ''}
+            {media.fps ? ` · ${media.fps.toFixed(media.fps % 1 ? 2 : 0)} кадров/с` : ''}
           </span>
         )}
-        {media?.videoCodec && <span>видео: {media.videoCodec}</span>}
+        {media?.videoCodec && (
+          <span>
+            Видео {codecName(media.videoCodec)}
+            {media.videoBitRate ? ` · ${kbps(media.videoBitRate)}` : ''}
+          </span>
+        )}
         {media?.audioCodec ? (
           <span>
-            звук: {media.audioCodec}
-            {media.audioChannels ? ` · ${media.audioChannels} кан.` : ''}
+            Звук {codecName(media.audioCodec)}
+            {media.audioChannels ? ` · ${channelsName(media.audioChannels)}` : ''}
+            {media.audioBitRate ? ` · ${kbps(media.audioBitRate)}` : ''}
           </span>
         ) : (
           <span className="text-warn">без звуковой дорожки</span>
@@ -654,4 +658,33 @@ export function MediaEditor({
       </div>
     </div>
   )
+}
+
+/** Имя кодека так, как его пишут люди, а не как ffmpeg. */
+function codecName(codec: string): string {
+  const names: Record<string, string> = {
+    h264: 'H.264',
+    hevc: 'H.265',
+    av1: 'AV1',
+    vp9: 'VP9',
+    vp8: 'VP8',
+    mpeg4: 'MPEG-4',
+    aac: 'AAC',
+    opus: 'Opus',
+    mp3: 'MP3',
+    vorbis: 'Vorbis',
+    flac: 'FLAC',
+    ac3: 'AC-3',
+    eac3: 'E-AC-3',
+  }
+  return names[codec] ?? codec.toUpperCase()
+}
+
+/** Битрейт в кбит/с, с пробелом в тысячах. */
+function kbps(bits: number): string {
+  return `${Math.round(bits / 1000).toLocaleString('ru-RU')} кбит/с`
+}
+
+function channelsName(count: number): string {
+  return count === 1 ? 'моно' : count === 2 ? 'стерео' : `${count} ${count < 5 ? 'канала' : 'каналов'}`
 }
