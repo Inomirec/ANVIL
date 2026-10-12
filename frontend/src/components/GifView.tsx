@@ -12,18 +12,18 @@ export function GifView({ file }: { file: FileInfo }) {
   const zoom = useZoomPan(file.path, 8, 0.4)
   const media = file.media
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col">
       <div
         ref={zoom.shell}
         onMouseDown={zoom.onMouseDown}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-surface-2/60 ring-1 ring-line-soft"
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-surface-2/60 p-4"
       >
         {zoom.view !== 1 && (
           <button
             type="button"
             onClick={zoom.reset}
             title="Масштаб просмотра — на готовый файл не влияет. Нажмите, чтобы вернуть обычный размер."
-            className="absolute right-2 top-2 z-10 rounded-lg bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
+            className="absolute right-2 top-2 z-10 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             {Math.round(zoom.view * 100)}%
           </button>
@@ -37,7 +37,7 @@ export function GifView({ file }: { file: FileInfo }) {
           style={{ transform: zoom.transform, imageRendering: zoom.view >= 3 ? 'pixelated' : undefined }}
         />
       </div>
-      <p className="truncate px-1 text-center text-[12px] text-ink-faint">
+      <p className="truncate border-t border-line-soft bg-surface px-3 py-2 text-center text-[12px] text-ink-faint">
         {file.name}
         {media?.width ? ` · ${media.width}×${media.height}` : ''}
         {media?.duration ? ` · ${media.duration.toFixed(1)} с` : ''} · {humanSize(file.size)}

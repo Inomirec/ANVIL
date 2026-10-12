@@ -21,6 +21,7 @@ import { RectCanvas, type Selection, type Tool } from './RectCanvas'
 import { api } from '../lib/api'
 import { FontPicker, type FontRow } from './ComposeTextPanel'
 import { ImageTexts, type ImageTextMark } from './ImageTexts'
+import { ColorButton } from './ColorPicker'
 
 export interface ImageEdit {
   crop: Rect | null
@@ -103,7 +104,6 @@ export function ImageEditor({
   })
   // Меню по правой кнопке над маской.
   const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
-  const colorInputRef = useRef<HTMLInputElement>(null)
 
   // Надписи: какая выбрана, какая только что поставлена и как выглядит
   // следующая. Список шрифтов читаем, только когда он понадобился.
@@ -112,7 +112,6 @@ export function ImageEditor({
   const [freshText, setFreshText] = useState<number | null>(null)
   const [textStyle, setTextStyle] = useState(readTextStyle)
   const [fonts, setFonts] = useState<FontRow[] | null>(null)
-  const textColorRef = useRef<HTMLInputElement>(null)
   const textSession = useRef(false)
   // Точек окна на пиксель оригинала: по нему растут буквы надписей.
   const [scale, setScale] = useState(1)
@@ -497,10 +496,10 @@ export function ImageEditor({
   const hasEdits = Boolean(edit.crop) || edit.boxes.length > 0 || texts.length > 0
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col">
       <div
         ref={viewportRef}
-        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-[#0e1016] p-4 ring-1 ring-line-soft ${noStraySelection.className} ${
+        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#0e1016] p-4 ${noStraySelection.className} ${
           panning ? 'cursor-grabbing' : spaceHeld ? 'cursor-grab' : ''
         }`}
         onMouseDownCapture={noStraySelection.onMouseDownCapture}
@@ -625,7 +624,7 @@ export function ImageEditor({
 
         {/* Сведения о картинке — на ней самой, справа внизу и полупрозрачно:
             на панели инструментов им не хватало места. */}
-        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-lg bg-surface/70 px-2.5 py-1 text-[11px] text-ink-faint opacity-80 ring-1 ring-line-soft backdrop-blur">
+        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 bg-surface/70 px-2.5 py-1 text-[11px] text-ink-faint opacity-80 ring-1 ring-line-soft backdrop-blur">
           {edit.boxes.length > 0 && <span className="text-accent-soft">масок: {edit.boxes.length}</span>}
           {edit.crop && (
             <span className="text-accent-soft">
@@ -649,7 +648,7 @@ export function ImageEditor({
             type="button"
             onClick={resetView}
             title="Вписать — вернуть картинку в исходное положение. Колесо — приблизить, средняя кнопка или пробел — двигать"
-            className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
+            className="absolute right-3 top-3 z-10 flex items-center gap-1 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             <Maximize2 size={11} />
             {Math.round(zoom * 100)}%
@@ -657,7 +656,7 @@ export function ImageEditor({
         )}
 
         {preview && (
-          <div className="absolute bottom-3 left-3 flex overflow-hidden rounded-lg ring-1 ring-line-soft">
+          <div className="absolute bottom-3 left-3 flex overflow-hidden ring-1 ring-line-soft">
             {[
               { value: false, label: 'До', size: file.size },
               { value: true, label: 'После', size: preview.size },
@@ -685,7 +684,7 @@ export function ImageEditor({
       {/* Инструменты */}
       {/* Одна строка: сведения о файле справа сжимаются, а не переносят
           панель на вторую строку. */}
-      <div className="flex items-center gap-x-2 rounded-xl bg-surface px-2.5 py-2 text-[11px] text-ink-faint ring-1 ring-line-soft">
+      <div className="flex h-11 shrink-0 items-center gap-x-2 border-t border-line-soft bg-surface px-3 text-[11px] text-ink-faint">
         <span className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line-soft">
           {TOOLS.map((item) => (
             <button
@@ -743,25 +742,14 @@ export function ImageEditor({
               />
               <span className="ml-0.5 text-[10px]">px</span>
             </label>
-            <button
-              type="button"
-              onClick={() => {
-                textSession.current = false
-                textColorRef.current?.click()
-              }}
+            <ColorButton
+              value={shownStyle.color}
               title="Цвет надписи"
-              className="flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3"
-            >
-              <span className="h-4 w-4 rounded-[3px] ring-1 ring-line" style={{ background: shownStyle.color }} />
-              <input
-                ref={textColorRef}
-                type="color"
-                value={shownStyle.color}
-                onChange={(event) => applyStyle({ color: event.target.value })}
-                className="h-0 w-0 opacity-0"
-                tabIndex={-1}
-              />
-            </button>
+              onOpen={() => {
+                textSession.current = false
+              }}
+              onChange={(color) => applyStyle({ color })}
+            />
             {/* Обводка — во всплывающем окошке у буквы с контуром: в строке
                 панели ей не хватало места. */}
             <StrokeButton
@@ -793,37 +781,22 @@ export function ImageEditor({
         )}
 
         {tool !== 'view' && tool !== 'crop' && tool !== 'text' && (
-          <button
-            type="button"
-            onClick={() => {
-              colorSession.current = false
-              colorInputRef.current?.click()
-            }}
+          <ColorButton
+            value={paintColor}
             title={
               hasChosen
                 ? 'Цвет закраски — выбранное перекрасится в него'
                 : 'Цвет закраски — нажмите, чтобы выбрать'
             }
+            onOpen={() => {
+              colorSession.current = false
+            }}
+            onChange={(color) => {
+              applyColor(color)
+              recolorChosen(color)
+            }}
             className="flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-surface-3"
-          >
-            <span
-              className="h-4 w-4 rounded-[3px] ring-1 ring-line"
-              style={{ background: paintColor }}
-            />
-            {/* Настоящее поле выбора цвета прячем: системное окно открываем
-                своей кнопкой, чтобы оно не ломало вид панели. */}
-            <input
-              ref={colorInputRef}
-              type="color"
-              value={paintColor}
-              onChange={(event) => {
-                applyColor(event.target.value)
-                recolorChosen(event.target.value)
-              }}
-              className="h-0 w-0 opacity-0"
-              tabIndex={-1}
-            />
-          </button>
+          />
         )}
 
 
@@ -925,11 +898,11 @@ function BoxMenu({
   onDelete: () => void
   onColor: (color: string) => void
 }) {
-  const colorRef = useRef<HTMLInputElement>(null)
-
   useEffect(() => {
     const away = (event: MouseEvent) => {
-      if (!(event.target as HTMLElement).closest('[data-box-menu]')) onClose()
+      // Окошко цвета живёт отдельным слоем — нажатия в нём меню не закрывают.
+      const target = event.target as HTMLElement
+      if (!target.closest('[data-box-menu]') && !target.closest('[data-color-popover]')) onClose()
     }
     const escape = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
     // Ждём следующего события: то, которое открыло меню, ещё не «отпустили».
@@ -950,9 +923,9 @@ function BoxMenu({
       className="fixed z-50 min-w-[168px] overflow-hidden rounded-lg bg-surface-2 py-1 text-[12px] shadow-lg ring-1 ring-line"
       style={{ left: Math.min(x, window.innerWidth - 180), top: Math.min(y, window.innerHeight - 90) }}
     >
-      <button
-        type="button"
-        onClick={() => colorRef.current?.click()}
+      <ColorButton
+        value={color}
+        onChange={onColor}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-3"
       >
         <span
@@ -960,15 +933,7 @@ function BoxMenu({
           style={{ background: color }}
         />
         Поменять цвет
-      </button>
-      <input
-        ref={colorRef}
-        type="color"
-        value={color}
-        onChange={(event) => onColor(event.target.value)}
-        className="h-0 w-0 opacity-0"
-        tabIndex={-1}
-      />
+      </ColorButton>
       <button
         type="button"
         onClick={onDelete}
@@ -999,12 +964,12 @@ function StrokeButton({
 }) {
   const [open, setOpen] = useState(false)
   const holder = useRef<HTMLSpanElement>(null)
-  const colorRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
     const away = (event: MouseEvent) => {
-      if (!holder.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as HTMLElement
+      if (!holder.current?.contains(target) && !target.closest('[data-color-popover]')) setOpen(false)
     }
     window.addEventListener('mousedown', away)
     return () => window.removeEventListener('mousedown', away)
@@ -1038,22 +1003,12 @@ function StrokeButton({
             />
             Обводка
           </label>
-          <button
-            type="button"
-            onClick={() => colorRef.current?.click()}
+          <ColorButton
+            value={color}
             title="Цвет обводки"
+            onChange={(strokeColor) => onChange({ strokeColor, stroke: stroke || Math.max(2, Math.round(size / 16)) })}
             className="flex items-center rounded-lg p-1 transition-colors hover:bg-surface-3"
-          >
-            <span className="h-4 w-4 rounded-[3px] ring-1 ring-line" style={{ background: color }} />
-            <input
-              ref={colorRef}
-              type="color"
-              value={color}
-              onChange={(event) => onChange({ strokeColor: event.target.value, stroke: stroke || Math.max(2, Math.round(size / 16)) })}
-              className="h-0 w-0 opacity-0"
-              tabIndex={-1}
-            />
-          </button>
+          />
           <label
             className="flex items-center rounded-lg bg-surface px-1.5 ring-1 ring-line-soft"
             title="Толщина обводки в пикселях картинки"

@@ -231,7 +231,7 @@ export default function App() {
               <Spinner size={20} />
             </div>
           ) : activeInfo ? (
-            <div className="h-full p-4">
+            <div className="h-full">
               {isGif(activeInfo) ? (
                 <GifView file={activeInfo} />
               ) : activeInfo.kind === 'image' ? (

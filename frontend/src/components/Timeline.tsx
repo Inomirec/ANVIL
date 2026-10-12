@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Magnet, Maximize, ZoomIn, ZoomOut } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { timecode } from '../lib/format'
 import type { FilmstripInfo, SceneInfo } from '../lib/types'
 import { SceneStrip } from './SceneStrip'
+import { IconButton } from './ui'
 
 type Drag =
   | { kind: 'playhead' }
@@ -69,6 +71,7 @@ export function Timeline({
   onVolumeChange,
   onFadesChange,
   playing = false,
+  toolbar,
 }: {
   duration: number
   currentTime: number
@@ -93,6 +96,12 @@ export function Timeline({
   volume?: number
   onVolumeChange?: (volume: number) => void
   playing?: boolean
+  /**
+   * Левая часть панели над таймлайном — кнопки плеера. Панель стоит над
+   * дорожками, как в монтаже: кнопка «играть» под таймлайном выглядела
+   * чужой. Справа на ней магнит и масштаб самого таймлайна.
+   */
+  toolbar?: ReactNode
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<Drag>(null)
@@ -283,21 +292,19 @@ export function Timeline({
     const steps = [
       0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600,
     ]
-    const step = steps.find((candidate) => span / candidate <= 10) ?? 3600
+    const width = trackWidth || 600
+    const step = steps.find((candidate) => (candidate / span) * width >= 70) ?? 3600
     const result: number[] = []
     for (let time = Math.ceil(start / step) * step; time <= end; time += step) {
       result.push(Math.round(time * 1000) / 1000)
     }
     return { ticks: result, tickStep: step }
-  }, [span, start, end])
+  }, [span, start, end, trackWidth])
 
   const tickLabel = (value: number) =>
     tickStep < 1 ? timecode(value, true) : timecode(value)
 
   const selection = { from: toRatio(from), to: toRatio(to) }
-  // Две подписи занимают примерно шестую часть дорожки. Сойдясь ближе, они
-  // налезают друг на друга и превращаются в кашу — тогда показываем одну.
-  const tightLabels = selection.to - selection.from < 0.16
   const showStrip = hasVideo && Boolean(strip || stripLoading)
   const zoomed = zoom > 1.01
 
@@ -307,253 +314,233 @@ export function Timeline({
     setDrag(mode)
   }
 
-  return (
-    <div className="select-none">
-      {/* Шкала времени и управление масштабом */}
-      <div className="mb-1 flex items-end gap-2">
-        <div className="relative h-4 min-w-0 flex-1 overflow-hidden text-[10px] text-ink-faint">
-          {ticks.map((tick) => (
-            <span
-              key={tick}
-              className="absolute -translate-x-1/2 whitespace-nowrap tabular-nums"
-              style={{ left: `${toRatio(tick) * 100}%` }}
-            >
-              {tickLabel(tick)}
-            </span>
-          ))}
-        </div>
+  const seekFromRuler = (event: React.PointerEvent) => {
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDrag({ kind: 'playhead' })
+    onSeek(timeAt(event.clientX))
+  }
 
-        <div className="flex shrink-0 items-center gap-0.5 text-ink-faint">
-          {zoomed && (
-            <span className="mr-1 font-mono text-[10px] tabular-nums">
-              ×{zoom < 10 ? zoom.toFixed(1) : Math.round(zoom)}
-            </span>
-          )}
-          <button
-            type="button"
+  return (
+    <div className="select-none border-t border-line-soft bg-surface">
+      {/* Панель: слева плеер, справа магнит и масштаб таймлайна. */}
+      <div className="flex h-9 items-center gap-2 border-b border-line-soft px-3">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">{toolbar}</div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton
             onClick={() => setSnap(!snap)}
+            active={snap}
             title={
               snap
                 ? 'Магнит включён: границы прилипают к зелёной игле'
                 : 'Магнит выключен: границы ставятся точно по мыши'
             }
-            className={`mr-0.5 rounded p-1 transition-colors hover:bg-surface-3 ${
-              snap ? 'text-accent-soft' : 'hover:text-ink'
-            }`}
           >
-            <Magnet size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={() => applyZoom(zoom / 1.6)}
-            disabled={!zoomed}
-            title="Отдалить (колесо мыши вниз)"
-            className="rounded p-1 transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
-          >
-            <ZoomOut size={13} />
-          </button>
-          <button
-            type="button"
+            <Magnet size={14} />
+          </IconButton>
+          <IconButton onClick={() => applyZoom(zoom / 1.6)} disabled={!zoomed} title="Отдалить (колесо мыши вниз)">
+            <ZoomOut size={14} />
+          </IconButton>
+          <IconButton
             onClick={() => applyZoom(zoom * 1.6)}
             disabled={zoom >= maxZoom - 0.01}
             title="Приблизить к игле (колесо мыши вверх)"
-            className="rounded p-1 transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
           >
-            <ZoomIn size={13} />
-          </button>
-          <button
-            type="button"
+            <ZoomIn size={14} />
+          </IconButton>
+          <IconButton
             onClick={() => {
               setZoom(1)
               setViewStart(0)
             }}
             disabled={!zoomed}
-            title="Показать целиком"
-            className="rounded p-1 transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+            title={zoomed ? `Показать целиком (сейчас ×${zoom < 10 ? zoom.toFixed(1) : Math.round(zoom)})` : 'Показать целиком'}
           >
-            <Maximize size={13} />
-          </button>
+            <Maximize size={14} />
+          </IconButton>
         </div>
       </div>
 
-      <div
-        ref={trackRef}
-        className="relative cursor-pointer overflow-hidden rounded-lg bg-surface-2 ring-1 ring-line-soft"
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId)
-          // Промах по узкой метке раньше уводил иглу в точку клика, и
-          // размеченный кадр терялся. Рядом с границей считаем, что тянут
-          // именно её, — игла остаётся там, где её поставили.
-          const time = timeAt(event.clientX)
-          const near = secondsPerPixel() * GRAB_PIXELS
-          if (inPoint !== null && Math.abs(time - inPoint) <= near) {
-            setDrag({ kind: 'in' })
-            return
-          }
-          if (outPoint !== null && Math.abs(time - outPoint) <= near) {
-            setDrag({ kind: 'out' })
-            return
-          }
-          setDrag({ kind: 'playhead' })
-          onSeek(time)
-        }}
-        onPointerMove={(event) => setHover(timeAt(event.clientX))}
-        onPointerLeave={() => setHover(null)}
-      >
-        {/* Дорожка видео */}
-        {showStrip && (
-          <TrackLane
-            height={STRIP_HEIGHT}
-            label="Видео"
-            selection={selection}
-            fade={activeFades.video}
-            trimSpan={trimSpan}
-            editable={Boolean(onFadesChange)}
-            onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'video', side })}
+      <div className="px-3 pb-2">
+        <div ref={trackRef} className="relative">
+          {/* Линейка со временем: нажатие и протяжка по ней водят иглу. Над
+              дорожками иглу не спутать с метками начала и конца — они
+              кончаются у линейки. */}
+          <div
+            className="relative h-6 cursor-pointer overflow-hidden border-b border-line-soft"
+            onPointerDown={seekFromRuler}
+            onPointerMove={(event) => setHover(timeAt(event.clientX))}
+            onPointerLeave={() => setHover(null)}
+            title="Нажмите или тяните — игла пойдёт сюда"
           >
-            {scenes && trackWidth > 0 ? (
-              <div className="relative h-full w-full">
-                <SceneStrip info={scenes} from={start} to={end} width={trackWidth} height={STRIP_HEIGHT} />
-              </div>
-            ) : strip ? (
-              <FilmStrip strip={strip} height={STRIP_HEIGHT} view={{ start, span, total: safeDuration }} />
-            ) : (
-              <div className="h-full w-full animate-pulse-soft bg-surface-3/50" />
-            )}
-          </TrackLane>
-        )}
-
-        {/* Дорожка звука */}
-        {hasAudio && (
-          <TrackLane
-            height={WAVE_HEIGHT}
-            label="Звук"
-            selection={selection}
-            fade={activeFades.audio}
-            trimSpan={trimSpan}
-            editable={Boolean(onFadesChange)}
-            onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'audio', side })}
-            volume={onVolumeChange ? (volume ?? 1) : undefined}
-            onVolumeDown={(event) => {
-              const lane = (event.currentTarget as HTMLElement).closest('[data-lane]')
-              const rect = lane?.getBoundingClientRect()
-              if (rect) startDrag(event, { kind: 'volume', top: rect.top, height: rect.height })
-            }}
-          >
-            <Waveform
-              peaks={peaks}
-              loading={peaksLoading}
-              view={{ start, span, total: safeDuration }}
+            {/* Отрезок между метками — подсветкой, как в монтаже. */}
+            <div
+              className="pointer-events-none absolute top-0 h-full bg-accent/15"
+              style={{
+                left: `${clamp(selection.from, 0, 1) * 100}%`,
+                width: `${Math.max(clamp(selection.to, 0, 1) - clamp(selection.from, 0, 1), 0) * 100}%`,
+              }}
             />
-          </TrackLane>
-        )}
+            {/* Черта на каждом кадре — когда приблизили так, что кадр шире
+                нескольких пикселей. */}
+            {fps && trackWidth > 0 && trackWidth / span / fps >= 6 && (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-1.5"
+                style={{
+                  backgroundImage: `repeating-linear-gradient(to right, rgba(255,255,255,0.22) 0 1px, transparent 1px ${trackWidth / span / fps}px)`,
+                  backgroundPositionX: `${-((start * fps) % 1) * (trackWidth / span / fps)}px`,
+                }}
+              />
+            )}
+            {ticks.map((tick) => (
+              <div key={tick} className="pointer-events-none absolute top-0 h-full" style={{ left: `${toRatio(tick) * 100}%` }}>
+                <div className="h-2 w-px bg-line" />
+                <span className="ml-1 whitespace-nowrap font-mono text-[9.5px] tabular-nums text-ink-faint">
+                  {tickLabel(tick)}
+                </span>
+              </div>
+            ))}
+          </div>
 
-        {!showStrip && !hasAudio && <div style={{ height: WAVE_HEIGHT }} />}
-
-        {/* Затемнение областей вне выделения */}
-        <div
-          className="pointer-events-none absolute inset-y-0 left-0 bg-base/70"
-          style={{ width: `${clamp(selection.from, 0, 1) * 100}%` }}
-        />
-        <div
-          className="pointer-events-none absolute inset-y-0 right-0 bg-base/70"
-          style={{ width: `${clamp(1 - selection.to, 0, 1) * 100}%` }}
-        />
-
-        {/* Маркеры отрезка */}
-        <Handle
-          side="in"
-          ratio={selection.from}
-          onPointerDown={(event) => startDrag(event, { kind: 'in' })}
-        />
-        <Handle
-          side="out"
-          ratio={selection.to}
-          onPointerDown={(event) => startDrag(event, { kind: 'out' })}
-        />
-
-        {/* Позиция курсора мыши */}
-        {hover !== null && !drag && (
           <div
-            className="pointer-events-none absolute inset-y-0 w-px bg-ink/25"
-            style={{ left: `${toRatio(hover) * 100}%` }}
-          />
-        )}
-
-        {/* Черта на каждом кадре — когда приблизили так, что кадр шире
-            нескольких пикселей. */}
-        {fps && trackWidth > 0 && trackWidth / span / fps >= 6 && (
-          <div
-            className="pointer-events-none absolute inset-x-0 top-0 h-2"
-            style={{
-              backgroundImage: `repeating-linear-gradient(to right, rgba(255,255,255,0.35) 0 1px, transparent 1px ${trackWidth / span / fps}px)`,
-              backgroundPositionX: `${-((start * fps) % 1) * (trackWidth / span / fps)}px`,
-            }}
-          />
-        )}
-
-        {/* Игла воспроизведения */}
-        <div
-          className="pointer-events-none absolute inset-y-0 z-10 w-[2px] bg-ok"
-          style={{ left: `${toRatio(currentTime) * 100}%` }}
-        >
-          <span className="absolute -top-[1px] left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 rounded-[2px] bg-ok" />
-        </div>
-      </div>
-
-      {/* Полоса прокрутки — появляется, только когда есть куда ехать */}
-      {zoomed && (
-        <div
-          className="relative mt-1 h-2 cursor-grab rounded-full bg-surface-2"
-          onPointerDown={(event) => {
-            // Клик мимо ползунка переносит окно туда, куда ткнули.
-            const rect = event.currentTarget.getBoundingClientRect()
-            const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1)
-            setViewStart(
-              clamp(ratio * safeDuration - span / 2, 0, Math.max(safeDuration - span, 0)),
-            )
-          }}
-        >
-          <div
-            className="absolute inset-y-0 rounded-full bg-line transition-colors hover:bg-surface-3"
-            style={{
-              left: `${(start / safeDuration) * 100}%`,
-              width: `${Math.max((span / safeDuration) * 100, 4)}%`,
-            }}
+            className="relative cursor-pointer overflow-hidden bg-surface-2"
             onPointerDown={(event) => {
-              event.stopPropagation()
               event.currentTarget.setPointerCapture(event.pointerId)
-              setDrag({ kind: 'pan', grabX: event.clientX, startAt: start })
+              // Промах по узкой метке раньше уводил иглу в точку клика, и
+              // размеченный кадр терялся. Рядом с границей считаем, что тянут
+              // именно её, — игла остаётся там, где её поставили.
+              const time = timeAt(event.clientX)
+              const near = secondsPerPixel() * GRAB_PIXELS
+              if (inPoint !== null && Math.abs(time - inPoint) <= near) {
+                setDrag({ kind: 'in' })
+                return
+              }
+              if (outPoint !== null && Math.abs(time - outPoint) <= near) {
+                setDrag({ kind: 'out' })
+                return
+              }
+              setDrag({ kind: 'playhead' })
+              onSeek(time)
             }}
-          />
-        </div>
-      )}
+            onPointerMove={(event) => setHover(timeAt(event.clientX))}
+            onPointerLeave={() => setHover(null)}
+          >
+            {/* Дорожка видео */}
+            {showStrip && (
+              <TrackLane
+                height={STRIP_HEIGHT}
+                label="Видео"
+                selection={selection}
+                fade={activeFades.video}
+                trimSpan={trimSpan}
+                editable={Boolean(onFadesChange)}
+                onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'video', side })}
+              >
+                {scenes && trackWidth > 0 ? (
+                  <div className="relative h-full w-full">
+                    <SceneStrip info={scenes} from={start} to={end} width={trackWidth} height={STRIP_HEIGHT} />
+                  </div>
+                ) : strip ? (
+                  <FilmStrip strip={strip} height={STRIP_HEIGHT} view={{ start, span, total: safeDuration }} />
+                ) : (
+                  <div className="h-full w-full animate-pulse-soft bg-surface-3/50" />
+                )}
+              </TrackLane>
+            )}
 
-      {/* Подписи меток */}
-      <div className="relative mt-1 h-4 overflow-hidden text-[10px] tabular-nums text-accent-soft">
-        {tightLabels ? (
-          // Метки почти сошлись: две подписи налезли бы друг на друга и
-          // превратились в кашу — показываем одну общую.
-          <span
-            className="absolute -translate-x-1/2 whitespace-nowrap"
-            style={{
-              left: `${clamp((selection.from + selection.to) / 2, 0.12, 0.88) * 100}%`,
+            {/* Дорожка звука */}
+            {hasAudio && (
+              <TrackLane
+                height={WAVE_HEIGHT}
+                label="Звук"
+                selection={selection}
+                fade={activeFades.audio}
+                trimSpan={trimSpan}
+                editable={Boolean(onFadesChange)}
+                onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'audio', side })}
+                volume={onVolumeChange ? (volume ?? 1) : undefined}
+                onVolumeDown={(event) => {
+                  const lane = (event.currentTarget as HTMLElement).closest('[data-lane]')
+                  const rect = lane?.getBoundingClientRect()
+                  if (rect) startDrag(event, { kind: 'volume', top: rect.top, height: rect.height })
+                }}
+              >
+                <Waveform
+                  peaks={peaks}
+                  loading={peaksLoading}
+                  view={{ start, span, total: safeDuration }}
+                />
+              </TrackLane>
+            )}
+
+            {!showStrip && !hasAudio && <div style={{ height: WAVE_HEIGHT }} />}
+
+            {/* Затемнение областей вне выделения */}
+            <div
+              className="pointer-events-none absolute inset-y-0 left-0 bg-base/70"
+              style={{ width: `${clamp(selection.from, 0, 1) * 100}%` }}
+            />
+            <div
+              className="pointer-events-none absolute inset-y-0 right-0 bg-base/70"
+              style={{ width: `${clamp(1 - selection.to, 0, 1) * 100}%` }}
+            />
+
+            {/* Маркеры отрезка */}
+            <Handle
+              side="in"
+              ratio={selection.from}
+              onPointerDown={(event) => startDrag(event, { kind: 'in' })}
+            />
+            <Handle
+              side="out"
+              ratio={selection.to}
+              onPointerDown={(event) => startDrag(event, { kind: 'out' })}
+            />
+          </div>
+
+          {/* Позиция курсора мыши — через линейку и дорожки. */}
+          {hover !== null && !drag && (
+            <div
+              className="pointer-events-none absolute inset-y-0 w-px bg-ink/25"
+              style={{ left: `${toRatio(hover) * 100}%` }}
+            />
+          )}
+
+          {/* Игла воспроизведения — через линейку и дорожки, ромбик на линейке. */}
+          <div
+            className="pointer-events-none absolute inset-y-0 z-30 w-[2px] -translate-x-1/2 bg-ok"
+            style={{ left: `${toRatio(currentTime) * 100}%`, display: currentTime < start || currentTime > end ? 'none' : undefined }}
+          >
+            <span className="absolute -top-[3px] left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 bg-ok" />
+          </div>
+        </div>
+
+        {/* Полоса прокрутки — появляется, только когда есть куда ехать */}
+        {zoomed && (
+          <div
+            className="relative mt-1 h-2 cursor-grab bg-surface-2"
+            onPointerDown={(event) => {
+              // Клик мимо ползунка переносит окно туда, куда ткнули.
+              const rect = event.currentTarget.getBoundingClientRect()
+              const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1)
+              setViewStart(
+                clamp(ratio * safeDuration - span / 2, 0, Math.max(safeDuration - span, 0)),
+              )
             }}
           >
-            {timecode(from, true)} → {timecode(to, true)}
-          </span>
-        ) : (
-          <>
-            <span className="absolute" style={{ left: `${clamp(selection.from, 0, 0.98) * 100}%` }}>
-              {timecode(from, true)}
-            </span>
-            <span
-              className="absolute -translate-x-full"
-              style={{ left: `${clamp(selection.to, 0.02, 1) * 100}%` }}
-            >
-              {timecode(to, true)}
-            </span>
-          </>
+            <div
+              className="absolute inset-y-0 bg-line transition-colors hover:bg-surface-3"
+              style={{
+                left: `${(start / safeDuration) * 100}%`,
+                width: `${Math.max((span / safeDuration) * 100, 4)}%`,
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation()
+                event.currentTarget.setPointerCapture(event.pointerId)
+                setDrag({ kind: 'pan', grabX: event.clientX, startAt: start })
+              }}
+            />
+          </div>
         )}
       </div>
     </div>

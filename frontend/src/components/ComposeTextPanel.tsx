@@ -8,12 +8,11 @@ import {
   Bold,
   ChevronDown,
   Italic,
-  Pipette,
   Search,
   Star,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import { requestColorPick, useColorPickOwner } from '../lib/colorPick'
+import { ColorButton } from './ColorPicker'
 import {
   EFFECT_PIXELS,
   TEXT_DEFAULTS,
@@ -238,9 +237,8 @@ export function IconToggle({
 }
 
 /**
- * Цвет квадратиком: нажали — открылся выбор цвета. Рядом пипетка: взять цвет
- * прямо из кадра (`lib/colorPick.ts`) — у стандартного окошка своя пипетка
- * во встроенном браузере не работает.
+ * Цвет квадратиком: нажали — открылось своё окошко выбора цвета, с рабочей
+ * пипеткой (`ColorPicker`).
  */
 export function ColorSquare({
   value,
@@ -251,36 +249,15 @@ export function ColorSquare({
   title: string
   onChange: (value: string) => void
 }) {
-  const owner = useRef({}).current
-  const picking = useColorPickOwner() === owner
   return (
-    <span className="flex shrink-0 items-center gap-1">
-      <label
-        title={title}
-        className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line-soft hover:border-line"
-      >
-        <span className="h-5 w-5 rounded-[4px] ring-1 ring-black/40" style={{ background: value }} />
-        <input
-          type="color"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          // Размер — явно: у поля цвета своя ширина, и одного «inset-0» мало —
-          // оно вылезало из квадратика и закрывало пипетку рядом.
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-        />
-      </label>
-      <button
-        type="button"
-        data-color-pick
-        onClick={() => requestColorPick(owner, onChange)}
-        title={picking ? 'Нажмите на кадр, чтобы взять цвет. Esc — отмена' : 'Взять цвет из кадра'}
-        className={`flex h-8 w-6 shrink-0 items-center justify-center rounded-lg transition-colors ${
-          picking ? 'bg-accent/25 text-accent-soft' : 'text-ink-faint hover:bg-surface-3 hover:text-ink'
-        }`}
-      >
-        <Pipette className="h-3.5 w-3.5" />
-      </button>
-    </span>
+    <ColorButton
+      value={value}
+      title={title}
+      onChange={onChange}
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line-soft hover:border-line"
+    >
+      <span className="h-5 w-5 rounded-[4px] ring-1 ring-black/40" style={{ background: value }} />
+    </ColorButton>
   )
 }
 

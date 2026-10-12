@@ -49,8 +49,6 @@ function fadeGain(
   return Math.sin((Math.PI / 2) * Math.min(Math.max(gain, 0), 1))
 }
 
-const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2]
-
 /** Плеер с таймлайном и метками In/Out для видео и аудио. */
 export function MediaEditor({
   file,
@@ -77,7 +75,6 @@ export function MediaEditor({
   const [duration, setDuration] = useState(file.media?.duration ?? 0)
   const [volume, setVolume] = useState(() => Number(localStorage.getItem(VOLUME_KEY) ?? '1'))
   const [muted, setMuted] = useState(false)
-  const [rate, setRate] = useState(1)
   const [loopSelection, setLoopSelection] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [peaks, setPeaks] = useState<number[] | null>(null)
@@ -197,9 +194,8 @@ export function MediaEditor({
     const media = mediaRef.current
     if (!media) return
     media.muted = muted
-    media.playbackRate = rate
     applyFades(media, media.currentTime)
-  }, [volume, muted, rate, file.path, applyFades])
+  }, [volume, muted, file.path, applyFades])
 
   // Игла стоит на кадре, а не между кадрами: так можно попасть ровно в
   // последний кадр сцены. Плееру отдаём чуть позже начала кадра — ровно на
@@ -375,26 +371,109 @@ export function MediaEditor({
       ? (trim.out ?? duration) - (trim.in ?? 0)
       : null
 
+  const details = [
+    humanSize(file.size),
+    media?.width ? `${media.width}×${media.height}${media.fps ? ` · ${media.fps.toFixed(media.fps % 1 ? 2 : 0)} кадров/с` : ''}` : '',
+    media?.videoCodec ? `Видео ${codecName(media.videoCodec)}${media.videoBitRate ? ` · ${kbps(media.videoBitRate)}` : ''}` : '',
+    media?.audioCodec
+      ? `Звук ${codecName(media.audioCodec)}${media.audioChannels ? ` · ${channelsName(media.audioChannels)}` : ''}${media.audioBitRate ? ` · ${kbps(media.audioBitRate)}` : ''}`
+      : '',
+  ].filter(Boolean)
+
+  // Панель плеера — над таймлайном, как в монтаже. Всё в одну строку и
+  // ничего не прячется на узком окне: скорость просмотра убрана, громкость
+  // ползунком всплывает над значком.
+  const toolbar = (
+    <>
+      <IconButton onClick={togglePlay} active={playing} title="Воспроизведение / пауза (Пробел)">
+        {playing ? <Pause size={14} /> : <Play size={14} />}
+      </IconButton>
+      <span className="shrink-0 cursor-text select-text font-mono text-[11px] tabular-nums text-ink-dim">
+        <span title={isVideo ? 'Минуты, секунды и номер кадра в секунде' : undefined}>
+          {isVideo ? frameCode(time, fps) : timecode(time, true)}
+        </span>
+        <span className="text-ink-faint"> / {timecode(duration)}</span>
+      </span>
+
+      <span className="mx-0.5 h-4 w-px shrink-0 bg-line-soft" />
+
+      <IconButton onClick={setIn} title={`Метка начала (I)${trim.in !== null ? ` — сейчас ${timecode(trim.in, true)}` : ''}`}>
+        <span className="text-[12px] font-bold text-accent-soft">I</span>
+      </IconButton>
+      <IconButton onClick={setOut} title={`Метка конца (O)${trim.out !== null ? ` — сейчас ${timecode(trim.out, true)}` : ''}`}>
+        <span className="text-[12px] font-bold text-accent-soft">O</span>
+      </IconButton>
+      {selectionLength !== null && (
+        <button
+          type="button"
+          onClick={() => onTrimChange({ in: 0, out: duration })}
+          title={`Отрезок ${timecode(trim.in ?? 0, true)} → ${timecode(trim.out ?? duration, true)}. Нажмите, чтобы вернуть метки на края файла`}
+          className="flex h-7 shrink-0 items-center gap-1 bg-accent/15 px-2 font-mono text-[11px] tabular-nums text-accent-soft hover:bg-accent/25"
+        >
+          <Scissors size={11} />
+          {timecode(Math.max(selectionLength, 0), true)}
+        </button>
+      )}
+      <IconButton
+        onClick={() => setLoopSelection((value) => !value)}
+        active={loopSelection}
+        title="Зациклить выделение (L)"
+      >
+        <Repeat size={14} />
+      </IconButton>
+      {isVideo && (
+        <IconButton
+          onClick={() => void grabFrame()}
+          disabled={grabbing}
+          title="Сохранить текущий кадр картинкой (S)"
+        >
+          <Camera size={14} />
+        </IconButton>
+      )}
+
+      <span className="ml-auto" />
+      <VolumeControl
+        volume={volume}
+        muted={muted}
+        onMute={() => setMuted((value) => !value)}
+        onChange={(value) => {
+          setVolume(value)
+          setMuted(value === 0)
+          localStorage.setItem(VOLUME_KEY, String(value))
+        }}
+      />
+      {isVideo && (
+        <IconButton
+          onClick={() => {
+            const element = mediaRef.current
+            if (document.fullscreenElement) void document.exitFullscreen()
+            else void element?.requestFullscreen?.()
+          }}
+          title="Полный экран"
+        >
+          <Maximize2 size={14} />
+        </IconButton>
+      )}
+      <span className="mx-0.5 h-4 w-px shrink-0 bg-line-soft" />
+    </>
+  )
+
   return (
-    // Контейнер: на узком окне второстепенное в панели плеера прячется
-    // (громкость ползунком, скорость), а не обрезается вместе с кнопками.
-    <div className="@container flex h-full min-h-0 flex-col gap-3">
-      {/* Область просмотра */}
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Область просмотра — без рамок и скруглений, как в монтаже. */}
       <div
         ref={zoom.shell}
         onMouseDown={zoom.onMouseDown}
         // Вокруг кадра — цвет окна, у самого кадра — чёрный фон и рамка: иначе
         // у вертикального ролика не понять, где кончается видео, а где поле.
-        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl ring-1 ring-line-soft ${
-          isVideo ? 'bg-surface-2/60' : 'bg-black'
-        }`}
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-surface-2/60 p-4"
       >
         {zoom.view !== 1 && (
           <button
             type="button"
             onClick={zoom.reset}
             title="Масштаб просмотра — на готовый файл не влияет. Нажмите, чтобы вернуть обычный размер."
-            className="absolute right-2 top-2 z-10 rounded-lg bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
+            className="absolute right-3 top-3 z-10 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             {Math.round(zoom.view * 100)}%
           </button>
@@ -442,10 +521,10 @@ export function MediaEditor({
               ref={mediaRef as React.RefObject<HTMLAudioElement>}
               src={mediaUrl(file.path)}
               onLoadedMetadata={(event) => {
-              const total = event.currentTarget.duration || 0
-              setDuration(total)
-              ensureTrim(total)
-            }}
+                const total = event.currentTarget.duration || 0
+                setDuration(total)
+                ensureTrim(total)
+              }}
               onTimeUpdate={onTimeUpdate}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
@@ -454,6 +533,17 @@ export function MediaEditor({
           </div>
         )}
 
+        {/* Сведения о файле — полупрозрачно в углу, как у картинок: отдельная
+            строка под плеером съедала место у кадра. */}
+        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex max-w-[calc(100%-24px)] items-center gap-2.5 overflow-hidden whitespace-nowrap bg-surface/70 px-2.5 py-1 text-[11px] text-ink-faint opacity-80 ring-1 ring-line-soft backdrop-blur">
+          {details.map((item) => (
+            <span key={item} className="truncate">
+              {item}
+            </span>
+          ))}
+          {!media?.audioCodec && <span className="text-warn">без звуковой дорожки</span>}
+        </div>
+
         {error && (
           <div className="absolute inset-x-0 bottom-0 bg-danger/20 px-4 py-2 text-center text-[12px] text-danger">
             {error}
@@ -461,175 +551,102 @@ export function MediaEditor({
         )}
       </div>
 
-      {/* Таймлайн */}
-      <div className="px-1 pb-5">
-        <Timeline
-          duration={duration}
-          currentTime={time}
-          inPoint={trim.in}
-          outPoint={trim.out}
-          onSeek={seek}
-          onChangeIn={(value) => onTrimChange({ ...trim, in: value })}
-          onChangeOut={(value) => onTrimChange({ ...trim, out: value })}
-          peaks={peaks}
-          peaksLoading={peaksLoading}
-          strip={strip}
-          stripLoading={stripLoading}
-          scenes={scenes}
-          fps={isVideo ? fps : undefined}
-          hasVideo={isVideo}
-          hasAudio={file.media?.hasAudio ?? !isVideo}
-          fades={fades}
-          volume={trackVolume}
-          onVolumeChange={onTrackVolumeChange}
-          onFadesChange={onFadesChange}
-          playing={playing}
-        />
-      </div>
-
-      {/* Панель управления */}
-      {/* Одна строка: кнопки перемотки убраны — их заменяют стрелки, Home и
-          End, а лишняя строка съедала место у кадра. */}
-      <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-xl bg-surface px-3 py-2 ring-1 ring-line-soft">
-        <button
-          type="button"
-          onClick={togglePlay}
-          title="Воспроизведение / пауза (Пробел)"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition-colors hover:bg-accent-soft"
-        >
-          {playing ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
-        </button>
-
-        <span className="ml-1 font-mono text-[12px] tabular-nums text-ink-dim">
-          <span title={isVideo ? 'Минуты, секунды и номер кадра в секунде' : undefined}>
-            {isVideo ? frameCode(time, fps) : timecode(time, true)}
-          </span>{' '}
-          <span className="hidden text-ink-faint @[580px]:inline">/ {timecode(duration)}</span>
-        </span>
-
-        <div className="mx-1 h-5 w-px shrink-0 bg-line" />
-
-        <button
-          type="button"
-          onClick={setIn}
-          title="Метка начала (I)"
-          className="shrink-0 rounded-lg bg-surface-3 px-2 py-1.5 text-[12px] font-medium hover:bg-line"
-        >
-          <span className="text-accent-soft">In</span>{' '}
-          <span className="tabular-nums text-ink-faint">
-            {trim.in !== null ? timecode(trim.in, true) : '—'}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={setOut}
-          title="Метка конца (O)"
-          className="shrink-0 rounded-lg bg-surface-3 px-2 py-1.5 text-[12px] font-medium hover:bg-line"
-        >
-          <span className="text-accent-soft">Out</span>{' '}
-          <span className="tabular-nums text-ink-faint">
-            {trim.out !== null ? timecode(trim.out, true) : '—'}
-          </span>
-        </button>
-        <IconButton
-          onClick={() => setLoopSelection((value) => !value)}
-          active={loopSelection}
-          title="Зациклить выделение (L)"
-        >
-          <Repeat size={15} />
-        </IconButton>
-        {isVideo && (
-          <IconButton
-            onClick={() => void grabFrame()}
-            disabled={grabbing}
-            title="Сохранить текущий кадр картинкой"
-          >
-            <Camera size={15} />
-          </IconButton>
-        )}
-        {selectionLength !== null && (
-          <button
-            type="button"
-            onClick={() => onTrimChange({ in: 0, out: duration })}
-            title="Вернуть метки на края файла"
-            className="chip hidden shrink-0 bg-accent/15 text-accent-soft hover:bg-accent/25 @[640px]:inline-flex"
-          >
-            <Scissors size={11} />
-            {timecode(Math.max(selectionLength, 0), true)}
-          </button>
-        )}
-
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <select
-            className="hidden rounded-lg bg-surface-3 px-2 py-1 text-[12px] text-ink-dim outline-none @[640px]:block"
-            value={rate}
-            onChange={(event) => setRate(Number(event.target.value))}
-            title="Скорость просмотра (не влияет на экспорт)"
-          >
-            {RATES.map((value) => (
-              <option key={value} value={value}>
-                {value}×
-              </option>
-            ))}
-          </select>
-          <IconButton onClick={() => setMuted((value) => !value)} title="Звук (M)">
-            {muted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
-          </IconButton>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={muted ? 0 : volume}
-            onChange={(event) => {
-              const value = Number(event.target.value)
-              setVolume(value)
-              setMuted(value === 0)
-              localStorage.setItem(VOLUME_KEY, String(value))
-            }}
-            className="hidden w-16 @[720px]:block"
-          />
-          {isVideo && (
-            <IconButton
-              onClick={() => {
-                const element = mediaRef.current
-                if (document.fullscreenElement) void document.exitFullscreen()
-                else void element?.requestFullscreen?.()
-              }}
-              title="Полный экран"
-            >
-              <Maximize2 size={15} />
-            </IconButton>
-          )}
-        </div>
-      </div>
-
-      {/* Технические данные */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px] text-ink-faint">
-        <span>{humanSize(file.size)}</span>
-        {media?.width && (
-          <span>
-            {media.width}×{media.height}
-            {media.fps ? ` · ${media.fps.toFixed(media.fps % 1 ? 2 : 0)} кадров/с` : ''}
-          </span>
-        )}
-        {media?.videoCodec && (
-          <span>
-            Видео {codecName(media.videoCodec)}
-            {media.videoBitRate ? ` · ${kbps(media.videoBitRate)}` : ''}
-          </span>
-        )}
-        {media?.audioCodec ? (
-          <span>
-            Звук {codecName(media.audioCodec)}
-            {media.audioChannels ? ` · ${channelsName(media.audioChannels)}` : ''}
-            {media.audioBitRate ? ` · ${kbps(media.audioBitRate)}` : ''}
-          </span>
-        ) : (
-          <span className="text-warn">без звуковой дорожки</span>
-        )}
-      </div>
+      <Timeline
+        toolbar={toolbar}
+        duration={duration}
+        currentTime={time}
+        inPoint={trim.in}
+        outPoint={trim.out}
+        onSeek={seek}
+        onChangeIn={(value) => onTrimChange({ ...trim, in: value })}
+        onChangeOut={(value) => onTrimChange({ ...trim, out: value })}
+        peaks={peaks}
+        peaksLoading={peaksLoading}
+        strip={strip}
+        stripLoading={stripLoading}
+        scenes={scenes}
+        fps={isVideo ? fps : undefined}
+        hasVideo={isVideo}
+        hasAudio={file.media?.hasAudio ?? !isVideo}
+        fades={fades}
+        volume={trackVolume}
+        onVolumeChange={onTrackVolumeChange}
+        onFadesChange={onFadesChange}
+        playing={playing}
+      />
     </div>
+  )
+}
+
+/**
+ * Громкость просмотра: значок, а над ним при наведении — вертикальный
+ * ползунок. Отдельный ползунок в строке на узком окне прятался, и оставалось
+ * только «есть звук / нет звука». Нажатие по значку — выключить и включить.
+ */
+function VolumeControl({
+  volume,
+  muted,
+  onMute,
+  onChange,
+}: {
+  volume: number
+  muted: boolean
+  onMute: () => void
+  onChange: (value: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const bar = useRef<HTMLDivElement>(null)
+  const shown = muted ? 0 : volume
+
+  const setFrom = (clientY: number) => {
+    const box = bar.current?.getBoundingClientRect()
+    if (!box) return
+    const value = Math.min(1, Math.max(0, 1 - (clientY - box.top) / box.height))
+    onChange(Math.round(value * 100) / 100)
+  }
+
+  return (
+    <span
+      className="relative flex shrink-0"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => {
+        if (!dragging) setOpen(false)
+      }}
+    >
+      <IconButton onClick={onMute} title={`Громкость просмотра ${Math.round(shown * 100)}% — на файл не влияет. Нажмите, чтобы ${muted ? 'включить' : 'выключить'} (M)`}>
+        {shown === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+      </IconButton>
+      {(open || dragging) && (
+        // Отступ снизу — прозрачный мостик: курсор идёт от значка к
+        // ползунку и не теряет его по дороге.
+        <span className="absolute bottom-full left-1/2 z-40 -translate-x-1/2 pb-1">
+          <span className="flex flex-col items-center gap-1.5 border border-line bg-surface-2 px-2 pb-2 pt-1.5 shadow-xl">
+            <span className="font-mono text-[10px] tabular-nums text-ink-dim">{Math.round(shown * 100)}</span>
+            <div
+              ref={bar}
+              className="relative h-24 w-1.5 cursor-pointer bg-surface-3"
+              onPointerDown={(event) => {
+                event.currentTarget.setPointerCapture(event.pointerId)
+                setDragging(true)
+                setFrom(event.clientY)
+              }}
+              onPointerMove={(event) => {
+                if (dragging) setFrom(event.clientY)
+              }}
+              onPointerUp={() => setDragging(false)}
+              onLostPointerCapture={() => setDragging(false)}
+            >
+              <div className="absolute inset-x-0 bottom-0 bg-accent" style={{ height: `${shown * 100}%` }} />
+              <div
+                className="absolute left-1/2 h-3 w-3 -translate-x-1/2 translate-y-1/2 rounded-full bg-ink shadow"
+                style={{ bottom: `${shown * 100}%` }}
+              />
+            </div>
+          </span>
+        </span>
+      )}
+    </span>
   )
 }
 

@@ -41,13 +41,10 @@ import { ComposeFillPanel } from './ComposeFillPanel'
 import { ClipAddBar, ComposeClipPanel } from './ComposeClipPanel'
 import { CROP_FIELDS, withoutGroup } from '../composeAnim'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
-import { ComposeColorPick } from './ComposeColorPick'
 import {
   ComposeRenderPanel,
   DEFAULT_RENDER,
   AUDIO_FILE,
-  presetName,
-  renderSummary,
   type RenderSettings,
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
@@ -246,9 +243,6 @@ export function ComposeTab() {
   // Окно сохранённых монтажей: программа сама помнит только последний.
   const [projectsOpen, setProjectsOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const frameImgRef = useRef<HTMLImageElement>(null)
-  // Пипетке — то, что сейчас видно: идущее видео или кадр под иглой.
-  const pickSource = useRef(() => videoRef.current && !videoRef.current.classList.contains('hidden') ? videoRef.current : frameImgRef.current).current
   const frameBox = useRef<HTMLDivElement>(null)
   const player = useComposePlayer(videoRef)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
@@ -934,7 +928,7 @@ export function ComposeTab() {
                   onError={() => player.stop()}
                 />
                 {!player.playing && frameUrl && (
-                  <img ref={frameImgRef} src={frameUrl} alt="" className="h-full w-full object-contain" />
+                  <img src={frameUrl} alt="" className="h-full w-full object-contain" />
                 )}
                 {/* Ошибка — в одном месте, посреди кадра: и кадра, и просмотра.
                     Прежде ошибка просмотра повторялась ещё и полосой внизу. Текст
@@ -966,7 +960,6 @@ export function ComposeTab() {
                 {!player.playing && liveText && (
                   <ComposeTextOverlay clip={shownAt(liveText, playhead)} grid={grid} />
                 )}
-                <ComposeColorPick source={pickSource} />
 
               </div>
 
@@ -1114,21 +1107,16 @@ export function ComposeTab() {
           {/* Добавить эффект, обрезку, маску — неброско, над сборкой: большая
               кнопка наверху колонки забирала на себя всё внимание. */}
           {mediaClip && !textClip && !fillClip && <ClipAddBar clip={mediaClip} />}
-          {/* Чем соберётся — одной строкой. Настройки — в колонке, когда
-              ничего не выбрано; нажатие по строке снимает выбор и их открывает. */}
-          <button
-            type="button"
-            onClick={() => useCompose.getState().select([])}
-            disabled={!(textClip || fillClip || mediaClip)}
-            className="block w-full truncate text-left text-[11px] leading-snug text-ink-faint enabled:hover:text-ink-dim"
-            title={`${renderSummary(render)}${textClip || fillClip || mediaClip ? '. Нажмите, чтобы открыть настройки сборки' : ''}`}
-          >
-            {soundOnly && !render.audioOnly
-              ? render.audioCodec === 'none'
+          {/* Что выбрано для сборки, и так видно в настройках — здесь только
+              то, чего там не видно: картинки на таймлайне нет, и соберётся
+              один звук. */}
+          {soundOnly && !render.audioOnly && (
+            <p className="text-[11px] leading-snug text-warn">
+              {render.audioCodec === 'none'
                 ? 'Картинки нет, а звук выключен — выберите кодек звука'
-                : `Картинки нет — соберётся только звук · ${AUDIO_FILE[render.audioCodec] ?? 'M4A'}`
-              : `Сборка: ${presetName(render)}`}
-          </button>
+                : `Картинки нет — соберётся только звук · ${AUDIO_FILE[render.audioCodec] ?? 'M4A'}`}
+            </p>
+          )}
 
           {/* Имя и папка — одной строкой: это про один и тот же файл. */}
           <div className="flex items-center gap-2">

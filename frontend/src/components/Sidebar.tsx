@@ -226,8 +226,10 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
         </div>
       </div>
 
-      {/* Пакетные действия */}
-      <div className="flex items-center gap-1 border-b border-line-soft px-3 py-1.5 text-[11px] text-ink-faint">
+      {/* Пакетные действия. Строка — контейнер: в узкой колонке вес папки
+          прячется (он есть в подсказке у «Выбрать все»), иначе кнопки
+          вылезали за край. */}
+      <div className="@container flex items-center gap-1 border-b border-line-soft px-3 py-1.5 text-[11px] text-ink-faint">
         <button
           type="button"
           // Снять отметки можно всегда — иначе, переключившись на «Все»,
@@ -235,7 +237,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
           disabled={!canSelectAll && checked.length === 0}
           title={
             canSelectAll || checked.length
-              ? undefined
+              ? `Всего в списке ${humanSize(totalSize)}`
               : 'Сначала выберите, что отмечать: «Видео», «Аудио» или «Кадры». Пресет всё равно применяется к чему-то одному.'
           }
           onClick={() => {
@@ -259,7 +261,8 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
           {allChecked ? <CheckSquare size={13} /> : <Square size={13} />}
           {checked.length ? `Выбрано: ${checked.length}` : 'Выбрать все'}
         </button>
-        <span className="ml-auto whitespace-nowrap tabular-nums">{humanSize(totalSize)}</span>
+        <span className="ml-auto hidden whitespace-nowrap tabular-nums @[250px]:inline">{humanSize(totalSize)}</span>
+        <span className="ml-auto @[250px]:hidden" />
         <span className="relative">
           <IconButton
             onClick={() => setSortOpen((value) => !value)}

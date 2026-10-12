@@ -93,13 +93,17 @@ export function IconButton({
   disabled?: boolean
   className?: string
 }) {
+  // Свой размер в className заменяет обычный, а не спорит с ним: из двух
+  // «h-8» и «h-6» побеждал тот, что раньше в таблице стилей, — и «маленькие»
+  // кнопки оставались обычными, вылезая за край колонки.
+  const size = /(^|\s)h-/.test(className) ? '' : 'h-8 w-8'
   return (
     <button
       type="button"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-35 ${
+      className={`inline-flex shrink-0 ${size} items-center justify-center rounded-lg transition-colors disabled:opacity-35 ${
         active ? 'bg-accent/20 text-accent-soft' : 'text-ink-dim hover:bg-surface-3 hover:text-ink'
       } ${className}`}
     >
