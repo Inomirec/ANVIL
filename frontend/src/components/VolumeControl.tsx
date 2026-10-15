@@ -14,6 +14,7 @@ export function VolumeControl({
   onChange,
   title,
   small = false,
+  popupClassName = '',
 }: {
   volume: number
   muted: boolean
@@ -23,6 +24,11 @@ export function VolumeControl({
   title?: string
   /** Кнопка помельче — для плотной панели таймлайна монтажа. */
   small?: boolean
+  /**
+   * Классы всплывающего ползунка. Панель монтажа прячет его, когда рядом со
+   * значком помещается обычная полоска: значок при этом остаётся тем же.
+   */
+  popupClassName?: string
 }) {
   const [open, setOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -54,7 +60,7 @@ export function VolumeControl({
       {(open || dragging) && (
         // Отступ снизу — прозрачный мостик: курсор идёт от значка к
         // ползунку и не теряет его по дороге.
-        <span className="absolute bottom-full left-1/2 z-40 -translate-x-1/2 pb-1">
+        <span className={`absolute bottom-full left-1/2 z-40 -translate-x-1/2 pb-1 ${popupClassName}`}>
           <span className="flex flex-col items-center gap-1.5 border border-line bg-surface-2 px-2 pb-2 pt-1.5 shadow-xl">
             <span className="font-mono text-[10px] tabular-nums text-ink-dim">{Math.round(shown * 100)}</span>
             <div

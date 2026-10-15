@@ -234,7 +234,14 @@ export const api = {
     }),
   /** Кусок монтажа для просмотра: собирается быстрым кодеком и кэшируется. */
   composeDraft: (payload: unknown) =>
-    post<{ url: string; at: number; span: number; size: number; missing?: string[] }>(
+    post<{
+      url: string
+      audio: string | null
+      at: number
+      span: number
+      size: number
+      missing?: string[]
+    }>(
       '/api/compose/draft',
       payload,
     ),

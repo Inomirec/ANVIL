@@ -6,7 +6,6 @@ import {
   FlagTriangleRight,
   ChevronsDownUp,
   ChevronsUpDown,
-  Headphones,
   Layers,
   Link2,
   Loader2,
@@ -948,29 +947,15 @@ export function ComposeTimeline({
             <Repeat size={14} />
           </IconButton>
           {/* Громкость прослушивания: на готовый файл не влияет, поэтому стоит
-              здесь, рядом с кнопками просмотра. Есть место — обычной
-              полоской; тесно (узкое окно) — значком, а ползунок всплывает
-              над ним, иначе панель не помещалась. */}
-          <div
-            className="hidden w-[86px] items-center gap-1 @[820px]:flex"
-            title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}
-          >
-            <Headphones size={13} className="shrink-0 text-ink-faint" />
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(player.volume * 100)}
-              onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
-              className="w-full"
-            />
-          </div>
-          <span className="@[820px]:hidden">
+              здесь, рядом с кнопками просмотра. Значок один и тот же: нажатие
+              глушит звук. Есть место — рядом с ним обычная полоска; тесно —
+              ползунок всплывает над значком при наведении. */}
           <VolumeControl
             small
             volume={player.volume}
             muted={player.volume === 0}
             title={`Громкость прослушивания ${Math.round(player.volume * 100)}% — на готовый файл не влияет`}
+            popupClassName="@[680px]:hidden"
             onMute={() => {
               if (player.volume > 0) {
                 heardBefore.current = player.volume
@@ -979,7 +964,15 @@ export function ComposeTimeline({
             }}
             onChange={player.setVolume}
           />
-          </span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(player.volume * 100)}
+            onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
+            title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}
+            className="ml-0.5 hidden w-[64px] @[680px]:block"
+          />
         </div>
 
         {/* Справа: как выглядит сам таймлайн. Где стоит игла и что уйдёт в
@@ -1890,13 +1883,14 @@ function TrackMenu({
           {/* На звуковой дорожке надписи и заливке не место — они лягут на
               видеодорожку, в то же время. */}
           {item('Вставить', () => onPaste?.(), !onPaste)}
-          {/* Всё, что начинается от иглы и дальше, на всех дорожках, — чтобы
-              разом подвинуть хвост монтажа. */}
+          {/* Всё, что идёт от иглы и дальше, на всех дорожках, — чтобы
+              разом подвинуть хвост монтажа. Клип, на котором стоит игла,
+              тоже: он часть этого хвоста. */}
           {item('Выделить всё после иглы', () => {
             const state = useCompose.getState()
             const after = state.tracks
               .flatMap((item) => item.clips)
-              .filter((clip) => clip.start >= state.playhead - 1e-3)
+              .filter((clip) => clip.start + clip.duration > state.playhead + 1e-3)
               .map((clip) => clip.id)
             state.select(after)
           })}

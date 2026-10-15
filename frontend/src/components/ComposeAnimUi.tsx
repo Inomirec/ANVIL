@@ -60,11 +60,14 @@ function NumberBox({
   unit,
   onDone,
   title,
+  narrow = false,
 }: {
   value: number
   unit: string
   onDone: (value: number) => void
   title?: string
+  /** Узкое поле на три цифры — рядом с ползунком, которому нужно место. */
+  narrow?: boolean
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const apply = () => {
@@ -76,7 +79,9 @@ function NumberBox({
   return (
     <label
       title={title}
-      className="flex min-w-0 flex-1 items-center rounded-md border border-line-soft bg-surface-2 px-1.5"
+      className={`flex min-w-0 items-center rounded-md border border-line-soft bg-surface-2 px-1.5 ${
+        narrow ? 'w-[52px] shrink-0' : 'flex-1'
+      }`}
     >
       <input
         value={draft ?? String(Math.round(value))}
@@ -102,7 +107,16 @@ function NumberBox({
  * делается мышью; числа нужны, чтобы поставить точно и чтобы было к чему
  * приделать часики.
  */
-export function PlaceFields({ clip, size = true }: { clip: ComposeClip; size?: boolean }) {
+export function PlaceFields({
+  clip,
+  size = true,
+  opacity = true,
+}: {
+  clip: ComposeClip
+  size?: boolean
+  /** У картинки и ролика непрозрачность живёт в карточке «Видимость». */
+  opacity?: boolean
+}) {
   const playhead = useCompose((state) => state.playhead)
   const frameW = useCompose((state) => state.width)
   const frameH = useCompose((state) => state.height)
@@ -110,11 +124,9 @@ export function PlaceFields({ clip, size = true }: { clip: ComposeClip; size?: b
   const focus = useCompose((state) => state.animFocus)
   const now = shownAt(clip, playhead)
   const row = (group: string, label: string, body: React.ReactNode) => (
-    <div className={`flex items-center gap-2 rounded-md px-1 py-0.5 ${focus === group ? 'bg-accent/10' : ''}`}>
-      <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5">{body}</div>
-      <AnimClock clip={clip} group={group} />
-    </div>
+    <AnimRow clip={clip} group={group} label={label} focused={focus === group}>
+      {body}
+    </AnimRow>
   )
   return (
     <div className="space-y-1">
@@ -136,35 +148,7 @@ export function PlaceFields({ clip, size = true }: { clip: ComposeClip; size?: b
           />
         </>,
       )}
-      {row(
-        'opacity',
-        'Видимость',
-        <>
-          {/* Ползунок — подбирать на глаз, поле — вписать точно. */}
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(now.opacity * 100)}
-            title="Непрозрачность клипа: вправо — виден целиком, влево — не виден вовсе. Двойное нажатие вернёт 100%"
-            onMouseDown={(event) => {
-              useCompose.getState().mark()
-              if (event.detail >= 2) {
-                event.preventDefault()
-                applyValues(clip.id, { opacity: 1 })
-              }
-            }}
-            onChange={(event) => applyValues(clip.id, { opacity: Number(event.target.value) / 100 })}
-            className="min-w-0 flex-1"
-          />
-          <NumberBox
-            value={now.opacity * 100}
-            unit="%"
-            title="Непрозрачность клипа: 100 — виден целиком, 0 — не виден вовсе"
-            onDone={(value) => applyValues(clip.id, { opacity: Math.min(100, Math.max(0, value)) / 100 })}
-          />
-        </>,
-      )}
+      {opacity && <OpacityRow clip={clip} label="Видимость" />}
       {size &&
         row(
           'size',
@@ -270,5 +254,90 @@ export function KeyBar() {
       <span className="mx-0.5 h-4 w-px bg-line-soft" />
       <KeyButtons clip={clip} />
     </>
+  )
+}
+
+/** Строка «подпись — поля — часики» с подсветкой, пока её часики горят. */
+function AnimRow({
+  clip,
+  group,
+  label,
+  focused,
+  children,
+  wide = false,
+}: {
+  clip: ComposeClip
+  group: string
+  label: string
+  focused: boolean
+  children: React.ReactNode
+  /** Подпись с часиками строкой сверху — для длинной подписи в узкой колонке. */
+  wide?: boolean
+}) {
+  if (wide) {
+    // Подпись с часиками — строкой сверху, ползунку остаётся вся ширина.
+    return (
+      <div className={`space-y-1 rounded-md px-1 py-0.5 ${focused ? 'bg-accent/10' : ''}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11.5px] text-ink-dim">{label}</span>
+          <AnimClock clip={clip} group={group} />
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5">{children}</div>
+      </div>
+    )
+  }
+  return (
+    <div className={`flex items-center gap-2 rounded-md px-1 py-0.5 ${focused ? 'bg-accent/10' : ''}`}>
+      <span className="w-[70px] shrink-0 text-[11.5px] text-ink-dim">{label}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">{children}</div>
+      <AnimClock clip={clip} group={group} />
+    </div>
+  )
+}
+
+/**
+ * Непрозрачность клипа — ползунком и числом, с часиками. Правка ложится в
+ * ключ под иглой, если ключи есть (`applyValues`).
+ */
+export function OpacityRow({
+  clip,
+  label,
+  wide = false,
+}: {
+  clip: ComposeClip
+  label: string
+  wide?: boolean
+}) {
+  const playhead = useCompose((state) => state.playhead)
+  const applyValues = useCompose((state) => state.applyValues)
+  const focus = useCompose((state) => state.animFocus)
+  const now = shownAt(clip, playhead)
+  return (
+    <AnimRow clip={clip} group="opacity" label={label} focused={focus === 'opacity'} wide={wide}>
+      {/* Ползунок — подбирать на глаз, поле — вписать точно. */}
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={Math.round(now.opacity * 100)}
+        title="Непрозрачность клипа: вправо — виден целиком, влево — не виден вовсе. Двойное нажатие вернёт 100%"
+        onMouseDown={(event) => {
+          useCompose.getState().mark()
+          if (event.detail >= 2) {
+            event.preventDefault()
+            applyValues(clip.id, { opacity: 1 })
+          }
+        }}
+        onChange={(event) => applyValues(clip.id, { opacity: Number(event.target.value) / 100 })}
+        className="min-w-0 flex-1"
+      />
+      <NumberBox
+        value={now.opacity * 100}
+        unit="%"
+        narrow
+        title="Непрозрачность клипа: 100 — виден целиком, 0 — не виден вовсе"
+        onDone={(value) => applyValues(clip.id, { opacity: Math.min(100, Math.max(0, value)) / 100 })}
+      />
+    </AnimRow>
   )
 }

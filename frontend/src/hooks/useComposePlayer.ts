@@ -12,9 +12,16 @@ import type { MeterLevels } from '../components/MasterMeter'
  * обычным видео. Браузеру пришлось бы иначе крутить несколько видео разом и
  * складывать их на лету, чего он не умеет.
  *
- * Видео — два, и играют они по очереди: пока одно показывает кусок, во второе
- * уже загружен следующий, и на стыке оно просто включается. С одним видео на
- * каждом стыке меняли источник, и между кусками мигал пустой кадр.
+ * Звук и картинка идут раздельно. Звук каждого куска программа отдаёт
+ * отдельным несжатым файлом ровно нужной длины, и куски ставятся в очередь
+ * звуковой карты встык, с точностью до отсчёта: пока звук жил внутри видео,
+ * на каждом стыке выходил провал — видео заканчивалось, следующее ещё
+ * только запускалось. Теперь звук — это часы просмотра: по ним идёт игла, и
+ * под них подстраиваются видео.
+ *
+ * Видео — два, и играют по очереди: пока одно показывает кусок, во второе
+ * уже загружен следующий и стоит на первом кадре. На стыке (по тем же
+ * звуковым часам) оно становится видимым и запускается.
  *
  * Куски собираются впрок, один за другим, на `AHEAD_SECONDS` вперёд от
  * играющего: на слабой машине одного куска про запас не хватало — следующий
@@ -39,9 +46,24 @@ const QUALITY_KEY = 'sgh.composeQuality'
 
 interface Chunk {
   url: string
+  /** Звук куска, уже разобранный; ``null`` — в куске тишина. */
+  sound: AudioBuffer | null
   at: number
   span: number
 }
+
+/** Кусок, поставленный играть: когда по звуковым часам и в каком видео. */
+interface Slot {
+  chunk: Chunk
+  index: number
+  /** Время звуковых часов, на котором играет секунда ``offset`` куска. */
+  begin: number
+  offset: number
+  source: AudioBufferSourceNode | null
+}
+
+/** Расхождение видео со звуком, дальше которого видео перематывается. */
+const DRIFT_JUMP = 0.25
 
 /**
  * Какие куски монтажа уже собраны для просмотра — тонкая полоска на линейке.
@@ -75,7 +97,17 @@ interface Graph {
   gain: GainNode
   left: AnalyserNode
   right: AnalyserNode
-  hooked: Set<HTMLVideoElement>
+}
+
+/** Снимает звук куска с очереди звуковой карты. */
+function silence(slot: Slot | null) {
+  if (!slot?.source) return
+  try {
+    slot.source.stop()
+  } catch {
+    // Уже остановлен.
+  }
+  slot.source.disconnect()
 }
 
 export function useComposePlayer(videos: [VideoRef, VideoRef]) {
@@ -104,8 +136,9 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   const loopRef = useRef(false)
   loopRef.current = loop
 
-  /** Играющий кусок. */
-  const chunk = useRef<Chunk | null>(null)
+  /** Играющий кусок и следующий, уже поставленный встык. */
+  const current = useRef<Slot | null>(null)
+  const upcoming = useRef<Slot | null>(null)
   /** Собранные впрок куски, по порядку. */
   const queue = useRef<Chunk[]>([])
   /** Собирается ли сейчас очередь — второй сборщик не нужен. */
@@ -121,10 +154,27 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   const alive = useRef(true)
 
   // Звуковой граф: уровень снимаем до громкости прослушивания, чтобы ползунок
-  // не влиял на показания шкалы. Оба видео идут в один граф.
+  // не влиял на показания шкалы. Звук всех кусков идёт в один граф.
   const audio = useRef<Graph | null>(null)
 
   const element = useCallback((index: number) => videos[index].current, [videos])
+
+  const graph = useCallback((): Graph => {
+    if (!audio.current) {
+      const ctx = new AudioContext()
+      const splitter = ctx.createChannelSplitter(2)
+      const left = ctx.createAnalyser()
+      const right = ctx.createAnalyser()
+      left.fftSize = 1024
+      right.fftSize = 1024
+      const gain = ctx.createGain()
+      splitter.connect(left, 0)
+      splitter.connect(right, 1)
+      gain.connect(ctx.destination)
+      audio.current = { ctx, splitter, gain, left, right }
+    }
+    return audio.current
+  }, [])
 
   const snapshot = useCallback(() => {
     const state = useCompose.getState()
@@ -153,6 +203,11 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           span: CHUNK_SECONDS,
           height: asked === 'auto' ? height.current : asked,
         })
+        let sound: AudioBuffer | null = null
+        if (data.audio) {
+          const bytes = await (await fetch(data.audio)).arrayBuffer()
+          sound = await graph().ctx.decodeAudioData(bytes)
+        }
         // Собиралось долго — дальше берём кадр помельче. Человек этого не
         // видит, зато просмотр перестаёт спотыкаться на слабой машине. Если
         // качество выбрано руками, ничего не подбираем: выбор есть выбор.
@@ -165,30 +220,58 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           usePreviewReady.getState().add(data.at, data.span, version)
         }
         if (data.missing?.length) useCompose.getState().reportMissing(data.missing)
-        return { url: data.url, at: data.at, span: data.span }
+        return { url: data.url, sound, at: data.at, span: data.span }
       } catch (problem) {
         // Об ошибке говорим, только если её ещё ждут.
         if (mine === run.current) setError((problem as Error).message)
         return null
       }
     },
-    [snapshot],
+    [snapshot, graph],
+  )
+
+  /** Ставит звук куска на звуковые часы: секунда ``offset`` — в момент ``when``. */
+  const sound = useCallback(
+    (chunk: Chunk, when: number, offset: number): AudioBufferSourceNode | null => {
+      if (!chunk.sound) return null
+      const { ctx, splitter, gain } = graph()
+      const source = ctx.createBufferSource()
+      source.buffer = chunk.sound
+      source.connect(splitter)
+      source.connect(gain)
+      // Опоздали к нужному моменту — догоняем с того места, где звук был бы.
+      const late = Math.max(0, ctx.currentTime - when)
+      source.start(when + late, offset + late)
+      return source
+    },
+    [graph],
+  )
+
+  /** Загружает кусок в видео и ставит на нужное место, не запуская. */
+  const load = useCallback(
+    (index: number, chunk: Chunk, offset: number) => {
+      const target = element(index)
+      if (!target) return
+      if (target.dataset.chunk !== chunk.url) {
+        target.dataset.chunk = chunk.url
+        target.preload = 'auto'
+        target.src = chunk.url
+      }
+      if (Math.abs(target.currentTime - offset) > 0.01) target.currentTime = offset
+    },
+    [element],
   )
 
   /** Следующий кусок готов — загружаем его во второе видео заранее. */
   const preload = useCallback(() => {
     const next = queue.current[0]
-    const spare = element(1 - shownRef.current)
-    if (!next || !spare || spare.dataset.chunk === next.url) return
-    spare.dataset.chunk = next.url
-    spare.preload = 'auto'
-    spare.src = next.url
-    spare.load()
-  }, [element])
+    if (next && !upcoming.current) load(1 - shownRef.current, next, 0)
+  }, [load])
 
   /** С какой секунды нужен следующий кусок после последнего собранного. */
   const nextStart = useCallback((): number | null => {
-    const last = queue.current[queue.current.length - 1] ?? chunk.current
+    const last =
+      queue.current[queue.current.length - 1] ?? upcoming.current?.chunk ?? current.current?.chunk
     if (!last) return null
     const at = last.at + last.span
     const finish = useCompose.getState().duration()
@@ -197,6 +280,26 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     return loopRef.current && last.at > 0 ? 0 : null
   }, [])
 
+  /**
+   * Ставит следующий кусок встык за играющим: звук — сразу на звуковые часы,
+   * видео — во второе видео на первый кадр. Включит его `swap`.
+   */
+  const schedule = useCallback(() => {
+    const playing = current.current
+    if (!playing || upcoming.current) return
+    const next = queue.current.shift()
+    if (!next) return
+    const index = 1 - playing.index
+    load(index, next, 0)
+    const { ctx } = graph()
+    // Кусок не успел к стыку — начнём его чуть позже, чем сейчас.
+    const begin = Math.max(
+      playing.begin + playing.chunk.span - playing.offset,
+      ctx.currentTime + 0.05,
+    )
+    upcoming.current = { chunk: next, index, begin, offset: 0, source: sound(next, begin, 0) }
+  }, [graph, load, sound])
+
   /** Собирает куски впрок, один за другим, пока не наберётся запас. */
   const fill = useCallback(async () => {
     if (filling.current) return
@@ -204,7 +307,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     const mine = run.current
     try {
       while (alive.current && mine === run.current) {
-        if (!chunk.current) break
+        if (!current.current) break
         const ahead = queue.current.reduce((sum, item) => sum + item.span, 0)
         if (ahead >= AHEAD_SECONDS) break
         const at = nextStart()
@@ -215,42 +318,16 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
         // Пока кусок собирался, монтаж поправили — он показывает уже не то.
         if (version !== usePreviewReady.getState().version) continue
         queue.current.push(next)
+        schedule()
         preload()
       }
     } finally {
       filling.current = false
     }
-  }, [fetchChunk, nextStart, preload])
+  }, [fetchChunk, nextStart, schedule, preload])
 
-  const hookAudio = useCallback((target: HTMLVideoElement) => {
-    // Граф собираем один раз, а каждое видео подключаем к нему один раз:
-    // повторное подключение браузер запрещает.
-    try {
-      if (!audio.current) {
-        const ctx = new AudioContext()
-        const splitter = ctx.createChannelSplitter(2)
-        const left = ctx.createAnalyser()
-        const right = ctx.createAnalyser()
-        left.fftSize = 1024
-        right.fftSize = 1024
-        const gain = ctx.createGain()
-        splitter.connect(left, 0)
-        splitter.connect(right, 1)
-        gain.connect(ctx.destination)
-        audio.current = { ctx, splitter, gain, left, right, hooked: new Set() }
-      }
-      const graph = audio.current
-      if (!graph.hooked.has(target)) {
-        const source = graph.ctx.createMediaElementSource(target)
-        source.connect(graph.splitter)
-        source.connect(graph.gain)
-        graph.hooked.add(target)
-      }
-    } catch {
-      // Без звукового графа просмотр всё равно работает — не будет только
-      // шкалы уровня.
-    }
-  }, [])
+  const fillRef = useRef(fill)
+  fillRef.current = fill
 
   const stop = useCallback(() => {
     run.current += 1
@@ -258,47 +335,55 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     setPreparing(false)
     setError(null)
     for (const index of [0, 1]) element(index)?.pause()
+    silence(current.current)
+    silence(upcoming.current)
+    current.current = null
+    upcoming.current = null
     queue.current = []
     setLevels({ left: -60, right: -60 })
     useCompose.getState().setPlayback(false)
   }, [element])
 
-  /** Показывает кусок в видео ``index`` и запускает его с ``offset``. */
-  const show = useCallback(
-    async (next: Chunk, index: number, offset: number, mine: number): Promise<boolean> => {
-      const target = element(index)
-      if (!target) return false
-      if (target.dataset.chunk !== next.url) {
-        target.dataset.chunk = next.url
-        target.src = next.url
-      }
-      target.currentTime = offset
-      hookAudio(target)
-      try {
-        await target.play()
-      } catch (problem) {
-        if (mine === run.current) setError((problem as Error).message)
-        return false
-      }
-      if (mine !== run.current) {
-        target.pause()
-        return false
-      }
-      chunk.current = next
-      // Сначала второе видео ставим на паузу, потом меняем видимое: так на
-      // стыке нет ни кадра без картинки, ни двух звуков разом.
-      element(1 - index)?.pause()
+  /** Видимым становится видео ``index``, второе прячется. */
+  const reveal = useCallback(
+    (index: number) => {
+      // Прямо в разметке, не дожидаясь отрисовки: иначе на стыке мелькал бы
+      // кадр-другой не того видео.
+      element(index)?.classList.remove('invisible')
+      element(1 - index)?.classList.add('invisible')
       shownRef.current = index
       setShown(index)
-      return true
     },
-    [element, hookAudio],
+    [element],
   )
+
+  /** Стык: включаем следующий кусок, уже стоящий во втором видео. */
+  const swap = useCallback(() => {
+    const next = upcoming.current
+    if (!next) return
+    const before = current.current
+    current.current = next
+    upcoming.current = null
+    const target = element(next.index)
+    void target?.play().catch(() => undefined)
+    reveal(next.index)
+    element(1 - next.index)?.pause()
+    // Звук прежнего куска уже кончился сам; на всякий случай снимаем его.
+    silence(before)
+    setPreparing(false)
+    schedule()
+    preload()
+    void fill()
+  }, [element, reveal, schedule, preload, fill])
 
   const start = useCallback(async () => {
     const mine = ++run.current
     setError(null)
     setPreparing(true)
+    silence(current.current)
+    silence(upcoming.current)
+    current.current = null
+    upcoming.current = null
     queue.current = []
     const state = useCompose.getState()
     // Играет то, что под иглой. Метки I и O сюда не вмешиваются: они только
@@ -311,59 +396,50 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     // однажды собранный, годится для просмотра с любого места в нём.
     const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
     const first = await fetchChunk(base, mine)
+    if (!first || !alive.current || mine !== run.current) {
+      if (mine === run.current) setPreparing(false)
+      return
+    }
+    const { ctx } = graph()
+    await ctx.resume()
+    const index = shownRef.current
+    const offset = Math.max(0, at - first.at)
+    load(index, first, offset)
+    const target = element(index)
+    try {
+      await target?.play()
+    } catch (problem) {
+      if (mine === run.current) {
+        setPreparing(false)
+        setError((problem as Error).message)
+      }
+      return
+    }
+    if (mine !== run.current) {
+      target?.pause()
+      return
+    }
     setPreparing(false)
-    if (!first || !alive.current || mine !== run.current) return
+    // Звук — с того же мгновения, что и видео; дальше видео подстраивается
+    // под звук.
+    const begin = ctx.currentTime + 0.02
+    current.current = { chunk: first, index, begin, offset, source: sound(first, begin, offset) }
+    reveal(index)
     state.moveHead(at)
-    if (!(await show(first, shownRef.current, Math.max(0, at - first.at), mine))) return
     // Белая игла встаёт на место, откуда начали.
     useCompose.getState().setPlayback(true)
     setPlaying(true)
     void fill()
-  }, [fetchChunk, show, fill])
+  }, [fetchChunk, graph, load, element, sound, reveal, fill])
 
-  /** Кусок доиграл — включаем следующий, он уже загружен во второе видео. */
-  const onEnded = useCallback(
-    async (index: number) => {
-      if (index !== shownRef.current) return
-      const mine = run.current
-      let next = queue.current.shift() ?? null
-      if (!next) {
-        const at = nextStart()
-        if (at === null) {
-          stop()
-          return
-        }
-        setPreparing(true)
-        next = await fetchChunk(at, mine)
-        setPreparing(false)
-        if (mine !== run.current) return
-        if (!next || !alive.current) {
-          stop()
-          return
-        }
-      }
-      if (!(await show(next, 1 - index, 0, mine))) {
-        if (mine === run.current) stop()
-        return
-      }
-      preload()
-      void fill()
-    },
-    [fetchChunk, nextStart, show, preload, fill, stop],
-  )
-
-  /** Пока играет — двигаем иглу и снимаем уровень. */
+  /** Пока играет — двигаем иглу, держим видео вровень со звуком, снимаем уровень. */
   useEffect(() => {
     if (!playing) return
-    void audio.current?.ctx.resume()
+    const { ctx, gain } = graph()
+    void ctx.resume()
     // Громкость слушателя живёт на узле графа: так шкала уровня показывает
     // сам монтаж, а не то, насколько тихо человек сделал себе в наушниках.
-    // Если графа нет (браузер не дал), ставим её прямо видео.
-    for (const index of [0, 1]) {
-      const target = element(index)
-      if (target) target.volume = audio.current ? 1 : volume
-    }
-    if (audio.current) audio.current.gain.gain.value = volume
+    gain.gain.value = volume
 
     const buffer = new Float32Array(1024)
     const read = (node: AnalyserNode): number => {
@@ -374,18 +450,62 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
       return rms > 0 ? Math.max(-60, 20 * Math.log10(rms)) : -60
     }
 
+    let swapTimer: ReturnType<typeof setTimeout> | null = null
+    const tick = () => {
+      const now = ctx.currentTime
+      const next = upcoming.current
+      // Видео разгоняется около десятой доли секунды: запускаем следующее
+      // заранее, пока оно ещё спрятано, — иначе на стыке картинка замирала.
+      const spare = next && element(next.index)
+      if (next && spare?.paused && next.begin - now < 0.12) {
+        void spare.play().catch(() => undefined)
+      }
+      // Стык близко — ловим его отдельным таймером, точнее общего шага.
+      if (next && !swapTimer && next.begin - now < 0.08) {
+        swapTimer = setTimeout(() => {
+          swapTimer = null
+          swap()
+        }, Math.max(0, (next.begin - ctx.currentTime) * 1000))
+      }
+      const slot = current.current
+      if (!slot) return
+      const into = slot.offset + (now - slot.begin)
+      const ended = into >= slot.chunk.span
+      if (ended && !upcoming.current) {
+        // Следующего куска нет: либо конец монтажа, либо он ещё собирается.
+        if (nextStart() === null && !filling.current && !queue.current.length) {
+          useCompose.getState().moveHead(slot.chunk.at + slot.chunk.span)
+          stop()
+          return
+        }
+        setPreparing(true)
+        void fill()
+      }
+      const t = Math.min(Math.max(into, 0), slot.chunk.span)
+      useCompose.getState().moveHead(slot.chunk.at + t)
+      // Видео подстраивается под звук: мелкое расхождение — чуть быстрее или
+      // медленнее, крупное — перемоткой.
+      const target = element(slot.index)
+      if (target && !ended && !target.seeking) {
+        const drift = target.currentTime - t
+        if (Math.abs(drift) > DRIFT_JUMP) {
+          target.currentTime = t
+          target.playbackRate = 1
+        } else {
+          target.playbackRate = Math.min(1.1, Math.max(0.9, 1 - drift))
+        }
+        if (target.paused) void target.play().catch(() => undefined)
+      }
+      setLevels({ left: read(audio.current!.left), right: read(audio.current!.right) })
+    }
     // Обычный таймер, а не кадры отрисовки: в свёрнутом окне кадры не
     // приходят вовсе, и игла замирала бы вместе с показаниями.
-    const timer = setInterval(() => {
-      const current = chunk.current
-      const target = element(shownRef.current)
-      if (current && target) useCompose.getState().moveHead(current.at + target.currentTime)
-      if (audio.current) {
-        setLevels({ left: read(audio.current.left), right: read(audio.current.right) })
-      }
-    }, 60)
-    return () => clearInterval(timer)
-  }, [playing, volume, element])
+    const timer = setInterval(tick, 40)
+    return () => {
+      clearInterval(timer)
+      if (swapTimer) clearTimeout(swapTimer)
+    }
+  }, [playing, volume, element, graph, swap, nextStart, stop, fill])
 
   /**
    * Громкость монтажа и выравнивание слышны сразу.
@@ -415,10 +535,14 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           state.loudnorm !== prev.loudnorm
         ) {
           usePreviewReady.getState().clear()
-          // Собранное впрок показывает уже не то — следующие куски заново.
+          // Собранное впрок показывает уже не то — следующие куски заново,
+          // и тот, что уже стоял встык, тоже.
           queue.current = []
+          silence(upcoming.current)
+          upcoming.current = null
           const spare = element(1 - shownRef.current)
           if (spare) delete spare.dataset.chunk
+          if (current.current) void fillRef.current()
         }
       }),
     [element],
@@ -451,18 +575,15 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   // Громкость прослушивания меняется на ходу и запоминается.
   useEffect(() => {
     if (audio.current) audio.current.gain.gain.value = volume
-    else
-      for (const index of [0, 1]) {
-        const target = element(index)
-        if (target) target.volume = volume
-      }
     localStorage.setItem('sgh.composeVolume', String(volume))
-  }, [volume, element])
+  }, [volume])
 
   useEffect(() => {
     alive.current = true
     return () => {
       alive.current = false
+      silence(current.current)
+      silence(upcoming.current)
       void audio.current?.ctx.close()
       audio.current = null
     }
@@ -470,6 +591,6 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
 
   return {
     playing, preparing, error, levels, volume, setVolume, loop, setLoop,
-    quality, setQuality, start, stop, onEnded, shown,
+    quality, setQuality, start, stop, shown,
   }
 }

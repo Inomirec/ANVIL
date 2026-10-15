@@ -181,15 +181,6 @@ def _even(value: int) -> int:
     return max(2, value - value % 2)
 
 
-def _even_pixels(expression: str) -> str:
-    """То же округление до чётного, но для выражения внутри команды ffmpeg.
-
-    Часть значений известна только самому ffmpeg — например ширина картинки
-    после подгонки размера, — поэтому считать их заранее нечем.
-    """
-    return f"2*round(({expression})/2)"
-
-
 def _even_near(value: float) -> int:
     """То же, но к ближайшему чётному, а не всегда вниз.
 
@@ -278,6 +269,11 @@ def clip_box(clip: ComposeClip, width: int, height: int) -> tuple[int, int]:
     ролика такое «место» вылезало за кадр в несколько раз, и размер прыгал.
     """
     tall = clip.size_y if clip.size_y > 0 else clip.size
+    if clip.kind == "color":
+        # Заливке чётность не нужна: она сплошная и сводится в yuv444p.
+        # С чётной стороной её край в кадре поменьше (окно просмотра,
+        # черновик 360p) уезжал на пиксель от того, что в готовом файле.
+        return max(1, round(width * clip.size)), max(1, round(height * tall))
     return _even_near(width * clip.size), _even_near(height * tall)
 
 
@@ -576,11 +572,7 @@ def _layer(colour: str, size: tuple[int, int], expression: str) -> list[str]:
 
 
 def fill_margin(clip: ComposeClip, height: int) -> int:
-    """Сколько места нужно вокруг заливки под тень, в пикселях.
-
-    Чётное: наложение в видео встаёт на чётные позиции, и нечётный запас
-    сдвигал бы заливку на пиксель относительно её места.
-    """
+    """Сколько места нужно вокруг заливки под тень, в пикселях."""
     # Рамка теперь снаружи заливки — под неё тоже нужен запас.
     border = clip.stroke * height if clip.stroke_on and clip.stroke > 0 else 0.0
     reach = border
@@ -588,7 +580,7 @@ def fill_margin(clip: ComposeClip, height: int) -> int:
         # Размытая тень расползается примерно на три сигмы.
         blur = 3 * clip.shadow_blur * height
         reach = max(reach, max(abs(clip.shadow_x), abs(clip.shadow_y)) * height + border + blur)
-    return int(math.ceil(reach / 2)) * 2
+    return int(math.ceil(reach))
 
 
 async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
@@ -615,7 +607,7 @@ async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
     stamp = "|".join(
         str(item)
         for item in (
-            "v2", canvas, box_w, box_h, margin, round(radius, 2), round(border, 2), round(outer, 2),
+            "v3", canvas, box_w, box_h, margin, round(radius, 2), round(border, 2), round(outer, 2),
             clip.color, clip.stroke_color, clip.shadow_on, round(clip.shadow_x * height, 2),
             round(clip.shadow_y * height, 2), clip.shadow_color, clip.shadow_alpha, round(blur, 2),
         )
@@ -971,7 +963,14 @@ def build_segment(
     # Чёрный фон на всю длину отрезка. Он же отвечает за пустые места, где ни
     # один клип не стоит: без него дырка на таймлайне обрывала бы сборку.
     if not audio_only:
-        chain.append(f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f}[bg]")
+        # Слои сводятся на полной сетке цвета (yuv444p), а не на вдвое
+        # меньшей: на ней ffmpeg ставит наложение только на чётный пиксель,
+        # и клип в кадрах разного размера — окно просмотра, черновик 360p,
+        # готовый файл — оказывался то выше, то ниже на пиксель. В обычный
+        # вид кадр переводится уже в конце.
+        chain.append(
+            f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f},format=yuv444p[bg]"
+        )
 
     index = 0
     #: Картинки масок: их входы идут после всех клипов.
@@ -1125,30 +1124,26 @@ def build_segment(
         # x и y — доли кадра, 0.5 это центр. Считаем от середины, а не от
         # свободного места, иначе клип крупнее кадра было бы некуда двигать.
         #
-        # Место округляем до чётного пикселя — и край, и отступ картинки
-        # внутри него. Цвет в готовом видео хранится на вдвое меньшей сетке,
-        # поэтому ffmpeg всё равно сдвинет наложение на чётную позицию, но
-        # сделает это молча и всегда вниз: у картинок с разной шириной
-        # отступы получались разной чётности, и разложенные по сетке кадры
-        # вставали вразнобой — тот самый съезд на пиксель. Считаем чётность
-        # сами, тогда одинаковые клетки получают одинаковые позиции.
+        # Место округляем до ближайшего пикселя — и край, и отступ картинки
+        # внутри него, — каждый сам: так одинаковые клетки сетки получают
+        # одинаковые шаги. Слои сводятся в yuv444p (см. фон), поэтому ffmpeg
+        # ничего не сдвигает от себя.
         place = ""
         if animated(clip) and not effects.blurred_fill(clip):
             # Время фона — от начала отрезка; ключи — от начала клипа.
             moment = f"(t+{at - clip.start:.4f})"
             place = (
-                f":x='W*({anim.expression(clip, 'x', moment)})-w/2'"
-                f":y='H*({anim.expression(clip, 'y', moment)})-h/2':eval=frame"
+                f":x='round(W*({anim.expression(clip, 'x', moment)})-w/2)'"
+                f":y='round(H*({anim.expression(clip, 'y', moment)})-h/2)':eval=frame"
             )
         elif is_placed(clip):
             box_w, box_h = clip_box(clip, width, height)
-            left = _even_pixels(f"W*{clip.x:.5f}-{box_w / 2:.3f}")
-            top = _even_pixels(f"H*{clip.y:.5f}-{box_h / 2:.3f}")
-            place = (
-                f":x={left}+{_even_pixels(f'({box_w}-w)/2')}"
-                f":y={top}+{_even_pixels(f'({box_h}-h)/2')}"
-            )
-        chain.append(f"{layer}{label}overlay=eof_action=pass:shortest=0{place}{nxt}")
+            left = f"round(W*{clip.x:.5f}-{box_w / 2:.3f})"
+            top = f"round(H*{clip.y:.5f}-{box_h / 2:.3f})"
+            place = f":x={left}+round(({box_w}-w)/2):y={top}+round(({box_h}-h)/2)"
+        chain.append(
+            f"{layer}{label}overlay=eof_action=pass:shortest=0:format=yuv444{place}{nxt}"
+        )
         layer = nxt
 
     if audio_labels:
@@ -1185,6 +1180,10 @@ def build_segment(
             args += ["-progress", "pipe:1", "-nostats"]
         args.append(str(output))
         return args
+    if not still:
+        # Сведённый кадр — обратно в обычный вид: его понимают все плееры.
+        chain.append(f"{layer}format=yuv420p[vout]")
+        layer = "[vout]"
     args += ["-filter_complex", ";".join(chain), "-map", layer]
 
     if still:

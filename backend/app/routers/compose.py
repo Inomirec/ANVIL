@@ -96,14 +96,15 @@ async def frame(request: ComposeFrameRequest) -> Response:
 
 
 #: Где лежат черновики просмотра и сколько их держим.
-#: Сорок кусков по 12 секунд — восемь минут монтажа: всё, что отмечено на
-#: линейке как собранное, должно и правда лежать в запасе.
-_DRAFT_KEEP = 40
+#: Сорок кусков по 12 секунд, у каждого два файла (видео и звук), — восемь
+#: минут монтажа: всё, что отмечено на линейке как собранное, должно и правда
+#: лежать в запасе.
+_DRAFT_KEEP = 80
 #: Пока собирается один кусок, следующий ждёт: иначе десяток ffmpeg разом
 #: положит машину, ради которой всё это и затевалось.
 _draft_lock = asyncio.Lock()
 #: Имя черновика задаём сами — на вход принимаем только такое.
-_DRAFT_NAME = re.compile(r"[0-9a-f]{20}\.mp4")
+_DRAFT_NAME = re.compile(r"[0-9a-f]{20}\.(?:mp4|wav)")
 
 
 def _draft_dir() -> Path:
@@ -117,6 +118,36 @@ def _prune_drafts(directory: Path) -> None:
     for stale in files[_DRAFT_KEEP:]:
         with contextlib.suppress(OSError):
             stale.unlink()
+
+
+async def _draft_sound(video: Path, span: float) -> Path | None:
+    """Звук куска отдельным файлом, ровно ``span`` секунд.
+
+    Окно склеивает звук соседних кусков само, с точностью до отсчёта: у
+    звука внутри MP4 в начале лежит запас кодировщика, и при смене видео на
+    стыке выходил провал. Несжатый звук нужной длины ложится встык без щели.
+    Звука в куске нет — ``None``.
+    """
+    target = video.with_suffix(".wav")
+    if target.exists():
+        with contextlib.suppress(OSError):
+            os.utime(target)
+        return target
+    process = await asyncio.create_subprocess_exec(
+        binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(video), "-map", "0:a:0", "-vn",
+        "-af", "apad", "-t", f"{span:.3f}",
+        "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(target),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        creationflags=binaries.CREATE_NO_WINDOW,
+        env=binaries.subprocess_env(),
+    )
+    await process.wait()
+    if process.returncode != 0 or not target.exists():
+        target.unlink(missing_ok=True)
+        return None
+    return target
 
 
 @router.post("/draft")
@@ -181,8 +212,10 @@ async def draft(request: ComposeDraftRequest) -> dict:
                     )
                 _prune_drafts(target.parent)
 
+    sound = await _draft_sound(target, span)
     return {
         "url": f"/api/compose/draft/{target.name}",
+        "audio": f"/api/compose/draft/{sound.name}" if sound else None,
         "at": at,
         "span": span,
         "size": target.stat().st_size,

@@ -695,15 +695,46 @@ export function ComposeTab() {
   // увидеть, что меняют. Только при смене выделения: двигать иглу дальше
   // человек волен сам.
   const textClipId = textClip?.id
+  // Зажата ли кнопка мыши. Надпись выделяют и нажатием по таймлайну, а там
+  // игла сама встаёт на место нажатия, когда кнопку отпустят; переводить её
+  // в середину надписи до этого значит показать лишний прыжок.
+  const mouseHeld = useRef(false)
+  useEffect(() => {
+    const down = () => (mouseHeld.current = true)
+    const up = () => (mouseHeld.current = false)
+    window.addEventListener('mousedown', down, true)
+    window.addEventListener('mouseup', up, true)
+    return () => {
+      window.removeEventListener('mousedown', down, true)
+      window.removeEventListener('mouseup', up, true)
+    }
+  }, [])
   useEffect(() => {
     if (!textClipId) return
-    const state = useCompose.getState()
-    const clip = state.tracks.flatMap((track) => track.clips).find((item) => item.id === textClipId)
-    if (!clip) return
-    if (state.playhead >= clip.start && state.playhead < clip.start + clip.duration) return
-    // В середину, а не в начало: у начала надпись часто ещё проявляется, и
-    // видно её не целиком.
-    state.setPlayhead(clip.start + clip.duration / 2)
+    const settle = () => {
+      const state = useCompose.getState()
+      const clip = state.tracks.flatMap((track) => track.clips).find((item) => item.id === textClipId)
+      if (!clip || !state.selected.includes(clip.id)) return
+      if (state.playhead >= clip.start && state.playhead < clip.start + clip.duration) return
+      // В середину, а не в начало: у начала надпись часто ещё проявляется, и
+      // видно её не целиком.
+      state.setPlayhead(clip.start + clip.duration / 2)
+    }
+    if (!mouseHeld.current) {
+      settle()
+      return
+    }
+    // Ждём, пока отпустят кнопку и таймлайн поставит иглу сам; после этого
+    // игла уже на надписи, и проверка ничего не тронет.
+    let timer = 0
+    const release = () => {
+      timer = window.setTimeout(settle, 0)
+    }
+    window.addEventListener('mouseup', release, { once: true })
+    return () => {
+      window.removeEventListener('mouseup', release)
+      window.clearTimeout(timer)
+    }
   }, [textClipId])
 
   // Куда ляжет файл, если папку не выбирали: та же, что выберет сервер.
@@ -937,7 +968,8 @@ export function ComposeTab() {
                 {/* Пока смотрим — играет собранный кусок, иначе показываем
                     кадр под иглой. Снаружи разницы нет: то же окно. Видео два
                     и играют по очереди: следующий кусок уже загружен во
-                    второе, и на стыке нет пустого кадра. */}
+                    второе, и на стыке нет пустого кадра. Звук у видео
+                    выключен — он идёт отдельно (см. useComposePlayer). */}
                 {[videoRef, spareRef].map((ref, index) => (
                   <video
                     key={index}
@@ -945,7 +977,8 @@ export function ComposeTab() {
                     className={`absolute inset-0 h-full w-full object-contain ${
                       player.playing && player.shown === index ? '' : 'invisible'
                     }`}
-                    onEnded={() => void player.onEnded(index)}
+                    muted
+                    playsInline
                     onError={() => {
                       if (player.shown === index) player.stop()
                     }}

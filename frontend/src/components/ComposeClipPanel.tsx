@@ -5,7 +5,7 @@ import {
   FlipHorizontal2,
   FlipVertical2,
   Gauge,
-  Image as ImageIcon,
+  Blend,
   Move,
   Plus,
   RotateCw,
@@ -24,7 +24,7 @@ import {
   type EffectTarget,
 } from '../composeEffects'
 import { api } from '../lib/api'
-import { AnimClock, PlaceFields } from './ComposeAnimUi'
+import { AnimClock, OpacityRow, PlaceFields } from './ComposeAnimUi'
 import { ColorSquare, SliderNumber } from './ComposeTextPanel'
 import { Button, Modal } from './ui'
 
@@ -60,17 +60,17 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
     <div className="space-y-3">
       {(visual ?? sound) && <Transforms clip={(visual ?? sound)!} />}
 
+      {picture && <PictureCard clip={picture} />}
+
       {picture && (
         <Card id="place" title="Место в кадре" icon={<Move size={13} />} focusGroup="position">
-          <PlaceFields clip={picture} />
+          <PlaceFields clip={picture} opacity={false} />
         </Card>
       )}
 
       {picture && <CropCard clip={picture} />}
 
       {picture && <MaskCard clip={picture} mask={picture.mask ?? null} />}
-
-      {picture && <PictureCard clip={picture} />}
 
       {sound && <SoundCard clip={sound} />}
 
@@ -147,8 +147,9 @@ function SoundCard({ clip }: { clip: ComposeClip }) {
 }
 
 /**
- * Появление и уход картинки — числами, как у звука. На самом клипе их тянут
- * за уголки, здесь ставят точно. Видимость — ползунком в «Месте в кадре».
+ * Видимость картинки или ролика: непрозрачность (с часиками), появление и
+ * уход — числами, как у звука. На самом клипе их тянут за линию уровня и
+ * уголки, здесь ставят точно. Стоит первой: это то, что правят чаще всего.
  */
 function PictureCard({ clip }: { clip: ComposeClip }) {
   const updateClip = useCompose((state) => state.updateClip)
@@ -156,7 +157,10 @@ function PictureCard({ clip }: { clip: ComposeClip }) {
   const half = Math.max(0, Math.round((clip.duration / 2) * 100) / 100)
   const put = (patch: Partial<ComposeClip>) => updateClip(clip.id, patch)
   return (
-    <Card id="picture" title="Картинка" icon={<ImageIcon size={13} />}>
+    <Card id="picture" title="Видимость" icon={<Blend size={13} />}>
+      <div className="mb-2">
+        <OpacityRow clip={clip} label="Непрозрачность" wide />
+      </div>
       <div className="space-y-2" onMouseDownCapture={() => mark()}>
         <SliderNumber
           label="Появление"
