@@ -99,6 +99,17 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
 }
 
 /**
+ * Куда идёт звук. Уходящая сторона переливается в другую: ролик со звуком
+ * только в левом ухе выводится вправо, а копия клипа на соседней дорожке,
+ * выведенная в другую сторону, даёт звук в оба уха.
+ */
+const PAN_MARKS = [
+  { value: -100, label: 'Л', hint: 'Весь звук — в левое ухо' },
+  { value: 0, label: 'C', hint: 'Как в файле' },
+  { value: 100, label: 'П', hint: 'Весь звук — в правое ухо' },
+]
+
+/**
  * Громкость, появление и уход звука — числами. На самом клипе их тянут на
  * глаз (шторка и уголки), здесь — ставят точно. Колонка у звукового клипа
  * без этого была совсем пустой.
@@ -120,6 +131,17 @@ function SoundCard({ clip }: { clip: ComposeClip }) {
           step={0.5}
           reset={0}
           onChange={(db) => put({ volume: Math.min(1, dbToGain(db)) })}
+        />
+        <SliderNumber
+          label="Панорама"
+          unit="%"
+          value={Math.round((clip.pan ?? 0) * 100)}
+          min={-100}
+          max={100}
+          step={5}
+          reset={0}
+          marks={PAN_MARKS}
+          onChange={(value) => put({ pan: Math.min(1, Math.max(-1, value / 100)) })}
         />
         <SliderNumber
           label="Появление"

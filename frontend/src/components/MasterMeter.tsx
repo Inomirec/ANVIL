@@ -10,8 +10,8 @@ import { dbToGain, gainToDb, MAX_DB, MIN_DB, volumeLabel } from '../composeStore
  * на панели под окном просмотра, и на файл не влияет.
  *
  * **Вид задаётся шириной, а не отдельной кнопкой.** Шину тянут за левую
- * границу, и видов у неё два: узкий — один ползунок с уровнем прямо на нём,
- * средний — ползунок и полоски каналов с делениями поверх. Третий, с
+ * границу, и видов у неё два: узкий — одна полоса уровня, средний — полоски
+ * двух каналов. Громкость в обоих — одна и та же тонкая черта поверх шкалы. Третий, с
  * делениями отдельной колонкой между каналами, убран: цифры посреди двух
  * шкал читались плохо. Сжатая до упора шина исчезает, оставляя полоску, за
  * которую её возвращают обратно.
@@ -132,47 +132,35 @@ export function MasterMeter({
   }, [onWidth])
 
   /**
-   * Фейдер громкости монтажа.
-   *
+   * Фейдер громкости монтажа — тонкая черта поверх шкалы уровня, одна и та
+   * же в обоих видах шины. Прежде в широком виде он был отдельным крупным
+   * ползунком с яркой подписью и забирал на себя всё внимание.
    */
   const fader = (
-    <div className="relative flex">
-      <input
-        type="range"
-        min={MIN_DB}
-        max={MAX_DB}
-        step={0.5}
-        value={gainToDb(master)}
-        onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
-        // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
-        // а понять потом, каким он был, — нет. Второе нажатие перехватываем
-        // до того, как ползунок прыгнет под курсор: иначе он успевал встать
-        // туда, куда ткнули, и «вернуть 0 дБ» возвращало что попало.
-        onMouseDown={(event) => {
-          if (event.detail < 2) return
-          event.preventDefault()
-          onMaster(1)
-        }}
-        onDoubleClick={() => onMaster(1)}
-        title={`Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
+    <input
+      type="range"
+      min={MIN_DB}
+      max={MAX_DB}
+      step={0.5}
+      value={gainToDb(master)}
+      onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
+      // Двойное нажатие возвращает обычную громкость: задеть ползунок легко,
+      // а понять потом, каким он был, — нет. Второе нажатие перехватываем
+      // до того, как ползунок прыгнет под курсор: иначе он успевал встать
+      // туда, куда ткнули, и «вернуть 0 дБ» возвращало что попало.
+      onMouseDown={(event) => {
+        if (event.detail < 2) return
+        event.preventDefault()
+        onMaster(1)
+      }}
+      onDoubleClick={() => onMaster(1)}
+      title={`Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
 Двойное нажатие вернёт 0 дБ`}
-        className="master-fader"
-      />
-      {/* Подпись громкости — внутри шины, как и деления шкалы: вынесенная
-          вниз, она была шире колонки и раздвигала всё окно. */}
-      <span
-          className={`pointer-events-none absolute left-0 w-full rounded-[3px] bg-accent text-center font-mono text-[8.5px] font-semibold leading-[13px] tabular-nums ${
-            master > 1 ? 'text-warn' : 'text-white'
-          }`}
-          style={{
-            top: `${(1 - (gainToDb(master) - MIN_DB) / (MAX_DB - MIN_DB)) * 100}%`,
-            transform: 'translateY(-50%)',
-          }}
-        >
-        {shortLabel(master)}
-      </span>
-    </div>
+      className="master-fader over-meter"
+    />
   )
+  /** Место черты по высоте шкалы — для бледной подписи над ней. */
+  const faderTop = `${(1 - (gainToDb(master) - MIN_DB) / (MAX_DB - MIN_DB)) * 100}%`
 
   // Шина, запомненная шире нынешнего предела, встаёт на предел.
   width = Math.min(width, METER_MAX)
@@ -199,37 +187,29 @@ export function MasterMeter({
         <>
           <div className="flex min-h-0 flex-1 items-stretch gap-1">
             {withChannels ? (
-              <>
+              <div className="relative flex min-h-0 gap-[3px]">
+                <Channel db={levels.left} peak={peaks.left} />
+                <Channel db={levels.right} peak={peaks.right} />
+                <Marks />
                 {fader}
-                <div className="relative flex min-h-0 gap-[3px]">
-                  <Channel db={levels.left} peak={peaks.left} />
-                  <Channel db={levels.right} peak={peaks.right} />
-                  <Marks />
-                </div>
-              </>
+                {/* Громкость — еле заметной подписью над чертой: число нужно,
+                    но спорить с уровнем за внимание оно не должно. */}
+                <span
+                  className={`pointer-events-none absolute inset-x-0 text-center font-mono text-[8px] leading-[9px] tabular-nums ${
+                    master > 1 ? 'text-warn/80' : 'text-white/45'
+                  }`}
+                  style={{ top: faderTop, transform: 'translateY(calc(-100% - 3px))' }}
+                >
+                  {shortLabel(master)}
+                </span>
+              </div>
             ) : (
               /* Совсем узкая шина: уровень нарисован прямо под ползунком. */
               <div className="relative min-h-0 w-[22px] overflow-hidden rounded-sm bg-surface-3">
                 <Fill db={Math.max(levels.left, levels.right)} />
                 <Peak db={Math.max(peaks.left, peaks.right)} />
                 <Marks />
-                <input
-                  type="range"
-                  min={MIN_DB}
-                  max={MAX_DB}
-                  step={0.5}
-                  value={gainToDb(master)}
-                  onChange={(event) => onMaster(dbToGain(Number(event.target.value)))}
-                  onMouseDown={(event) => {
-                    if (event.detail < 2) return
-                    event.preventDefault()
-                    onMaster(1)
-                  }}
-                  onDoubleClick={() => onMaster(1)}
-                  title={`Громкость монтажа ${volumeLabel(master)}.
-Двойное нажатие вернёт 0 дБ`}
-                  className="master-fader over-meter"
-                />
+                {fader}
               </div>
             )}
           </div>
@@ -292,7 +272,7 @@ function Peak({ db }: { db: number }) {
 /** Одна полоска: заливка по уровню плюс метка пика. */
 function Channel({ db, peak }: { db: number; peak: number }) {
   return (
-    <div className="relative min-h-0 w-[9px] overflow-hidden rounded-sm bg-surface-3">
+    <div className="relative min-h-0 w-[14px] overflow-hidden rounded-sm bg-surface-3">
       <Fill db={db} />
       <Peak db={peak} />
     </div>

@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
-import { ChevronRight, CornerLeftUp, Folder, FolderSearch, HardDrive } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronRight, CornerLeftUp, Folder, HardDrive } from 'lucide-react'
 import { api } from '../lib/api'
 import type { BrowseResponse } from '../lib/types'
 import { Button, Modal, Spinner } from './ui'
 
 /**
- * Выбор папки. В оконном режиме сначала пробуем нативный диалог Windows,
- * а в браузере (где его нет) показываем собственный обозреватель.
+ * Выбор папки. В окне программы сразу открывается обычное окно выбора папки
+ * Windows: промежуточное окно со своим списком папок ничего к нему не
+ * добавляло, а нажатий требовало больше. Свой обозреватель остаётся для
+ * браузера, где окна Windows нет.
  */
 export function FolderPicker({
   open,
@@ -22,9 +24,41 @@ export function FolderPicker({
   const [data, setData] = useState<BrowseResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [manual, setManual] = useState('')
+  /** Окна Windows нет (программа открыта в браузере) — показываем своё. */
+  const [fallback, setFallback] = useState(false)
+
+  // Ссылки, а не замыкания: ответ окна Windows приходит, когда человек
+  // закрыл его, и обработчики к тому времени могли смениться.
+  const pickRef = useRef(onPick)
+  pickRef.current = onPick
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
 
   useEffect(() => {
-    if (open) void load(null)
+    if (!open) {
+      setFallback(false)
+      return
+    }
+    let alive = true
+    void (async () => {
+      try {
+        const result = await api.pickFolder()
+        if (!alive) return
+        if (result.supported) {
+          if (result.path) pickRef.current(result.path)
+          closeRef.current()
+          return
+        }
+      } catch {
+        // Не вышло спросить окно Windows — покажем своё.
+      }
+      if (!alive) return
+      setFallback(true)
+      void load(null)
+    })()
+    return () => {
+      alive = false
+    }
   }, [open])
 
   async function load(path: string | null) {
@@ -38,16 +72,8 @@ export function FolderPicker({
     }
   }
 
-  async function tryNative() {
-    const result = await api.pickFolder()
-    if (result.supported && result.path) {
-      onPick(result.path)
-      onClose()
-    }
-  }
-
   return (
-    <Modal open={open} onClose={onClose} title={title}>
+    <Modal open={open && fallback} onClose={onClose} title={title}>
       <div className="space-y-3">
         <div className="flex gap-2">
           <input
@@ -62,14 +88,6 @@ export function FolderPicker({
               }
             }}
           />
-          <Button
-            onClick={() => void tryNative()}
-            title="Открыть привычное окно выбора папки Windows"
-            className="shrink-0 whitespace-nowrap"
-          >
-            <FolderSearch size={14} />
-            Открыть проводник
-          </Button>
         </div>
 
         <div className="flex flex-wrap gap-1.5">

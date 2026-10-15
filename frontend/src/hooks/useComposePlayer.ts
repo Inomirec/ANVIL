@@ -41,7 +41,7 @@ const SLOW_SECONDS = 2.5
  * машина не успевает; остальные значения программа не трогает — человек
  * выбрал и получил.
  */
-export type PreviewQuality = 'auto' | 360 | 480 | 720
+export type PreviewQuality = 'auto' | 360 | 480 | 720 | 1080
 const QUALITY_KEY = 'sgh.composeQuality'
 
 interface Chunk {
@@ -125,7 +125,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
 
   const [quality, setQuality] = useState<PreviewQuality>(() => {
     const saved = localStorage.getItem(QUALITY_KEY)
-    return saved === '360' || saved === '480' || saved === '720'
+    return saved === '360' || saved === '480' || saved === '720' || saved === '1080'
       ? (Number(saved) as PreviewQuality)
       : 'auto'
   })
@@ -201,7 +201,8 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           project: snapshot(),
           at,
           span: CHUNK_SECONDS,
-          height: asked === 'auto' ? height.current : asked,
+          // Выше кадра самого проекта не собираем: крупнее он не станет.
+          height: Math.min(asked === 'auto' ? height.current : asked, useCompose.getState().height),
         })
         let sound: AudioBuffer | null = null
         if (data.audio) {

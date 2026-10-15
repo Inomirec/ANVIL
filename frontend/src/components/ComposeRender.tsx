@@ -32,6 +32,8 @@ export interface RenderPreset extends RenderSettings {
   label: string
   /** Какая подпись шкалы битрейта у набора: 0 — экономно, 1 — обычно, 2 — с запасом. */
   bitrateLevel: number
+  /** Чем собирается — бледной строкой под названием, как у пресетов обработки. */
+  tech: string
 }
 
 /** Размер кадра проекта — по нему считаются подписи битрейта. */
@@ -48,7 +50,8 @@ export function presetName(value: RenderSettings, frame: Frame): string {
 export const BUILTIN_PRESETS: RenderPreset[] = [
   {
     id: 'av1-best',
-    label: 'AV1 · Opus — лучшее качество',
+    label: 'Лучшее качество · AV1',
+    tech: 'AV1 · Opus 192 · MP4',
     videoCodec: 'av1_svt',
     crf: 22,
     bitrateKbps: 0,
@@ -61,7 +64,8 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
   },
   {
     id: 'h264-best',
-    label: 'H.264 · AAC — лучшее качество',
+    label: 'Лучшее качество · H.264',
+    tech: 'H.264 · AAC 256 · MP4 · играет везде',
     videoCodec: 'h264',
     crf: 16,
     bitrateKbps: 0,
@@ -74,7 +78,8 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
   },
   {
     id: 'audio-mp3',
-    label: 'Только звук · MP3',
+    label: 'Только звук',
+    tech: 'MP3 320',
     videoCodec: 'h264',
     crf: 16,
     bitrateKbps: 0,
@@ -90,7 +95,7 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
 
 /** Настройки набора; битрейт — по размеру кадра проекта. */
 function settingsOf(preset: RenderPreset, frame: Frame): RenderSettings {
-  const { id: _id, label: _label, bitrateLevel, ...settings } = preset
+  const { id: _id, label: _label, tech: _tech, bitrateLevel, ...settings } = preset
   return { ...settings, bitrateKbps: bitrateMarks(settings.videoCodec, frame)[bitrateLevel].value }
 }
 
@@ -388,8 +393,8 @@ export function ComposeRenderPanel({
 
   return (
     <>
-    <Section title="Сборка" id="compose.render" summary={presetName(value, frame)}>
-      <div className="space-y-1">
+    <Section title="Наборы" id="compose.render" summary={presetName(value, frame)}>
+      <div className="grid gap-1.5">
         {BUILTIN_PRESETS.map((preset) => {
           const picked = sameAs(value, preset, frame)
           return (
@@ -398,121 +403,98 @@ export function ComposeRenderPanel({
               type="button"
               // Видеокарта — своя настройка человека, набор её не трогает.
               onClick={() => onChange({ ...settingsOf(preset, frame), useGpu: value.useGpu })}
-              className={`flex w-full items-center gap-2 truncate rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
+              className={`rounded-xl border px-3 py-2 text-left transition-colors ${
                 picked
-                  ? 'border-accent bg-accent/15 text-accent-soft'
-                  : 'border-line-soft text-ink-dim hover:border-line hover:text-ink'
+                  ? 'border-accent/60 bg-accent/10'
+                  : 'border-line-soft bg-surface-2 hover:border-line hover:bg-surface-3'
               }`}
             >
-              {picked && <Check size={13} className="shrink-0" />}
-              <span className="truncate">{preset.label}</span>
+              <span className="block text-[13px] font-medium text-ink">{preset.label}</span>
+              <span className="mt-0.5 block font-mono text-[10px] text-ink-faint/60">{preset.tech}</span>
             </button>
           )
         })}
       </div>
+    </Section>
 
-      <div className="space-y-2">
-        <span className="label">Видео</span>
-        {/* «Нет» — собрать один звук: так же, как «Нет» у звука. */}
-        <Segmented
-          columns={4}
-          value={value.audioOnly ? 'none' : value.videoCodec}
-          options={VIDEO_CODECS}
-          onChange={(codec) =>
-            codec === 'none'
-              ? set({
-                  audioOnly: true,
-                  ...(value.audioCodec === 'none' ? { audioCodec: 'mp3', audioBitrateKbps: 256 } : {}),
-                })
-              : set({
-                  audioOnly: false,
-                  videoCodec: codec,
-                  // У AV1 и H.264 скорости называются по-разному: чужое имя
-                  // кодировщик не примет. Битрейт — обычный для кодека.
-                  // Качество тоже своё у каждого — берём «высокое» его шкалы.
-                  ...(codec !== value.videoCodec
-                    ? {
-                        speedPreset: speedOptions(codec)[2].value,
-                        crf: qualityScale(codec).marks[2].crf,
-                        ...(byBitrate ? { bitrateKbps: bitrateNormal(codec, frame) } : {}),
-                      }
-                    : {}),
-                })
-          }
-        />
-        {!value.audioOnly &&
-          (byBitrate ? (
-            <SliderNumber
-              stacked
-              label={modeButton}
-              unit="кбит/с"
-              value={value.bitrateKbps}
-              min={range.min}
-              max={range.max}
-              step={250}
-              reset={bitrateNormal(value.videoCodec, frame)}
-              marks={bitrateMarks(value.videoCodec, frame)}
-              onChange={(bitrate) => {
-                const bitrateKbps = Math.max(200, Math.round(bitrate))
-                setLast((was) => ({ ...was, bitrate: bitrateKbps }))
-                set({ bitrateKbps })
-              }}
-            />
-          ) : (
-            <SliderNumber
-              stacked
-              label={modeButton}
-              unit=""
-              readout={
-                <span className="shrink-0 text-[12px] text-ink" title={`crf ${value.crf}: меньше число — лучше картинка`}>
-                  {qualityWord(value.videoCodec, value.crf)}
-                </span>
-              }
-              value={flip(value.crf)}
-              min={scale.best}
-              max={scale.worst}
-              reset={flip(scale.marks[2].crf)}
-              marks={scale.marks.map((mark) => ({ value: flip(mark.crf), label: mark.label, hint: mark.hint }))}
-              onChange={(position) => {
-                const crf = Math.round(flip(position))
-                setLast((was) => ({ ...was, crf }))
-                set({ crf })
-              }}
-            />
-          ))}
-      </div>
-
-      <div className="space-y-2">
-        <span className="label">Звук</span>
-        <Segmented
-          columns={value.audioOnly ? 4 : 5}
-          value={sound.value}
-          options={AUDIO_CODECS.filter((item) => !value.audioOnly || item.value !== 'none').map((item) => ({
-            value: item.value,
-            label: item.label,
-            title: item.title,
-          }))}
-          onChange={(audioCodec) => {
-            const next = AUDIO_CODECS.find((item) => item.value === audioCodec)!
-            set({ audioCodec, ...(next.normal ? { audioBitrateKbps: next.normal } : {}) })
-          }}
-        />
-        {sound.max > 0 && (
+    <Section
+      title="Видео"
+      id="compose.video"
+      summary={
+        value.audioOnly
+          ? 'нет'
+          : `${VIDEO_CODECS.find((item) => item.value === value.videoCodec)?.label ?? value.videoCodec} · ${
+              byBitrate ? `${value.bitrateKbps} кбит/с` : qualityWord(value.videoCodec, value.crf)
+            }`
+      }
+    >
+      {/* «Нет» — собрать один звук: так же, как «Нет» у звука. */}
+      <Segmented
+        columns={4}
+        value={value.audioOnly ? 'none' : value.videoCodec}
+        options={VIDEO_CODECS}
+        onChange={(codec) =>
+          codec === 'none'
+            ? set({
+                audioOnly: true,
+                ...(value.audioCodec === 'none' ? { audioCodec: 'mp3', audioBitrateKbps: 256 } : {}),
+              })
+            : set({
+                audioOnly: false,
+                videoCodec: codec,
+                // У AV1 и H.264 скорости называются по-разному: чужое имя
+                // кодировщик не примет. Битрейт — обычный для кодека.
+                // Качество тоже своё у каждого — берём «высокое» его шкалы.
+                ...(codec !== value.videoCodec
+                  ? {
+                      speedPreset: speedOptions(codec)[2].value,
+                      crf: qualityScale(codec).marks[2].crf,
+                      ...(byBitrate ? { bitrateKbps: bitrateNormal(codec, frame) } : {}),
+                    }
+                  : {}),
+              })
+        }
+      />
+      {!value.audioOnly &&
+        (byBitrate ? (
           <SliderNumber
             stacked
-            label="Битрейт звука"
+            label={modeButton}
             unit="кбит/с"
-            value={value.audioBitrateKbps}
-            min={sound.min}
-            max={sound.max}
-            step={8}
-            reset={sound.normal}
-            marks={sound.marks}
-            onChange={(audioBitrateKbps) => set({ audioBitrateKbps })}
+            value={value.bitrateKbps}
+            min={range.min}
+            max={range.max}
+            step={250}
+            reset={bitrateNormal(value.videoCodec, frame)}
+            marks={bitrateMarks(value.videoCodec, frame)}
+            onChange={(bitrate) => {
+              const bitrateKbps = Math.max(200, Math.round(bitrate))
+              setLast((was) => ({ ...was, bitrate: bitrateKbps }))
+              set({ bitrateKbps })
+            }}
           />
-        )}
-      </div>
-
+        ) : (
+          <SliderNumber
+            stacked
+            label={modeButton}
+            unit=""
+            readout={
+              <span className="shrink-0 text-[12px] text-ink" title={`crf ${value.crf}: меньше число — лучше картинка`}>
+                {qualityWord(value.videoCodec, value.crf)}
+              </span>
+            }
+            value={flip(value.crf)}
+            min={scale.best}
+            max={scale.worst}
+            reset={flip(scale.marks[2].crf)}
+            marks={scale.marks.map((mark) => ({ value: flip(mark.crf), label: mark.label, hint: mark.hint }))}
+            onChange={(position) => {
+              const crf = Math.round(flip(position))
+              setLast((was) => ({ ...was, crf }))
+              set({ crf })
+            }}
+          />
+        ))}
       {!value.audioOnly && (
         <div className="flex gap-2">
           <Choice
@@ -531,7 +513,44 @@ export function ComposeRenderPanel({
           />
         </div>
       )}
+    </Section>
 
+    <Section
+      title="Звук"
+      id="compose.audio"
+      summary={
+        sound.value === 'none'
+          ? 'нет'
+          : `${sound.label}${sound.max > 0 ? ` · ${value.audioBitrateKbps} кбит/с` : ''}`
+      }
+    >
+      <Segmented
+        columns={value.audioOnly ? 4 : 5}
+        value={sound.value}
+        options={AUDIO_CODECS.filter((item) => !value.audioOnly || item.value !== 'none').map((item) => ({
+          value: item.value,
+          label: item.label,
+          title: item.title,
+        }))}
+        onChange={(audioCodec) => {
+          const next = AUDIO_CODECS.find((item) => item.value === audioCodec)!
+          set({ audioCodec, ...(next.normal ? { audioBitrateKbps: next.normal } : {}) })
+        }}
+      />
+      {sound.max > 0 && (
+        <SliderNumber
+          stacked
+          label="Битрейт звука"
+          unit="кбит/с"
+          value={value.audioBitrateKbps}
+          min={sound.min}
+          max={sound.max}
+          step={8}
+          reset={sound.normal}
+          marks={sound.marks}
+          onChange={(audioBitrateKbps) => set({ audioBitrateKbps })}
+        />
+      )}
     </Section>
 
     {/* Видеокарта и выравнивание — не про набор, а про сборку вообще: наборы

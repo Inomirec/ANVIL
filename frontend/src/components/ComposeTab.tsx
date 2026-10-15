@@ -49,8 +49,8 @@ import {
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
-import { useComposePlayer } from '../hooks/useComposePlayer'
-import { Button, Dropdown, Empty, IconButton, QuietHints, Segmented, Toggle } from './ui'
+import { useComposePlayer, type PreviewQuality } from '../hooks/useComposePlayer'
+import { Button, Dropdown, Empty, IconButton, QuietHints, Section, Segmented, Toggle } from './ui'
 
 /** Имя готового файла, если поле оставили пустым. */
 const DEFAULT_NAME = 'Project'
@@ -899,11 +899,12 @@ export function ComposeTab() {
                     { value: '360', label: 'Качество просмотра: 360p' },
                     { value: '480', label: 'Качество просмотра: 480p' },
                     { value: '720', label: 'Качество просмотра: 720p' },
+                    // 1080p — только когда кадр проекта не меньше: выше
+                    // своего кадра просмотр не собирается.
+                    ...(height >= 1080 ? [{ value: '1080', label: 'Качество просмотра: 1080p' }] : []),
                   ]}
                   onChange={(value) =>
-                    player.setQuality(
-                      value === 'auto' ? 'auto' : (Number(value) as 360 | 480 | 720),
-                    )
+                    player.setQuality(value === 'auto' ? 'auto' : (Number(value) as PreviewQuality))
                   }
                 >
                   {player.quality === 'auto' ? 'авто' : `${player.quality}p`}
@@ -1056,7 +1057,7 @@ export function ComposeTab() {
       {/* Описания настроек в колонке — при наведении, как и в панелях
           обработки: текстом под каждой галочкой они занимали место. */}
       <QuietHints>
-      <aside className="flex w-[clamp(260px,22vw,300px)] shrink-0 flex-col border-l border-line-soft bg-surface">
+      <aside className="flex w-[clamp(260px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
           {/* Пока выделена надпись, здесь её настройки, а не кадра: так их
               не надо искать, и экран просмотра остаётся открытым — цвет и
@@ -1073,28 +1074,28 @@ export function ComposeTab() {
               видно по самим кнопкам, а форму кадра показывает рамка в окне
               просмотра. Раздел «Клип» тоже убран — имя файла, громкость и
               затухания живут на самом таймлайне. */}
-          <div className="space-y-3">
-            <div>
-              <span className="label">Качество</span>
-              <Segmented
-                columns={4}
-                value={custom ? 'custom' : String(quality)}
-                onChange={(value) => {
-                  if (value === 'custom') useCustom(true)
-                  else setQuality(Number(value))
-                }}
-                options={[
-                  ...FRAME_QUALITY.map((value) => ({
-                    value: String(value),
-                    label: `${value}p`,
-                    title: 'Короткая сторона кадра',
-                  })),
-                  { value: 'custom', label: 'Свой', title: 'Задать ширину и высоту вручную' },
-                ]}
-              />
-            </div>
-
-            {custom ? (
+          <Section
+            title="Качество"
+            id="compose.quality"
+            summary={custom ? `${width}×${height}` : `${quality}p`}
+          >
+            <Segmented
+              columns={4}
+              value={custom ? 'custom' : String(quality)}
+              onChange={(value) => {
+                if (value === 'custom') useCustom(true)
+                else setQuality(Number(value))
+              }}
+              options={[
+                ...FRAME_QUALITY.map((value) => ({
+                  value: String(value),
+                  label: `${value}p`,
+                  title: 'Короткая сторона кадра',
+                })),
+                { value: 'custom', label: 'Свой', title: 'Задать ширину и высоту вручную' },
+              ]}
+            />
+            {custom && (
               <div className="flex items-end gap-2">
                 <SizeField
                   label="Ширина"
@@ -1110,38 +1111,43 @@ export function ComposeTab() {
                   onDone={(next) => setCustomSize(width, next)}
                 />
               </div>
-            ) : (
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="label">Форма</span>
-                  {/* Поворот не объясняем словами: подписи форм сами
-                      переворачиваются, и сразу видно, что получится. */}
-                  <button
-                    type="button"
-                    disabled={shape === '1:1'}
-                    onClick={() => setTurned(!turned)}
-                    title="Повернуть кадр: из 16:9 получится 9:16"
-                    className={`mb-1.5 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-35 ${
-                      turned ? 'bg-accent/20 text-accent-soft' : 'text-ink-faint hover:bg-surface-3'
-                    }`}
-                  >
-                    <RotateCw size={11} />
-                    вертикально
-                  </button>
-                </div>
-                <Segmented
-                  columns={4}
-                  value={shape}
-                  onChange={setShape}
-                  options={FRAME_SHAPES.map((item) => ({
-                    value: item.value,
-                    label: turned ? item.label.split(':').reverse().join(':') : item.label,
-                    title: item.hint,
-                  }))}
-                />
-              </div>
             )}
-          </div>
+          </Section>
+
+          {!custom && (
+            <Section
+              title="Форма"
+              id="compose.shape"
+              summary={turned ? shape.split(':').reverse().join(':') : shape}
+              action={
+                // Поворот не объясняем словами: подписи форм сами
+                // переворачиваются, и сразу видно, что получится.
+                <button
+                  type="button"
+                  disabled={shape === '1:1'}
+                  onClick={() => setTurned(!turned)}
+                  title="Повернуть кадр: из 16:9 получится 9:16"
+                  className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-35 ${
+                    turned ? 'bg-accent/20 text-accent-soft' : 'text-ink-faint hover:bg-surface-3'
+                  }`}
+                >
+                  <RotateCw size={11} />
+                  вертикально
+                </button>
+              }
+            >
+              <Segmented
+                columns={4}
+                value={shape}
+                onChange={setShape}
+                options={FRAME_SHAPES.map((item) => ({
+                  value: item.value,
+                  label: turned ? item.label.split(':').reverse().join(':') : item.label,
+                  title: item.hint,
+                }))}
+              />
+            </Section>
+          )}
 
           {/* Сборка — тут же, когда ничего не выбрано: колонка пустовала ровно
               тогда, когда пора собирать, а отдельное окно было лишним шагом.

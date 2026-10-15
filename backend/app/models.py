@@ -367,6 +367,10 @@ class ComposeClip(ComposeModel):
     has_audio: bool | None = None
     #: Громкость: 1.0 — как есть, 0 — тишина.
     volume: float = Field(default=1.0, ge=0.0, le=4.0)
+    #: Куда идёт звук: −1 — весь в левое ухо, 1 — весь в правое, 0 — как в
+    #: файле. Звук переводится на другую сторону, а не глушится: ролик со
+    #: звуком в одном ухе так можно вывести в другое.
+    pan: float = Field(default=0.0, ge=-1.0, le=1.0)
     #: Плавное появление и уход звука, в секундах.
     fade_in: float = Field(default=0.0, ge=0, le=30)
     fade_out: float = Field(default=0.0, ge=0, le=30)

@@ -873,6 +873,26 @@ def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: int = 25
     return ",format=yuva420p," + ",".join(parts)
 
 
+def pan_filter(pan: float) -> str:
+    """Перевод звука влево или вправо.
+
+    Не баланс, который просто глушит одну сторону: звук уходящей стороны
+    переливается в другую. Так ролик, где звук только в левом ухе, выводится
+    вправо, а с копией клипа на другой дорожке — в оба уха сразу. Моно
+    сначала раскладывается на два одинаковых канала.
+    """
+    if abs(pan) < 1e-3:
+        return ""
+    share = min(abs(pan), 1.0)
+    keep = f"{1 - share:.3f}"
+    give = f"{share:.3f}"
+    if pan > 0:
+        route = f"c0={keep}*c0|c1=c1+{give}*c0"
+    else:
+        route = f"c0=c0+{give}*c1|c1={keep}*c1"
+    return f"aformat=channel_layouts=stereo,pan=stereo|{route}"
+
+
 def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> str:
     """Цепочка фильтров для звука одного клипа.
 
@@ -893,6 +913,9 @@ def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> st
         parts.append(extra.rstrip(","))
     if abs(clip.volume - 1.0) > 1e-6:
         parts.append(f"volume={clip.volume:.3g}")
+    pan = pan_filter(clip.pan)
+    if pan:
+        parts.append(pan)
 
     # Сколько клипа осталось за левым краем окна.
     skip = max(0.0, at - clip.start)
