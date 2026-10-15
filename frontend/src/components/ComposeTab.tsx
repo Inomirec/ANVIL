@@ -44,7 +44,7 @@ import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
   ComposeRenderPanel,
   DEFAULT_RENDER,
-  AUDIO_FILE,
+  bitrateForFrame,
   type RenderSettings,
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
@@ -225,14 +225,27 @@ export function ComposeTab() {
       return DEFAULT_RENDER
     }
   })
+  // Сменили размер кадра набором (480p, 720p, 1080p, форма) — битрейт
+  // переезжает следом: подписи шкалы считаются от кадра, и «обычно» для
+  // 1080p на 480p было бы втрое больше нужного. Свой размер кадра —
+  // исключение: там человек сам знает, чего хочет.
+  const lastFrame = useRef<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const was = lastFrame.current
+    lastFrame.current = { width, height }
+    if (!was || custom || (was.width === width && was.height === height)) return
+    setRender((current) => {
+      if (current.bitrateKbps <= 0) return current
+      const next = { ...current, bitrateKbps: bitrateForFrame(current.bitrateKbps, current.videoCodec, was, { width, height }) }
+      localStorage.setItem('sgh.composeRender', JSON.stringify(next))
+      return next
+    })
+  }, [width, height, custom])
+
   const updateRender = (next: RenderSettings) => {
     setRender(next)
     localStorage.setItem('sgh.composeRender', JSON.stringify(next))
   }
-  // Картинки на таймлайне нет (оставили от ролика один звук) — соберётся
-  // звуковой файл, а не видео с чёрным кадром. Сервер решает так же.
-  const allClips = tracks.flatMap((track) => track.clips)
-  const soundOnly = allClips.length > 0 && !allClips.some((clip) => clip.kind !== 'audio')
   // Куда и под каким именем сохранять. Папку запоминаем: готовое обычно
   // складывают в одно и то же место, и выбирать его каждый раз заново незачем.
   const [outputName, setOutputName] = useState('')
@@ -1107,17 +1120,6 @@ export function ComposeTab() {
           {/* Добавить эффект, обрезку, маску — неброско, над сборкой: большая
               кнопка наверху колонки забирала на себя всё внимание. */}
           {mediaClip && !textClip && !fillClip && <ClipAddBar clip={mediaClip} />}
-          {/* Что выбрано для сборки, и так видно в настройках — здесь только
-              то, чего там не видно: картинки на таймлайне нет, и соберётся
-              один звук. */}
-          {soundOnly && !render.audioOnly && (
-            <p className="text-[11px] leading-snug text-warn">
-              {render.audioCodec === 'none'
-                ? 'Картинки нет, а звук выключен — выберите кодек звука'
-                : `Картинки нет — соберётся только звук · ${AUDIO_FILE[render.audioCodec] ?? 'M4A'}`}
-            </p>
-          )}
-
           {/* Имя и папка — одной строкой: это про один и тот же файл. */}
           <div className="flex items-center gap-2">
             <input

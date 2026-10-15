@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowLeftRight, Check, ChevronDown } from 'lucide-react'
 import { SliderNumber } from './ComposeTextPanel'
+import { useCompose } from '../composeStore'
 import { Dropdown, Section, Segmented, Toggle } from './ui'
 
 /**
@@ -29,11 +30,16 @@ export interface RenderSettings {
 export interface RenderPreset extends RenderSettings {
   id: string
   label: string
+  /** Какая подпись шкалы битрейта у набора: 0 — экономно, 1 — обычно, 2 — с запасом. */
+  bitrateLevel: number
 }
 
+/** Размер кадра проекта — по нему считаются подписи битрейта. */
+export type Frame = { width: number; height: number }
+
 /** Как называется набор, с которым совпадают настройки, — или «Свои настройки». */
-export function presetName(value: RenderSettings): string {
-  const found = BUILTIN_PRESETS.find((preset) => sameAs(value, preset))
+export function presetName(value: RenderSettings, frame: Frame): string {
+  const found = BUILTIN_PRESETS.find((preset) => sameAs(value, preset, frame))
   return found ? found.label : 'Свои настройки'
 }
 
@@ -45,7 +51,8 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
     label: 'AV1 · Opus — лучшее качество',
     videoCodec: 'av1_svt',
     crf: 22,
-    bitrateKbps: 6000,
+    bitrateKbps: 0,
+    bitrateLevel: 2,
     speedPreset: '5',
     useGpu: false,
     audioCodec: 'opus',
@@ -57,7 +64,8 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
     label: 'H.264 · AAC — лучшее качество',
     videoCodec: 'h264',
     crf: 16,
-    bitrateKbps: 12000,
+    bitrateKbps: 0,
+    bitrateLevel: 2,
     speedPreset: 'slow',
     useGpu: false,
     audioCodec: 'aac',
@@ -69,7 +77,8 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
     label: 'Только звук · MP3',
     videoCodec: 'h264',
     crf: 16,
-    bitrateKbps: 12000,
+    bitrateKbps: 0,
+    bitrateLevel: 1,
     speedPreset: 'slow',
     useGpu: false,
     audioCodec: 'mp3',
@@ -79,11 +88,10 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
   },
 ]
 
-export const DEFAULT_RENDER: RenderSettings = settingsOf(BUILTIN_PRESETS[0])
-
-function settingsOf(preset: RenderPreset): RenderSettings {
-  const { id: _id, label: _label, ...settings } = preset
-  return settings
+/** Настройки набора; битрейт — по размеру кадра проекта. */
+function settingsOf(preset: RenderPreset, frame: Frame): RenderSettings {
+  const { id: _id, label: _label, bitrateLevel, ...settings } = preset
+  return { ...settings, bitrateKbps: bitrateMarks(settings.videoCodec, frame)[bitrateLevel].value }
 }
 
 /**
@@ -94,13 +102,14 @@ function settingsOf(preset: RenderPreset): RenderSettings {
  * задан сейчас: битрейт — с битрейтом набора, качество — с качеством. У
  * одного звука не важно и всё, что про картинку.
  */
-export function sameAs(value: RenderSettings, preset: RenderPreset): boolean {
-  const settings = settingsOf(preset)
+export function sameAs(value: RenderSettings, preset: RenderPreset, frame: Frame): boolean {
+  const settings = settingsOf(preset, frame)
   if (Boolean(value.audioOnly) !== Boolean(settings.audioOnly)) return false
-  const picture: (keyof RenderSettings)[] = ['videoCodec', 'crf', 'bitrateKbps', 'speedPreset', 'useGpu', 'container']
+  const picture: (keyof RenderSettings)[] = ['videoCodec', 'crf', 'bitrateKbps', 'speedPreset', 'container']
   const unused: keyof RenderSettings = value.bitrateKbps > 0 ? 'crf' : 'bitrateKbps'
+  // Видеокарта — дополнительная настройка, не часть набора.
   return (Object.keys(settings) as (keyof RenderSettings)[])
-    .filter((key) => key !== unused && key !== 'audioOnly' && !(settings.audioOnly && picture.includes(key)))
+    .filter((key) => key !== unused && key !== 'audioOnly' && key !== 'useGpu' && !(settings.audioOnly && picture.includes(key)))
     .every((key) => value[key] === settings[key])
 }
 
@@ -153,36 +162,51 @@ const CONTAINERS = [
 ]
 
 /**
- * Подписи к шкале битрейта.
+ * Шкала битрейта — по кодеку и по размеру кадра проекта.
  *
- * Голое число кбит/с ничего не говорит. Шкала кончается на четырнадцати
- * тысячах: это верх разумного для 1080p, а программой в основном собирают
- * именно его. Кому нужно больше — впишет число руками. Пока верх был
- * тридцать тысяч, три четверти ползунка занимали значения, которые никто не
- * ставит, а нужные подписи налезали друг на друга.
+ * AV1 той же картинке нужно вдвое меньше, чем H.264, а 480p — втрое меньше,
+ * чем 1080p: одни подписи на все случаи врали бы. Обычный битрейт для 1080p
+ * у каждого кодека свой, для другого кадра он пересчитывается по числу
+ * точек в степени 0.75 — вес растёт медленнее площади. Подписи —
+ * «экономно», «обычно», «с запасом»; края шкалы — от половины экономного до
+ * полутора «с запасом», чтобы подписи не жались в один угол.
  */
-const BITRATE_MAX = 16000
+const NORMAL_1080: Record<string, number> = { av1_svt: 4500, h265: 6000, h264: 8000 }
+
+function round250(value: number): number {
+  return Math.max(250, Math.round(value / 250) * 250)
+}
+
+export function bitrateMarks(codec: string, frame: Frame): { value: number; label: string }[] {
+  const pixels = Math.max(1, frame.width * frame.height)
+  const normal = (NORMAL_1080[codec] ?? NORMAL_1080.h264) * Math.pow(pixels / (1920 * 1080), 0.75)
+  return [
+    { value: round250(normal * 0.55), label: 'экономно' },
+    { value: round250(normal), label: 'обычно' },
+    { value: round250(normal * 2), label: 'с запасом' },
+  ]
+}
+
+/** Обычный битрейт для кодека и кадра — его ставим при смене кодека. */
+function bitrateNormal(codec: string, frame: Frame): number {
+  return bitrateMarks(codec, frame)[1].value
+}
+
+function bitrateRange(codec: string, frame: Frame): { min: number; max: number } {
+  const marks = bitrateMarks(codec, frame)
+  return { min: round250(marks[0].value / 2), max: Math.ceil((marks[2].value * 1.5) / 500) * 500 }
+}
+
 /**
- * Подписи битрейта у каждого кодека свои: AV1 той же картинке нужно вдвое
- * меньше, чем H.264, и одна шкала на всех врала бы двум из трёх. Подписей
- * по три и далеко друг от друга — в узкой колонке четыре налезали.
+ * Битрейт под новый кадр: стоял на подписи — встаёт на ту же подпись нового
+ * кадра, иначе пересчитывается в той же доле от обычного.
  */
-const BITRATE_MARKS: Record<string, { value: number; label: string }[]> = {
-  av1_svt: [
-    { value: 2000, label: '720p' },
-    { value: 4500, label: '1080p' },
-    { value: 9000, label: 'с запасом' },
-  ],
-  h265: [
-    { value: 3000, label: '720p' },
-    { value: 6000, label: '1080p' },
-    { value: 11000, label: 'с запасом' },
-  ],
-  h264: [
-    { value: 4000, label: '720p' },
-    { value: 8000, label: '1080p' },
-    { value: 14000, label: 'с запасом' },
-  ],
+export function bitrateForFrame(value: number, codec: string, from: Frame, to: Frame): number {
+  const before = bitrateMarks(codec, from)
+  const after = bitrateMarks(codec, to)
+  const level = before.findIndex((mark) => Math.abs(mark.value - value) <= mark.value * 0.03)
+  if (level >= 0) return after[level].value
+  return round250((value * after[1].value) / before[1].value)
 }
 
 /**
@@ -210,10 +234,6 @@ function qualityWord(codec: string, crf: number): string {
   return 'низкое'
 }
 
-/** Обычный битрейт для кодека — его ставим при смене кодека. */
-function bitrateNormal(codec: string): number {
-  return (BITRATE_MARKS[codec] ?? BITRATE_MARKS.h264)[1].value
-}
 
 /** Названия скоростей: у AV1 это числа, у остальных — слова. */
 function speedOptions(codec: string): { value: string; label: string }[] {
@@ -294,6 +314,10 @@ export function ComposeRenderPanel({
   loudnorm: boolean
   onLoudnorm: (value: boolean) => void
 }) {
+  const width = useCompose((state) => state.width)
+  const height = useCompose((state) => state.height)
+  const frame = { width, height }
+  const range = bitrateRange(value.videoCodec, frame)
   const set = (patch: Partial<RenderSettings>) => onChange({ ...value, ...patch })
   const sound = AUDIO_CODECS.find((item) => item.value === value.audioCodec) ?? AUDIO_CODECS[0]
   const byBitrate = value.bitrateKbps > 0
@@ -302,7 +326,7 @@ export function ComposeRenderPanel({
   // лучше картинка.
   const flip = (crf: number) => scale.best + scale.worst - crf
   // Последние значения обоих способов — переключение туда и обратно их не теряет.
-  const [last, setLast] = useState({ bitrate: value.bitrateKbps || bitrateNormal(value.videoCodec), crf: value.crf })
+  const [last, setLast] = useState({ bitrate: value.bitrateKbps || bitrateNormal(value.videoCodec, frame), crf: value.crf })
 
   // Способ задания веса — маленькой кнопкой на месте названия: отдельная
   // строка ради переключателя занимала место в узкой колонке.
@@ -323,15 +347,17 @@ export function ComposeRenderPanel({
   )
 
   return (
-    <Section title="Сборка" id="compose.render" summary={presetName(value)}>
+    <>
+    <Section title="Сборка" id="compose.render" summary={presetName(value, frame)}>
       <div className="space-y-1">
         {BUILTIN_PRESETS.map((preset) => {
-          const picked = sameAs(value, preset)
+          const picked = sameAs(value, preset, frame)
           return (
             <button
               key={preset.id}
               type="button"
-              onClick={() => onChange(settingsOf(preset))}
+              // Видеокарта — своя настройка человека, набор её не трогает.
+              onClick={() => onChange({ ...settingsOf(preset, frame), useGpu: value.useGpu })}
               className={`flex w-full items-center gap-2 truncate rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] transition-colors ${
                 picked
                   ? 'border-accent bg-accent/15 text-accent-soft'
@@ -368,7 +394,7 @@ export function ComposeRenderPanel({
                     ? {
                         speedPreset: speedOptions(codec)[2].value,
                         crf: qualityScale(codec).marks[2].crf,
-                        ...(byBitrate ? { bitrateKbps: bitrateNormal(codec) } : {}),
+                        ...(byBitrate ? { bitrateKbps: bitrateNormal(codec, frame) } : {}),
                       }
                     : {}),
                 })
@@ -381,11 +407,11 @@ export function ComposeRenderPanel({
               label={modeButton}
               unit="кбит/с"
               value={value.bitrateKbps}
-              min={500}
-              max={BITRATE_MAX}
+              min={range.min}
+              max={range.max}
               step={250}
-              reset={bitrateNormal(value.videoCodec)}
-              marks={BITRATE_MARKS[value.videoCodec] ?? BITRATE_MARKS.h264}
+              reset={bitrateNormal(value.videoCodec, frame)}
+              marks={bitrateMarks(value.videoCodec, frame)}
               onChange={(bitrate) => {
                 const bitrateKbps = Math.max(200, Math.round(bitrate))
                 setLast((was) => ({ ...was, bitrate: bitrateKbps }))
@@ -464,6 +490,11 @@ export function ComposeRenderPanel({
         </div>
       )}
 
+    </Section>
+
+    {/* Видеокарта и выравнивание — не про набор, а про сборку вообще: наборы
+        их не трогают и подсветку набора они не гасят. */}
+    <Section title="Дополнительные настройки" id="compose.renderExtra">
       <div className="space-y-1">
         {!value.audioOnly && (
           <Toggle
@@ -481,5 +512,9 @@ export function ComposeRenderPanel({
         />
       </div>
     </Section>
+    </>
   )
 }
+
+/** Настройки по умолчанию — в конце файла: им нужна шкала битрейта, объявленная выше. */
+export const DEFAULT_RENDER: RenderSettings = settingsOf(BUILTIN_PRESETS[0], { width: 1280, height: 720 })
