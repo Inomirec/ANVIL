@@ -216,7 +216,6 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
         ref={box}
         className="absolute cursor-crosshair"
         style={place}
-        title="Своя форма: нажимайте по картинке, чтобы поставить точки. Нажатие по первой точке замкнёт форму. Esc — начать заново"
         onMouseDown={addPoint}
       >
         <div className="pointer-events-none absolute inset-0 border border-dashed border-white/30" />
@@ -269,7 +268,6 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
           width: `${mask.w * 100}%`,
           height: `${mask.h * 100}%`,
         }}
-        title="Маска: тяните за середину — сдвинуть, за края и уголки — изменить размер. Enter или Esc — готово"
         onMouseDown={(event) => {
           if (!begin(event)) return
           drag.current = { kind: 'move', fromX: event.clientX, fromY: event.clientY, start: mask }
@@ -292,7 +290,6 @@ export function ComposeMaskBox({ clip }: { clip: ComposeClip }) {
             {custom.map(([x, y], index) => (
               <div
                 key={index}
-                title="Точка формы — тяните, чтобы поправить"
                 // Над ручками рамки: крайние точки формы всегда лежат на её
                 // краю, и иначе точку перехватывала ручка размера.
                 className="absolute z-10 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full bg-white"

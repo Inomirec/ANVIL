@@ -101,7 +101,7 @@
   input[type='range'].master-fader {
     writing-mode: vertical-lr;
     direction: rtl;
-    width: 16px;
+    width: 24px;
     height: auto;
     align-self: stretch;
   }
@@ -111,9 +111,9 @@
   }
   input[type='range'].master-fader::-webkit-slider-thumb {
     margin-top: 0;
-    margin-left: -5px;
-    width: 14px;
-    height: 10px;
+    margin-left: -10px;
+    width: 24px;
+    height: 13px;
     border-radius: 3px;
   }
 

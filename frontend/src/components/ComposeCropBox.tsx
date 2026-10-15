@@ -175,7 +175,6 @@ export function ComposeCropBox({ clip }: { clip: ComposeClip }) {
           width: `${(1 - left - right) * 100}%`,
           height: `${(1 - top - bottom) * 100}%`,
         }}
-        title="Обрезка: тяните края и уголки. За середину — сдвинуть окно обрезки. Двойное нажатие — убрать обрезку. Enter или Esc — готово"
         onDoubleClick={() =>
           useCompose.getState().applyValues(clip.id, { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0 })
         }

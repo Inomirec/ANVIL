@@ -20,6 +20,7 @@ import {
   type Anim,
   type AnimKey,
   type AnimValue,
+  type Ease,
 } from './composeAnim'
 
 export { KEY_NEAR, shownAt } from './composeAnim'
@@ -177,16 +178,22 @@ export interface ComposeClip {
   shadowY?: number
   shadowColor?: string
   shadowAlpha?: number
+  /** Размытие тени в долях высоты кадра (как сигма размытия). */
+  shadowBlur?: number
   /** Подложка под буквами — когда кадр пёстрый и обводки мало. */
   box?: boolean
   boxColor?: string
   boxAlpha?: number
   boxPad?: number
+  /** Скругление углов подложки в долях высоты кадра. */
+  boxRadius?: number
   align?: 'left' | 'center' | 'right'
 
   /* --- заливка: только у клипов вида color ---------------------------- */
   /** Скругление углов в долях высоты кадра. Рамка и тень — те же поля, что у надписи. */
   radius?: number
+  /** Скругление внешних углов рамки; ноль — как у заливки плюс толщина рамки. */
+  strokeRound?: number
 }
 
 /**
@@ -235,10 +242,12 @@ export const TEXT_DEFAULTS = {
   shadowY: 0.004,
   shadowColor: '#000000',
   shadowAlpha: 0.75,
+  shadowBlur: 0,
   box: false,
   boxColor: '#000000',
   boxAlpha: 0.5,
   boxPad: 0.02,
+  boxRadius: 0,
   align: 'center' as const,
 }
 
@@ -390,7 +399,9 @@ export function volumeLabel(gain: number): string {
 /** Сколько висит картинка, если не трогать её длину. */
 export const DEFAULT_IMAGE_SECONDS = 3
 //: Сколько по умолчанию висит надпись — обычная длина субтитра.
-export const DEFAULT_TEXT_SECONDS = 3
+export const DEFAULT_TEXT_SECONDS = 5
+/** Заливка — шире картинки: узкую неудобно растягивать за края. */
+export const DEFAULT_FILL_SECONDS = 5
 /** Короче этого клип не тянется — иначе он исчезает под курсором. */
 export const MIN_CLIP_SECONDS = 0.2
 
@@ -601,6 +612,19 @@ interface Saved {
 
 interface State extends Saved {
   playhead: number
+  /**
+   * Белая игла — откуда начали смотреть. Есть только во время просмотра:
+   * красная игла тогда едет сама, и нажатия по таймлайну двигают белую, а не
+   * её — раньше красная прыгала под курсор и тут же возвращалась. Когда
+   * просмотр остановили, красная встаёт на белую.
+   */
+  cue: number | null
+  /** Идёт просмотр — красной иглой управляет проигрыватель. */
+  playbackActive: boolean
+  /** Проигрыватель начал или закончил просмотр. */
+  setPlayback: (on: boolean) => void
+  /** Игла от проигрывателя — мимо белой иглы. */
+  moveHead: (at: number) => void
   /** Выбранные клипы. Несколько — когда обвели рамкой. */
   selected: string[]
   /** Что человек выбрал сам, до того как выделение разошлось по группам. */
@@ -693,6 +717,8 @@ interface State extends Saved {
   moveKeys: (id: string, group: string, times: number[], delta: number) => number
   /** Удалить выбранные ключи. */
   deleteKeys: () => void
+  /** Вид перехода от выбранных ключей к следующим. */
+  setKeysEase: (ease: Ease) => void
   /** Скопировать выбранные ключи; вернёт, сколько скопировано. */
   copyKeys: () => number
   hasKeyCopy: () => boolean
@@ -1095,6 +1121,8 @@ function recall(key: string, fallback: number): number {
 export const useCompose = create<State>((set, get) => ({
   ...loadSaved(),
   playhead: 0,
+  cue: null,
+  playbackActive: false,
   selected: [],
   picked: [],
   projectName: '',
@@ -1215,7 +1243,26 @@ export const useCompose = create<State>((set, get) => ({
     // Игла стоит на кадре, а не между ними: иначе ключ или разрез ложатся в
     // середину кадра, и попасть в последний кадр сцены нельзя.
     const fps = get().fps || 30
-    set({ playhead: Math.max(0, Math.round(at * fps) / fps) })
+    const snapped = Math.max(0, Math.round(at * fps) / fps)
+    // Во время просмотра красной иглой правит проигрыватель — человек
+    // двигает белую: с неё и начнётся следующий просмотр.
+    if (get().playbackActive) set({ cue: snapped })
+    else set({ playhead: snapped })
+  },
+
+  moveHead(at) {
+    set({ playhead: Math.max(0, at) })
+  },
+
+  setPlayback(on) {
+    if (on) {
+      set({ playbackActive: true, cue: get().playhead })
+      return
+    }
+    // Остановили — красная встаёт туда, где белая: откуда начинали или
+    // куда человек её переставил, пока смотрел.
+    const { cue } = get()
+    set({ playbackActive: false, cue: null, ...(cue !== null ? { playhead: cue } : {}) })
   },
 
   setScale(scale) {
@@ -1402,7 +1449,7 @@ export const useCompose = create<State>((set, get) => ({
         kind: 'color',
         color,
         start: Math.round((at ?? state.playhead) * 100) / 100,
-        duration: DEFAULT_IMAGE_SECONDS,
+        duration: DEFAULT_FILL_SECONDS,
         sourceIn: 0,
         sourceDuration: 0,
         hasAudio: false,
@@ -2148,11 +2195,43 @@ export const useCompose = create<State>((set, get) => ({
       if (anim[field].length) left = true
       else delete anim[field]
     }
+    set({ selectedKeys: null })
+    // Маска и обрезка живут на ключах: убрали все их ключи — убрали и саму
+    // маску или обрезку. Иначе удалённая маска продолжала работать в том
+    // виде, какой была под иглой, хотя ключей на таймлайне уже нет.
+    if (!left && group.id === 'mask') {
+      if (get().masking === clip.id) set({ masking: null })
+      if (get().animFocus === 'mask') set({ animFocus: null })
+      get().updateClip(clip.id, { mask: null, anim })
+      return
+    }
+    if (!left && group.id === 'crop') {
+      if (get().cropping === clip.id) set({ cropping: null })
+      if (get().animFocus === 'crop') set({ animFocus: null })
+      get().updateClip(clip.id, { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0, anim })
+      return
+    }
     // Убрали все ключи — показатель остаётся таким, каким был под иглой.
     const local = get().playhead - clip.start
     const next = left ? { ...clip, anim } : withValues({ ...clip, anim }, groupValues(clip, group, local))
     get().updateClip(clip.id, { ...next })
-    set({ selectedKeys: null })
+  },
+
+  setKeysEase(ease) {
+    const chosen = get().selectedKeys
+    if (!chosen) return
+    const clip = get().findClip(chosen.clipId)?.clip
+    const group = clip && groupOf(clip, chosen.group)
+    if (!clip || !group) return
+    get().mark()
+    const near = (t: number) => chosen.times.some((time) => Math.abs(time - t) < KEY_NEAR / 2)
+    const anim: Anim = { ...(clip.anim ?? {}) }
+    for (const field of group.fields) {
+      anim[field] = (anim[field] ?? []).map((key) =>
+        near(key.t) ? (ease === 'smooth' ? (({ e: _e, ...rest }) => rest)(key) : { ...key, e: ease }) : key,
+      )
+    }
+    get().updateClip(clip.id, { anim })
   },
 
   copyKeys() {

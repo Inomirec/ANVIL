@@ -314,6 +314,9 @@ class AnimKey(ComposeModel):
     v: float = 0.0
     #: Точки своей формы маски — у показателя ``mask.points`` вместо числа.
     p: list[tuple[float, float]] | None = None
+    #: Как идёт переход от этого ключа к следующему (``anim.EASES``); пусто —
+    #: плавно, с разгоном и торможением.
+    e: str | None = None
 
 
 class ClipMask(ComposeModel):
@@ -465,11 +468,15 @@ class ComposeClip(ComposeModel):
     shadow_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
     #: Насколько видна тень: 0 — её нет вовсе.
     shadow_alpha: float = Field(default=0.6, ge=0.0, le=1.0)
+    #: Размытие тени в долях высоты кадра (как сигма размытия): 0 — резкая.
+    shadow_blur: float = Field(default=0.0, ge=0.0, le=0.2)
     #: Подложка под текстом: цвет, прозрачность и отступ от букв.
     box: bool = False
     box_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
     box_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
     box_pad: float = Field(default=0.02, ge=0.0, le=0.5)
+    #: Скругление углов подложки в долях высоты кадра.
+    box_radius: float = Field(default=0.0, ge=0.0, le=0.5)
     #: Выравнивание строк между собой, когда их несколько.
     align: Literal["left", "center", "right"] = "center"
 
@@ -477,6 +484,9 @@ class ComposeClip(ComposeModel):
     #: Скругление углов в долях высоты кадра. Обводка и тень у заливки общие
     #: с надписью — те же поля ``stroke*`` и ``shadow*``.
     radius: float = Field(default=0.0, ge=0.0, le=1.0)
+    #: Скругление внешних углов рамки заливки в долях высоты кадра. Ноль —
+    #: как у самой заливки: её скругление плюс толщина рамки.
+    stroke_round: float = Field(default=0.0, ge=0.0, le=1.0)
     #: Готовая картинка заливки со скруглением, рамкой и тенью. Заполняет её
     #: сервер перед сборкой (``compose.prepare_fills``), интерфейс её не шлёт.
     fill_image: str = ""

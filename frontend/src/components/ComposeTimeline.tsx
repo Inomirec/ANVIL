@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ChevronRight,
   FlagTriangleLeft,
@@ -33,7 +34,7 @@ import { setMagnet, useMagnet } from '../lib/magnet'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
 import { cutTimes, frameCode, scenesOf, useScenes } from '../lib/scenes'
-import { groupOf, hasKeys, hasPlaceKeys, KEY_NEAR, keyTimes, valueAt } from '../composeAnim'
+import { EASES, groupOf, hasKeys, hasPlaceKeys, KEY_NEAR, keyTimes, valueAt } from '../composeAnim'
 import { KeyBar } from './ComposeAnimUi'
 import { SceneStrip } from './SceneStrip'
 import {
@@ -69,7 +70,14 @@ import { IconButton } from './ui'
 
 /** Радиус прилипания и ширина уголка для растягивания, в пикселях. */
 const SNAP_PIXELS = 8
-const GRIP_PIXELS = 10
+/** Полоса у края клипа, за которую тянут длину. Шире — мешала двигать сам клип. */
+const GRIP_PIXELS = 7
+
+/**
+ * Что копировали последним — ключи или клипы: от этого зависит, что вставит
+ * Ctrl+V. Общее на весь таймлайн: копируют и клавишами, и из меню ключа.
+ */
+const copied: { kind: 'keys' | 'clips' } = { kind: 'clips' }
 /**
  * Уголок затухания. Заметно крупнее края растягивания и живёт только в
  * верхней части клипа: попадать в него мышью с точностью до пикселя не
@@ -192,6 +200,7 @@ export function ComposeTimeline({
 }) {
   const tracks = useCompose((state) => state.tracks)
   const playhead = useCompose((state) => state.playhead)
+  const cue = useCompose((state) => state.cue)
   const selected = useCompose((state) => state.selected)
   const scale = useCompose((state) => state.scale)
   const fps = useCompose((state) => state.fps) || 30
@@ -236,7 +245,6 @@ export function ComposeTimeline({
   // Меню дорожки бывает двух видов: по полотну — что положить в это место,
   // по колонке с названием — что сделать с самой дорожкой.
   /** Что копировали последним — ключи или клипы: от этого зависит Ctrl+V. */
-  const lastCopy = useRef<'keys' | 'clips'>('clips')
   const [trackMenu, setTrackMenu] = useState<{
     x: number
     y: number
@@ -529,9 +537,11 @@ export function ComposeTimeline({
         const shift = begin - origin.start
         // Тянем за левый край — у ролика вместе с началом уезжает и точка,
         // с которой он играет: иначе кусок «съезжал» бы по содержимому.
-        const sourceIn = origin.kind === 'image' ? 0 : Math.max(0, origin.sourceIn + shift * speed)
-        const limited =
-          origin.kind === 'image' ? begin : origin.start + (sourceIn - origin.sourceIn) / speed
+        // У картинки, надписи и заливки нет файла с началом — их тянут влево
+        // сколько угодно; упираться в «начало файла» может только ролик.
+        const sourceless = origin.kind === 'image' || origin.kind === 'text' || origin.kind === 'color'
+        const sourceIn = sourceless ? 0 : Math.max(0, origin.sourceIn + shift * speed)
+        const limited = sourceless ? begin : origin.start + (sourceIn - origin.sourceIn) / speed
         state.resizeClip(
           current.id,
           Math.max(0, limited),
@@ -657,18 +667,34 @@ export function ComposeTimeline({
           // Выбраны ромбики ключей — копируем ключи, а не клипы.
           if (state.selectedKeys) {
             const taken = state.copyKeys()
-            lastCopy.current = 'keys'
+            copied.kind = 'keys'
             if (taken) toast(`Скопировано ключей: ${taken}`, 'info')
             return
           }
-          lastCopy.current = 'clips'
+          copied.kind = 'clips'
           const taken = state.copyClips(state.selected)
           if (taken) toast(`Скопировано: ${taken} ${plural(taken, ['клип', 'клипа', 'клипов'])}`, 'info')
+        } else if (key === 'x' || key === 'ч') {
+          // Вырезать: скопировать и убрать — ключи, если выбраны ромбики,
+          // иначе клипы.
+          event.preventDefault()
+          const state = useCompose.getState()
+          if (state.selectedKeys) {
+            if (state.copyKeys()) {
+              copied.kind = 'keys'
+              state.deleteKeys()
+            }
+            return
+          }
+          if (state.selected.length && state.copyClips(state.selected)) {
+            copied.kind = 'clips'
+            state.removeClips(state.selected)
+          }
         } else if (key === 'v' || key === 'м') {
           event.preventDefault()
           // Последними копировали ключи — вставляем их от иглы в настройку
           // с включёнными часиками.
-          if (lastCopy.current === 'keys') {
+          if (copied.kind === 'keys') {
             if (!useCompose.getState().pasteKeys()) {
               toast('Ключи вставляются в ту же настройку: включите её часики у выбранного клипа', 'info')
             }
@@ -824,9 +850,9 @@ export function ComposeTimeline({
           посередине — просмотр, справа — что делают со всем монтажом и с
           самим таймлайном. Середина держится по центру окна и не ездит,
           когда слева появляются надписи вроде «добавляю файл…». */}
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line-soft px-2">
+      <div className="@container flex h-9 shrink-0 items-center gap-2 border-b border-line-soft px-2">
         {/* Слева: что делают с клипами и дорожками */}
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+        <div className="flex min-w-0 flex-auto items-center gap-0.5 overflow-hidden">
           <IconButton className="h-7 w-7"
             title="Отменить последнее действие (Ctrl+Z)"
             onClick={() => useCompose.getState().undo()}
@@ -880,15 +906,6 @@ export function ComposeTimeline({
           </IconButton>
           <KeyBar />
 
-          {/* Сколько выбрано — числом: слово в плотной панели обрезалось. */}
-          {selected.length > 1 && (
-            <span
-              className="ml-1 shrink-0 bg-accent/20 px-1.5 font-mono text-[11px] tabular-nums text-accent-soft"
-              title={`Выбрано клипов: ${selected.length}`}
-            >
-              {selected.length}
-            </span>
-          )}
           {/* Чтение файла занимает мгновение, но без этого окно выглядит
               зависшим: человек бросил файл, а на дорожке пока пусто. */}
           {adding && (
@@ -931,8 +948,24 @@ export function ComposeTimeline({
             <Repeat size={14} />
           </IconButton>
           {/* Громкость прослушивания: на готовый файл не влияет, поэтому стоит
-              здесь, рядом с кнопками просмотра. Значком, а ползунок всплывает
-              над ним: полоска в строке не давала панели уместиться. */}
+              здесь, рядом с кнопками просмотра. Есть место — обычной
+              полоской; тесно (узкое окно) — значком, а ползунок всплывает
+              над ним, иначе панель не помещалась. */}
+          <div
+            className="hidden w-[86px] items-center gap-1 @[820px]:flex"
+            title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}
+          >
+            <Headphones size={13} className="shrink-0 text-ink-faint" />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(player.volume * 100)}
+              onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
+              className="w-full"
+            />
+          </div>
+          <span className="@[820px]:hidden">
           <VolumeControl
             small
             volume={player.volume}
@@ -946,12 +979,13 @@ export function ComposeTimeline({
             }}
             onChange={player.setVolume}
           />
+          </span>
         </div>
 
         {/* Справа: как выглядит сам таймлайн. Где стоит игла и что уйдёт в
             файл, видно на самом таймлайне — метками и её чертой, поэтому
             словами это здесь не повторяем: место на панели дороже. */}
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-0.5 overflow-hidden">
+        <div className="flex min-w-0 flex-auto items-center justify-end gap-0.5 overflow-hidden">
 
           <IconButton className="h-7 w-7" title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
             <FlagTriangleRight size={14} />
@@ -1152,6 +1186,8 @@ export function ComposeTimeline({
                   active={selected.includes(clip.id)}
                   onGrab={(event, where) => {
                     const state = useCompose.getState()
+                    // Фокус из поля колонки — прочь, иначе Delete уйдёт в поле.
+                    ;(document.activeElement as HTMLElement | null)?.blur?.()
                     // Запоминаем монтаж до правки: одно Ctrl+Z вернёт всё
                     // перетаскивание целиком, а не по пикселю.
                     state.mark()
@@ -1269,6 +1305,17 @@ export function ComposeTimeline({
           >
             <div className="-ml-[5px] h-2.5 w-2.5 rounded-b-sm bg-danger" />
           </div>
+          {/* Белая игла — откуда начали смотреть; во время просмотра
+              нажатия по таймлайну двигают её, а не красную. */}
+          {cue !== null && (
+            <div
+              className="pointer-events-none absolute top-0 z-20 h-full w-px bg-white/85"
+              style={{ left: cue * scale }}
+              title="Отсюда начнётся просмотр после остановки"
+            >
+              <div className="-ml-[5px] h-2.5 w-2.5 rounded-b-sm bg-white" />
+            </div>
+          )}
         </div>
       </div>
       </div>
@@ -1620,6 +1667,151 @@ function useMenuPlace(at: { x: number; y: number }) {
 }
 
 /**
+ * Меню ключа по правой кнопке: вырезать, удалить, копировать, вставить и вид
+ * перехода к следующему ключу. Всё — с выбранными ключами; нажали по
+ * невыбранному — он и выбирается.
+ */
+function KeyMenu({ at, onClose }: { at: { x: number; y: number }; onClose: () => void }) {
+  const { box, place } = useMenuPlace(at)
+  const chosen = useCompose((state) => state.selectedKeys)
+  const tracks = useCompose((state) => state.tracks)
+  const [sub, setSub] = useState(false)
+  const leave = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const close = () => onClose()
+    window.addEventListener('mousedown', close)
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', close)
+    }
+  }, [onClose])
+
+  // Какой вид перехода у выбранных — если у всех один, он отмечен.
+  const clip = chosen && tracks.flatMap((track) => track.clips).find((item) => item.id === chosen.clipId)
+  const group = clip && chosen ? groupOf(clip, chosen.group) : null
+  const kinds = new Set<string>()
+  if (clip && group && chosen) {
+    for (const field of group.fields) {
+      for (const key of clip.anim?.[field] ?? []) {
+        if (chosen.times.some((time) => Math.abs(time - key.t) < KEY_NEAR / 2)) kinds.add(key.e ?? 'smooth')
+      }
+    }
+  }
+  const current = kinds.size === 1 ? [...kinds][0] : null
+  // У правого края окна подменю раскрывается влево.
+  const toLeft = place.left + 420 > window.innerWidth
+  // У нижнего края — вверх: иначе подменю уходило за край окна.
+  const upward = place.top + 280 > window.innerHeight
+
+  const item = (label: string, hint: string, action: () => void, disabled = false) => (
+    <button
+      type="button"
+      disabled={disabled}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={() => {
+        action()
+        onClose()
+      }}
+      className="flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-left text-[12px] text-ink-dim transition-colors enabled:hover:bg-surface-3 enabled:hover:text-ink disabled:opacity-35"
+    >
+      {label}
+      <span className="font-mono text-[10px] text-ink-faint">{hint}</span>
+    </button>
+  )
+  const state = useCompose.getState()
+
+  return (
+    <div
+      ref={box}
+      className="fixed z-50 min-w-[200px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
+      style={place}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {item('Вырезать', 'Ctrl+X', () => {
+        if (state.copyKeys()) {
+          copied.kind = 'keys'
+          state.deleteKeys()
+        }
+      })}
+      {item('Удалить', 'Del', () => state.deleteKeys())}
+      {item('Копировать', 'Ctrl+C', () => {
+        if (state.copyKeys()) copied.kind = 'keys'
+      })}
+      {item('Вставить', 'Ctrl+V', () => state.pasteKeys(), !state.hasKeyCopy())}
+      <div className="my-1 h-px bg-line-soft" />
+      <div
+        className="relative"
+        onMouseEnter={() => {
+          if (leave.current) clearTimeout(leave.current)
+          setSub(true)
+        }}
+        onMouseLeave={() => {
+          leave.current = setTimeout(() => setSub(false), 350)
+        }}
+      >
+        <button
+          type="button"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={() => setSub(true)}
+          className="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[12px] text-ink-dim transition-colors hover:bg-surface-3 hover:text-ink"
+        >
+          Тип анимации
+          <span className="text-[10px] text-ink-faint">
+            {current ? EASES.find((ease) => ease.value === current)?.label : '…'} ▸
+          </span>
+        </button>
+        {sub && (
+          <div className={`absolute ${upward ? 'bottom-0' : 'top-0'} ${toLeft ? 'right-full pr-1' : 'left-full pl-1'}`}>
+            <div className="min-w-[150px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl">
+              {EASES.map((ease) => (
+                <button
+                  key={ease.value}
+                  type="button"
+                  title={ease.hint}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={() => {
+                    state.setKeysEase(ease.value)
+                    onClose()
+                  }}
+                  className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors ${
+                    current === ease.value ? 'bg-accent/20 text-accent-soft' : 'text-ink-dim hover:bg-surface-3 hover:text-ink'
+                  }`}
+                >
+                  <EaseCurve kind={ease.value} />
+                  {ease.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Маленький рисунок кривой перехода — чтобы было видно, чем виды отличаются. */
+function EaseCurve({ kind }: { kind: (typeof EASES)[number]['value'] }) {
+  const points = Array.from({ length: 21 }, (_, index) => {
+    const s = index / 20
+    const v =
+      kind === 'linear' ? s
+      : kind === 'fast' ? 1 - (1 - s) * (1 - s)
+      : kind === 'slow' ? s * s
+      : kind === 'sharp' ? (s < 0.5 ? 4 * s * s * s : 1 - Math.pow(2 - 2 * s, 3) / 2)
+      : kind === 'hold' ? (s < 1 ? 0 : 1)
+      : s * s * (3 - 2 * s)
+    return `${(2 + s * 12).toFixed(1)},${(14 - v * 12).toFixed(1)}`
+  })
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" className="shrink-0">
+      <polyline points={points.join(' ')} fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  )
+}
+
+/**
  * Меню дорожки.
  *
  * По полотну — что положить туда, где нажали: надпись и заливку. По колонке
@@ -1698,6 +1890,16 @@ function TrackMenu({
           {/* На звуковой дорожке надписи и заливке не место — они лягут на
               видеодорожку, в то же время. */}
           {item('Вставить', () => onPaste?.(), !onPaste)}
+          {/* Всё, что начинается от иглы и дальше, на всех дорожках, — чтобы
+              разом подвинуть хвост монтажа. */}
+          {item('Выделить всё после иглы', () => {
+            const state = useCompose.getState()
+            const after = state.tracks
+              .flatMap((item) => item.clips)
+              .filter((clip) => clip.start >= state.playhead - 1e-3)
+              .map((clip) => clip.id)
+            state.select(after)
+          })}
           <div className="my-1 h-px bg-line-soft" />
           {item('Добавить надпись сюда', onText)}
           {item('Добавить заливку сюда', onFill)}
@@ -2237,6 +2439,7 @@ function ClipBox({
   const focus = useCompose((state) => state.animFocus)
   const focusGroup = groupOf(clip, focus)
   const chosenKeys = useCompose((state) => state.selectedKeys)
+  const [keyMenu, setKeyMenu] = useState<{ x: number; y: number } | null>(null)
 
   /**
    * Ромбик ключа: нажатие выбирает его (Shift — добавляет к выбранным) и
@@ -2247,6 +2450,9 @@ function ClipBox({
     if (event.button !== 0 || !focusGroup) return
     event.stopPropagation()
     event.preventDefault()
+    // Фокус мог остаться в поле колонки (место маски, мягкость) — тогда
+    // Delete уходил туда, и ключ не удалялся. Ромбик забирает фокус себе.
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
     const state = useCompose.getState()
     const current = state.selectedKeys
     const same = current?.clipId === clip.id && current.group === focusGroup.id
@@ -2366,6 +2572,15 @@ function ClipBox({
                 type="button"
                 title={`${focusGroup.label}: ключ на ${t.toFixed(2)} с. Нажатие — выбрать и поставить иглу, Shift — добавить к выбранным, протяжка — сдвинуть. Delete — удалить, Ctrl+C / Ctrl+V — скопировать и вставить от иглы`}
                 onMouseDown={(event) => grabKey(event, t)}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  // Нажали по невыбранному — меню про него одного.
+                  if (!chosen) {
+                    useCompose.getState().selectKeys({ clipId: clip.id, group: focusGroup.id, times: [t] })
+                  }
+                  setKeyMenu({ x: event.clientX, y: event.clientY })
+                }}
                 className={`absolute bottom-0.5 z-10 h-3 w-3 -translate-x-1/2 rotate-45 border hover:bg-white ${
                   chosen ? 'border-accent bg-white ring-2 ring-accent/60' : 'border-base bg-accent-soft'
                 }`}
@@ -2373,6 +2588,7 @@ function ClipBox({
               />
             )
           })}
+      {keyMenu && createPortal(<KeyMenu at={keyMenu} onClose={() => setKeyMenu(null)} />, document.body)}
       {/* Ключи за краем клипа — после обрезки или разреза они остаются на
           своих кадрах ролика. Сами не видны, поэтому у края — бледная
           пометка: иначе непонятно, откуда движение до первого ромбика. */}
@@ -2586,11 +2802,11 @@ function ClipBox({
       )}
       {/* Края длины начинаются ниже уголков, иначе они спорят за одни пиксели. */}
       <div
-        className="absolute bottom-0 left-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
+        className="absolute bottom-0 left-0 w-[7px] cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
         style={{ top: corner }}
       />
       <div
-        className="absolute bottom-0 right-0 w-2.5 cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
+        className="absolute bottom-0 right-0 w-[7px] cursor-ew-resize bg-accent/0 group-hover:bg-accent/25"
         style={{ top: corner }}
       />
     </div>

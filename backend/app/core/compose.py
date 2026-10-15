@@ -295,6 +295,8 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: flo
     """
     if clip.kind == "text":
         # Слой уже размером с кадр — подгонять нечего, остаётся написать.
+        if text_layered(clip):
+            return f"{text_layers(clip, width, height, skip)},setsar=1,fps={fps}"
         return f"{text_filter(clip, width, height, skip)},setsar=1,fps={fps}"
 
     if not is_placed(clip):
@@ -378,7 +380,83 @@ def text_file(text: str) -> Path:
     return target
 
 
-def text_filter(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -> str:
+def _shadow_on(clip: ComposeClip) -> bool:
+    return clip.shadow_on and clip.shadow_alpha > 0 and (
+        abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6 or clip.shadow_blur > 1e-6
+    )
+
+
+def text_layered(clip: ComposeClip) -> bool:
+    """Надпись собирается из слоёв: скруглённая подложка или размытая тень.
+
+    Сам `drawtext` углы подложки не скругляет и тень не размывает. Поэтому
+    подложка и тень рисуются отдельными слоями того же текста, и у каждого
+    размывается только прозрачность: у подложки потом обрезается по
+    половине — углы скругляются, прямые края остаются на месте, у тени
+    остаётся размытой. Без этих настроек — один проход, как раньше.
+    """
+    return (clip.box and clip.box_radius > 1e-6) or (_shadow_on(clip) and clip.shadow_blur > 1e-6)
+
+
+def _rgb(colour: str) -> tuple[int, int, int]:
+    clean = colour.lstrip("#")
+    return int(clean[0:2], 16), int(clean[2:4], 16), int(clean[4:6], 16)
+
+
+def text_layers(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -> str:
+    """Надпись слоями: подложка, тень, буквы — снизу вверх (`text_layered`)."""
+    tag = "tx" + hashlib.sha1(clip.id.encode("utf-8")).hexdigest()[:8]
+    branches: list[tuple[str, str]] = []
+    if clip.box:
+        if clip.box_radius > 1e-6:
+            # Скругление: размытая прозрачность, обрезанная по половине, даёт
+            # скруглённый угол с радиусом около сигма / 0.537. Цвет ставим
+            # ровным по всему слою, чтобы край не темнел от размытия.
+            lines = max(1, clip.text.count("\n") + 1)
+            tall = lines * clip.font_size * height * 1.15 + 2 * clip.box_pad * height
+            radius = min(clip.box_radius * height, tall / 2)
+            red, green, blue = _rgb(clip.box_color)
+            alpha = round(255 * clip.box_alpha)
+            branches.append((
+                "box",
+                f"{text_filter(clip, width, height, skip, role='box')},format=gbrap,"
+                f"lut=c0={green}:c1={blue}:c2={red},"
+                f"gblur=sigma={max(0.5, 0.537 * radius):.2f}:planes=8,"
+                f"lut=c3='if(gt(val,127),{alpha},0)'",
+            ))
+        else:
+            branches.append(("box", text_filter(clip, width, height, skip, role="box")))
+    if _shadow_on(clip):
+        if clip.shadow_blur > 1e-6:
+            red, green, blue = _rgb(clip.shadow_color)
+            branches.append((
+                "shadow",
+                f"{text_filter(clip, width, height, skip, role='shadow')},format=gbrap,"
+                f"lut=c0={green}:c1={blue}:c2={red},"
+                f"gblur=sigma={max(0.3, clip.shadow_blur * height):.2f}:planes=8,"
+                f"lut=c3='val*{clip.shadow_alpha:.3f}'",
+            ))
+        else:
+            branches.append(("shadow", text_filter(clip, width, height, skip, role="shadow")))
+    branches.append(("text", text_filter(clip, width, height, skip, role="text")))
+
+    names = [f"[{tag}{role}]" for role, _ in branches]
+    graph = [f"split={len(branches)}" + "".join(f"[{tag}in{index}]" for index in range(len(branches)))]
+    for index, ((role, chain), name) in enumerate(zip(branches, names)):
+        graph.append(f"[{tag}in{index}]{chain}{name}")
+    current = names[0]
+    for index, name in enumerate(names[1:], start=1):
+        nxt = f"[{tag}m{index}]"
+        graph.append(f"{current}{name}overlay=format=auto{nxt}")
+        current = nxt
+    # Последний слой — без метки: дальше цепочка продолжается как обычно.
+    graph[-1] = graph[-1][: -len(current)]
+    return ";".join(graph) + ",format=yuva420p"
+
+
+def text_filter(
+    clip: ComposeClip, width: int, height: int, skip: float = 0.0, role: str = "all"
+) -> str:
     """Фильтр, рисующий надпись клипа на прозрачном слое.
 
     Размеры считаем от высоты кадра, а не в пикселях: тот же монтаж,
@@ -397,7 +475,14 @@ def text_filter(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
         parts.append(f"fontsize='max(1,{height}*({anim.expression(clip, 'fontSize', moment)}))'")
     else:
         parts.append(f"fontsize={max(1, round(height * clip.font_size))}")
-    parts.append(f"fontcolor={_colour(clip.text_color)}")
+    # Слои надписи (`text_layers`): у подложки буквы прозрачные, у тени —
+    # цвета тени, у самих букв нет ни тени, ни подложки.
+    if role == "box":
+        parts.append("fontcolor=black@0")
+    elif role == "shadow":
+        parts.append(f"fontcolor={_colour(clip.shadow_color, 1.0 if clip.shadow_blur > 1e-6 else clip.shadow_alpha)}")
+    else:
+        parts.append(f"fontcolor={_colour(clip.text_color)}")
 
     # Строки между собой равняются по середине: у субтитров в две строки
     # разной длины это единственный вид, который не выглядит случайным.
@@ -410,18 +495,28 @@ def text_filter(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
     # Обводка и тень: без них светлый текст пропадает на светлом кадре.
     if clip.stroke_on and clip.stroke > 0:
         parts.append(f"borderw={max(1, round(height * clip.stroke))}")
-        parts.append(f"bordercolor={_colour(clip.stroke_color)}")
+        if role == "box":
+            parts.append("bordercolor=black@0")
+        elif role == "shadow":
+            # Тень букв с обводкой — тень всего контура.
+            parts.append(f"bordercolor={_colour(clip.shadow_color, 1.0 if clip.shadow_blur > 1e-6 else clip.shadow_alpha)}")
+        else:
+            parts.append(f"bordercolor={_colour(clip.stroke_color)}")
     if (
-        clip.shadow_on
+        role == "all"
+        and clip.shadow_on
         and clip.shadow_alpha > 0
         and (abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6)
     ):
         parts.append(f"shadowx={round(height * clip.shadow_x)}")
         parts.append(f"shadowy={round(height * clip.shadow_y)}")
         parts.append(f"shadowcolor={_colour(clip.shadow_color, clip.shadow_alpha)}")
-    if clip.box:
+    if clip.box and role in {"all", "box"}:
         parts.append("box=1")
-        parts.append(f"boxcolor={_colour(clip.box_color, clip.box_alpha)}")
+        # Подложку под скругление рисуем непрозрачной: прозрачность ей
+        # вернут уже после скругления.
+        alpha = 1.0 if role == "box" and clip.box_radius > 1e-6 else clip.box_alpha
+        parts.append(f"boxcolor={_colour(clip.box_color, alpha)}")
         parts.append(f"boxborderw={max(0, round(height * clip.box_pad))}")
 
     # Куда встанет надпись. x и y клипа — это её середина в долях кадра, так
@@ -429,6 +524,10 @@ def text_filter(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
     # По ключам место меняется формулой от времени.
     middle_x = f"w*({anim.expression(clip, 'x', moment)})"
     middle_y = f"h*({anim.expression(clip, 'y', moment)})"
+    if role == "shadow":
+        # Тень — та же надпись, сдвинутая на сдвиг тени.
+        middle_x += f"+{height * clip.shadow_x:.2f}"
+        middle_y += f"+{height * clip.shadow_y:.2f}"
     if clip.align == "left":
         parts.append(f"x='{middle_x}'")
     elif clip.align == "right":
@@ -444,7 +543,7 @@ def is_decorated_fill(clip: ComposeClip) -> bool:
     if clip.kind != "color":
         return False
     shadow = clip.shadow_on and clip.shadow_alpha > 0 and (
-        abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6
+        abs(clip.shadow_x) > 1e-6 or abs(clip.shadow_y) > 1e-6 or clip.shadow_blur > 1e-6
     )
     return clip.radius > 0 or (clip.stroke_on and clip.stroke > 0) or shadow
 
@@ -482,9 +581,13 @@ def fill_margin(clip: ComposeClip, height: int) -> int:
     Чётное: наложение в видео встаёт на чётные позиции, и нечётный запас
     сдвигал бы заливку на пиксель относительно её места.
     """
-    if not (clip.shadow_on and clip.shadow_alpha > 0):
-        return 0
-    reach = max(abs(clip.shadow_x), abs(clip.shadow_y)) * height
+    # Рамка теперь снаружи заливки — под неё тоже нужен запас.
+    border = clip.stroke * height if clip.stroke_on and clip.stroke > 0 else 0.0
+    reach = border
+    if clip.shadow_on and clip.shadow_alpha > 0:
+        # Размытая тень расползается примерно на три сигмы.
+        blur = 3 * clip.shadow_blur * height
+        reach = max(reach, max(abs(clip.shadow_x), abs(clip.shadow_y)) * height + border + blur)
     return int(math.ceil(reach / 2)) * 2
 
 
@@ -503,12 +606,18 @@ async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
     radius = min(clip.radius * height, min(box_w, box_h) / 2)
     border = clip.stroke * height if clip.stroke_on and clip.stroke > 0 else 0.0
 
+    # Внешний угол рамки: свой, если задан, иначе как у заливки плюс толщина.
+    outer = (
+        clip.stroke_round * height if clip.stroke_round > 0 else (radius + border if radius > 0 else 0.0)
+    )
+    outer = min(outer, min(box_w, box_h) / 2 + border)
+    blur = clip.shadow_blur * height if clip.shadow_on else 0.0
     stamp = "|".join(
         str(item)
         for item in (
-            canvas, box_w, box_h, margin, round(radius, 2), round(border, 2), clip.color,
-            clip.stroke_color, clip.shadow_on, round(clip.shadow_x * height, 2),
-            round(clip.shadow_y * height, 2), clip.shadow_color, clip.shadow_alpha,
+            "v2", canvas, box_w, box_h, margin, round(radius, 2), round(border, 2), round(outer, 2),
+            clip.color, clip.stroke_color, clip.shadow_on, round(clip.shadow_x * height, 2),
+            round(clip.shadow_y * height, 2), clip.shadow_color, clip.shadow_alpha, round(blur, 2),
         )
     )
     folder = paths.data_dir() / "fills"
@@ -523,33 +632,37 @@ async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
     inputs: list[str] = [
         "-f", "lavfi", "-i", f"color=c=black@0:s={canvas[0]}x{canvas[1]}:d=0.04,format=rgba",
     ]
-    if margin:
+    # Рамка — снаружи заливки: заливка остаётся своего размера, а рамка
+    # обводит её по внешнему краю. Тень — от всей фигуры вместе с рамкой.
+    shadow_layer = 0
+    if clip.shadow_on and clip.shadow_alpha > 0:
         inputs += _layer(
             clip.shadow_color,
             canvas,
             _box_alpha(
-                margin + clip.shadow_x * height, margin + clip.shadow_y * height,
-                box_w, box_h, radius, clip.shadow_alpha,
+                margin - border + clip.shadow_x * height, margin - border + clip.shadow_y * height,
+                box_w + 2 * border, box_h + 2 * border, outer if border else radius, clip.shadow_alpha,
             ),
         )
+        shadow_layer = len(inputs) // 4 - 1
     if border:
-        inputs += _layer(clip.stroke_color, canvas, _box_alpha(margin, margin, box_w, box_h, radius, 1.0))
-    inset = min(border, min(box_w, box_h) / 2 - 1)
-    inputs += _layer(
-        clip.color,
-        canvas,
-        _box_alpha(
-            margin + inset, margin + inset, box_w - 2 * inset, box_h - 2 * inset,
-            max(radius - inset, 0.0), 1.0,
-        ),
-    )
+        inputs += _layer(
+            clip.stroke_color,
+            canvas,
+            _box_alpha(margin - border, margin - border, box_w + 2 * border, box_h + 2 * border, outer, 1.0),
+        )
+    inputs += _layer(clip.color, canvas, _box_alpha(margin, margin, box_w, box_h, radius, 1.0))
 
     layers = len(inputs) // 4
     graph = []
     current = "[0:v]"
+    if shadow_layer and blur > 0.3:
+        # Размытая тень: размываем её слой до наложения.
+        graph.append(f"[{shadow_layer}:v]gblur=sigma={blur:.2f}[blurred]")
     for index in range(1, layers):
         nxt = f"[l{index}]"
-        graph.append(f"{current}[{index}:v]overlay=format=auto{nxt}")
+        source = "[blurred]" if index == shadow_layer and blur > 0.3 else f"[{index}:v]"
+        graph.append(f"{current}{source}overlay=format=auto{nxt}")
         current = nxt
     args = [
         binaries.ffmpeg(), "-y", "-v", "error", *inputs,

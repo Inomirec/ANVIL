@@ -5,6 +5,7 @@ import {
   FlipHorizontal2,
   FlipVertical2,
   Gauge,
+  Image as ImageIcon,
   Move,
   Plus,
   RotateCw,
@@ -69,6 +70,8 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
 
       {picture && <MaskCard clip={picture} mask={picture.mask ?? null} />}
 
+      {picture && <PictureCard clip={picture} />}
+
       {sound && <SoundCard clip={sound} />}
 
       {parts.map((part) => (
@@ -118,6 +121,43 @@ function SoundCard({ clip }: { clip: ComposeClip }) {
           reset={0}
           onChange={(db) => put({ volume: Math.min(1, dbToGain(db)) })}
         />
+        <SliderNumber
+          label="Появление"
+          unit="с"
+          value={clip.fadeIn}
+          min={0}
+          max={half}
+          step={0.05}
+          reset={0}
+          onChange={(fadeIn) => put({ fadeIn: Math.min(half, Math.max(0, fadeIn)) })}
+        />
+        <SliderNumber
+          label="Уход"
+          unit="с"
+          value={clip.fadeOut}
+          min={0}
+          max={half}
+          step={0.05}
+          reset={0}
+          onChange={(fadeOut) => put({ fadeOut: Math.min(half, Math.max(0, fadeOut)) })}
+        />
+      </div>
+    </Card>
+  )
+}
+
+/**
+ * Появление и уход картинки — числами, как у звука. На самом клипе их тянут
+ * за уголки, здесь ставят точно. Видимость — ползунком в «Месте в кадре».
+ */
+function PictureCard({ clip }: { clip: ComposeClip }) {
+  const updateClip = useCompose((state) => state.updateClip)
+  const mark = useCompose((state) => state.mark)
+  const half = Math.max(0, Math.round((clip.duration / 2) * 100) / 100)
+  const put = (patch: Partial<ComposeClip>) => updateClip(clip.id, patch)
+  return (
+    <Card id="picture" title="Картинка" icon={<ImageIcon size={13} />}>
+      <div className="space-y-2" onMouseDownCapture={() => mark()}>
         <SliderNumber
           label="Появление"
           unit="с"

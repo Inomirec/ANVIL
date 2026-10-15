@@ -298,7 +298,6 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
   ) => (
     <div
       key={key}
-      title={hint}
       className="absolute bg-accent-soft"
       style={{
         ...fit.size,
@@ -334,8 +333,6 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         width: `${wide * 100}%`,
         height: `${tall * 100}%`,
       }}
-      title={`${clip.name}: тяните за середину, уголки меняют размер, края растягивают.
-Двойное нажатие вернёт клип в кадр целиком`}
       onDoubleClick={reset}
       onMouseDown={(event) => {
         if (event.button !== 0) return

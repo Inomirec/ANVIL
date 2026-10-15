@@ -67,8 +67,44 @@ def static(clip: ComposeClip, field: str) -> float:
     return 0.0
 
 
-def _ease(progress: float) -> float:
-    return progress * progress * (3 - 2 * progress)
+#: Виды перехода между ключами — те же, что в окне (``composeAnim.ts``).
+#: Вид хранится у левого ключа: как идёт путь от него к следующему.
+EASES = ("linear", "fast", "slow", "smooth", "sharp", "hold")
+
+
+def _ease(progress: float, kind: str | None = None) -> float:
+    s = min(1.0, max(0.0, progress))
+    if kind == "linear":
+        return s
+    if kind == "fast":
+        # Резко трогается, плавно приходит.
+        return 1 - (1 - s) * (1 - s)
+    if kind == "slow":
+        # Плавно трогается, резко приходит.
+        return s * s
+    if kind == "sharp":
+        # Разгон и торможение сильнее обычного.
+        return 4 * s * s * s if s < 0.5 else 1 - ((2 - 2 * s) ** 3) / 2
+    if kind == "hold":
+        # Стоит до следующего ключа и меняется скачком на нём.
+        return 0.0
+    return s * s * (3 - 2 * s)
+
+
+def _ease_expression(progress: str, kind: str | None) -> str:
+    """Та же кривая — выражением ffmpeg от доли пути ``progress``."""
+    p = f"({progress})"
+    if kind == "linear":
+        return p
+    if kind == "fast":
+        return f"(1-(1-{p})*(1-{p}))"
+    if kind == "slow":
+        return f"({p}*{p})"
+    if kind == "sharp":
+        return f"if(lt({p},0.5),4*{p}*{p}*{p},1-pow(2-2*{p},3)/2)"
+    if kind == "hold":
+        return "0"
+    return f"({p}*{p}*(3-2*{p}))"
 
 
 def _raw_at(clip: ComposeClip, field: str, local: float) -> float:
@@ -80,7 +116,7 @@ def _raw_at(clip: ComposeClip, field: str, local: float) -> float:
     for left, right in zip(found, found[1:]):
         if local < right.t:
             span = max(right.t - left.t, 1e-3)
-            return left.v + (right.v - left.v) * _ease((local - left.t) / span)
+            return left.v + (right.v - left.v) * _ease((local - left.t) / span, left.e)
     return found[-1].v
 
 
@@ -113,12 +149,12 @@ def expression(clip: ComposeClip, field: str, moment: str, scale: Callable[[floa
             return f"{convert(static(clip, field)):.5f}"
         values = [key.v for key in found]
 
-    points = [(key.t, convert(value)) for key, value in zip(found, values)]
+    points = [(key.t, convert(value), key.e) for key, value in zip(found, values)]
     result = f"{points[-1][1]:.5f}"
-    for (lt, lv), (rt, rv) in reversed(list(zip(points, points[1:]))):
+    for (lt, lv, kind), (rt, rv, _) in reversed(list(zip(points, points[1:]))):
         span = max(rt - lt, 1e-3)
         progress = f"(({moment})-({lt:.4f}))/{span:.4f}"
-        segment = f"{lv:.5f}+({rv - lv:.5f})*({progress})*({progress})*(3-2*({progress}))"
+        segment = f"{lv:.5f}+({rv - lv:.5f})*{_ease_expression(progress, kind)}"
         # Время ключа — в скобках: оно бывает и меньше нуля.
         result = f"if(lt({moment},({rt:.4f})),{segment},{result})"
     return f"if(lt({moment},({points[0][0]:.4f})),{points[0][1]:.5f},{result})"
@@ -174,7 +210,7 @@ def points_at(clip: ComposeClip, local: float) -> list[tuple[float, float]]:
             a, b = left.p or [], right.p or []
             if len(a) != len(b):
                 return list(a)
-            e = _ease((local - left.t) / max(right.t - left.t, 1e-3))
+            e = _ease((local - left.t) / max(right.t - left.t, 1e-3), left.e)
             return [(ax + (bx - ax) * e, ay + (by - ay) * e) for (ax, ay), (bx, by) in zip(a, b)]
     return list(found[-1].p or [])
 

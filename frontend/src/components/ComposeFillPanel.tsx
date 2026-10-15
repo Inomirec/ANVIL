@@ -97,6 +97,17 @@ export function ComposeFillPanel({ clip }: { clip: ComposeClip }) {
               reset={EFFECT_PIXELS.stroke}
               onChange={(value) => put({ stroke: fraction(value) })}
             />
+            {/* Рамка — снаружи заливки. Её внешние углы по умолчанию
+                следуют скруглению заливки; ноль — так и есть. */}
+            <SliderNumber
+              label="Скругление"
+              value={px(clip.strokeRound ?? 0)}
+              min={0}
+              max={200}
+              unit="px"
+              reset={0}
+              onChange={(value) => put({ strokeRound: fraction(value) })}
+            />
           </div>
           <ColorSquare
             value={clip.strokeColor ?? '#ffffff'}
@@ -147,6 +158,16 @@ export function ComposeFillPanel({ clip }: { clip: ComposeClip }) {
               unit="%"
               reset={75}
               onChange={(value) => put({ shadowAlpha: value / 100 })}
+            />
+            <SliderNumber
+              label="Размытие"
+              value={px(clip.shadowBlur ?? 0)}
+              min={0}
+              max={30}
+              step={0.5}
+              unit="px"
+              reset={0}
+              onChange={(value) => put({ shadowBlur: fraction(value) })}
             />
           </div>
           <ColorSquare

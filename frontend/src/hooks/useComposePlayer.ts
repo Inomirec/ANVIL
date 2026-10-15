@@ -9,13 +9,20 @@ import type { MeterLevels } from '../components/MasterMeter'
  *
  * Снаружи это обычный плеер: нажали «играть» — пошло со звуком. Внутри
  * программа собирает кусок монтажа настоящим кодировщиком и играет его
- * обычным видео, а пока он идёт — готовит следующий. Иначе браузеру пришлось
- * бы крутить несколько видео разом и складывать их на лету, чего он не умеет.
+ * обычным видео. Браузеру пришлось бы иначе крутить несколько видео разом и
+ * складывать их на лету, чего он не умеет.
  *
- * Длина куска — компромисс: короткий готовится быстрее, но чаще требует
- * подготовки следующего; на длинном дольше ждёшь первого кадра.
+ * Видео — два, и играют они по очереди: пока одно показывает кусок, во второе
+ * уже загружен следующий, и на стыке оно просто включается. С одним видео на
+ * каждом стыке меняли источник, и между кусками мигал пустой кадр.
+ *
+ * Куски собираются впрок, один за другим, на `AHEAD_SECONDS` вперёд от
+ * играющего: на слабой машине одного куска про запас не хватало — следующий
+ * не успевал собраться, пока играет текущий.
  */
 const CHUNK_SECONDS = 12
+/** На сколько секунд вперёд держим собранные куски. */
+const AHEAD_SECONDS = 60
 /** С какого качества начинаем. На слабой машине программа понизит сама. */
 const START_HEIGHT = 540
 const MIN_HEIGHT = 288
@@ -60,11 +67,25 @@ export const usePreviewReady = create<{
   },
 }))
 
-export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>) {
+type VideoRef = React.RefObject<HTMLVideoElement | null>
+
+interface Graph {
+  ctx: AudioContext
+  splitter: ChannelSplitterNode
+  gain: GainNode
+  left: AnalyserNode
+  right: AnalyserNode
+  hooked: Set<HTMLVideoElement>
+}
+
+export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   const [playing, setPlaying] = useState(false)
   const [preparing, setPreparing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [levels, setLevels] = useState<MeterLevels>({ left: -60, right: -60 })
+  /** Какое из двух видео сейчас на экране. */
+  const [shown, setShown] = useState(0)
+  const shownRef = useRef(0)
   const [volume, setVolume] = useState(() => {
     const saved = Number(localStorage.getItem('sgh.composeVolume'))
     return Number.isFinite(saved) && saved > 0 ? Math.min(1, saved) : 0.8
@@ -83,28 +104,27 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   const loopRef = useRef(false)
   loopRef.current = loop
 
+  /** Играющий кусок. */
   const chunk = useRef<Chunk | null>(null)
-  const ahead = useRef<Chunk | null>(null)
+  /** Собранные впрок куски, по порядку. */
+  const queue = useRef<Chunk[]>([])
+  /** Собирается ли сейчас очередь — второй сборщик не нужен. */
+  const filling = useRef(false)
   /**
    * Номер текущего просмотра. Растёт на каждом «играть» и на каждом «стоп»,
    * и по нему видно, что человек уже передумал: кусок монтажа готовится
    * секунду-другую, и всё это время ответ может оказаться никому не нужным.
-   * Запоздавший ответ тогда не начинает играть и не жалуется на ошибку —
-   * раньше отменённый просмотр отвечал «Failed to load because no supported
-   * source was found».
+   * Запоздавший ответ тогда не начинает играть и не жалуется на ошибку.
    */
   const run = useRef(0)
   const height = useRef(START_HEIGHT)
   const alive = useRef(true)
 
   // Звуковой граф: уровень снимаем до громкости прослушивания, чтобы ползунок
-  // не влиял на показания шкалы.
-  const audio = useRef<{
-    ctx: AudioContext
-    gain: GainNode
-    left: AnalyserNode
-    right: AnalyserNode
-  } | null>(null)
+  // не влиял на показания шкалы. Оба видео идут в один граф.
+  const audio = useRef<Graph | null>(null)
+
+  const element = useCallback((index: number) => videos[index].current, [videos])
 
   const snapshot = useCallback(() => {
     const state = useCompose.getState()
@@ -155,146 +175,195 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     [snapshot],
   )
 
-  /** Готовит следующий кусок, пока играет текущий. */
-  const prefetch = useCallback(
-    async (at: number) => {
-      const duration = useCompose.getState().duration()
-      if (at >= duration - 0.05) {
-        ahead.current = null
-        return
-      }
-      const next = await fetchChunk(at, run.current)
-      if (alive.current) ahead.current = next
-    },
-    [fetchChunk],
-  )
+  /** Следующий кусок готов — загружаем его во второе видео заранее. */
+  const preload = useCallback(() => {
+    const next = queue.current[0]
+    const spare = element(1 - shownRef.current)
+    if (!next || !spare || spare.dataset.chunk === next.url) return
+    spare.dataset.chunk = next.url
+    spare.preload = 'auto'
+    spare.src = next.url
+    spare.load()
+  }, [element])
 
-  const stop = useCallback(() => {
-    run.current += 1
-    setPlaying(false)
-    setPreparing(false)
-    setError(null)
-    const element = video.current
-    if (element) element.pause()
-    setLevels({ left: -60, right: -60 })
-  }, [video])
+  /** С какой секунды нужен следующий кусок после последнего собранного. */
+  const nextStart = useCallback((): number | null => {
+    const last = queue.current[queue.current.length - 1] ?? chunk.current
+    if (!last) return null
+    const at = last.at + last.span
+    const finish = useCompose.getState().duration()
+    if (at < finish - 0.05) return at
+    // Дошли до конца: с повтором следующий кусок — снова с начала.
+    return loopRef.current && last.at > 0 ? 0 : null
+  }, [])
 
-  const start = useCallback(async () => {
-    const element = video.current
-    if (!element) return
-    const mine = ++run.current
-    setError(null)
-    setPreparing(true)
-    const state = useCompose.getState()
-    // Играет то, что под иглой. Метки I и O сюда не вмешиваются: они только
-    // для готового файла. Прежде просмотр начинался с метки начала, и метка,
-    // оставшаяся за концом монтажа, не давала смотреть вовсе.
-    const finish = state.duration()
-    let at = state.playhead
-    // Игла осталась в самом конце — начинаем сначала, как любой плеер.
-    // Иначе нажатие на «играть» не делало ничего: показывать уже нечего.
-    if (at >= finish - 0.05) at = 0
-    // Кусок — с ровной отметки, а играть — с иглы внутри него: так кусок,
-    // однажды собранный, годится для просмотра с любого места в нём.
-    const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
-    const first = await fetchChunk(base, mine)
-    setPreparing(false)
-    // Пока кусок готовился, человек мог нажать «стоп» — тогда молча уходим.
-    if (!first || !alive.current || mine !== run.current) return
-
-    chunk.current = first
-    ahead.current = null
-    element.src = first.url
-    element.currentTime = Math.max(0, at - first.at)
-    try {
-      await element.play()
-      if (mine !== run.current) return
-      setPlaying(true)
-      void prefetch(first.at + first.span)
-    } catch (problem) {
-      if (mine === run.current) setError((problem as Error).message)
-    }
-  }, [fetchChunk, prefetch, video])
-
-  /** Кусок доиграл — подставляем следующий, если он готов. */
-  const onEnded = useCallback(async () => {
-    const element = video.current
-    if (!element) return
+  /** Собирает куски впрок, один за другим, пока не наберётся запас. */
+  const fill = useCallback(async () => {
+    if (filling.current) return
+    filling.current = true
     const mine = run.current
-    const state = useCompose.getState()
-    const current = chunk.current
-    let nextAt = current ? current.at + current.span : 0
-
-    // Дошли до конца монтажа — с повтором начинаем сначала, без повтора
-    // просто останавливаемся.
-    const finish = state.duration()
-    if (nextAt >= finish - 0.05) {
-      if (!loopRef.current) {
-        stop()
-        return
+    try {
+      while (alive.current && mine === run.current) {
+        if (!chunk.current) break
+        const ahead = queue.current.reduce((sum, item) => sum + item.span, 0)
+        if (ahead >= AHEAD_SECONDS) break
+        const at = nextStart()
+        if (at === null) break
+        const version = usePreviewReady.getState().version
+        const next = await fetchChunk(at, mine)
+        if (!next || mine !== run.current) break
+        // Пока кусок собирался, монтаж поправили — он показывает уже не то.
+        if (version !== usePreviewReady.getState().version) continue
+        queue.current.push(next)
+        preload()
       }
-      nextAt = 0
-      ahead.current = null
+    } finally {
+      filling.current = false
     }
+  }, [fetchChunk, nextStart, preload])
 
-    let next = ahead.current
-    if (!next) {
-      setPreparing(true)
-      next = await fetchChunk(nextAt, mine)
-      setPreparing(false)
-    }
-    if (mine !== run.current) return
-    if (!next || !alive.current) {
-      stop()
-      return
-    }
-    chunk.current = next
-    ahead.current = null
-    element.src = next.url
-    element.currentTime = 0
-    await element.play().catch(() => stop())
-    void prefetch(next.at + next.span)
-  }, [fetchChunk, prefetch, stop, video])
-
-  /** Пока играет — двигаем иглу и снимаем уровень. */
-  useEffect(() => {
-    if (!playing) return
-    const element = video.current
-    if (!element) return
-
-    // Граф собираем один раз на элемент: повторный вызов браузер запрещает.
-    if (!audio.current) {
-      try {
+  const hookAudio = useCallback((target: HTMLVideoElement) => {
+    // Граф собираем один раз, а каждое видео подключаем к нему один раз:
+    // повторное подключение браузер запрещает.
+    try {
+      if (!audio.current) {
         const ctx = new AudioContext()
-        const source = ctx.createMediaElementSource(element)
         const splitter = ctx.createChannelSplitter(2)
         const left = ctx.createAnalyser()
         const right = ctx.createAnalyser()
         left.fftSize = 1024
         right.fftSize = 1024
         const gain = ctx.createGain()
-        source.connect(splitter)
         splitter.connect(left, 0)
         splitter.connect(right, 1)
-        source.connect(gain)
         gain.connect(ctx.destination)
-        audio.current = { ctx, gain, left, right }
-      } catch {
-        // Без звукового графа просмотр всё равно работает — не будет только
-        // шкалы уровня.
+        audio.current = { ctx, splitter, gain, left, right, hooked: new Set() }
       }
+      const graph = audio.current
+      if (!graph.hooked.has(target)) {
+        const source = graph.ctx.createMediaElementSource(target)
+        source.connect(graph.splitter)
+        source.connect(graph.gain)
+        graph.hooked.add(target)
+      }
+    } catch {
+      // Без звукового графа просмотр всё равно работает — не будет только
+      // шкалы уровня.
     }
+  }, [])
+
+  const stop = useCallback(() => {
+    run.current += 1
+    setPlaying(false)
+    setPreparing(false)
+    setError(null)
+    for (const index of [0, 1]) element(index)?.pause()
+    queue.current = []
+    setLevels({ left: -60, right: -60 })
+    useCompose.getState().setPlayback(false)
+  }, [element])
+
+  /** Показывает кусок в видео ``index`` и запускает его с ``offset``. */
+  const show = useCallback(
+    async (next: Chunk, index: number, offset: number, mine: number): Promise<boolean> => {
+      const target = element(index)
+      if (!target) return false
+      if (target.dataset.chunk !== next.url) {
+        target.dataset.chunk = next.url
+        target.src = next.url
+      }
+      target.currentTime = offset
+      hookAudio(target)
+      try {
+        await target.play()
+      } catch (problem) {
+        if (mine === run.current) setError((problem as Error).message)
+        return false
+      }
+      if (mine !== run.current) {
+        target.pause()
+        return false
+      }
+      chunk.current = next
+      // Сначала второе видео ставим на паузу, потом меняем видимое: так на
+      // стыке нет ни кадра без картинки, ни двух звуков разом.
+      element(1 - index)?.pause()
+      shownRef.current = index
+      setShown(index)
+      return true
+    },
+    [element, hookAudio],
+  )
+
+  const start = useCallback(async () => {
+    const mine = ++run.current
+    setError(null)
+    setPreparing(true)
+    queue.current = []
+    const state = useCompose.getState()
+    // Играет то, что под иглой. Метки I и O сюда не вмешиваются: они только
+    // для готового файла.
+    const finish = state.duration()
+    let at = state.playhead
+    // Игла осталась в самом конце — начинаем сначала, как любой плеер.
+    if (at >= finish - 0.05) at = 0
+    // Кусок — с ровной отметки, а играть — с иглы внутри него: так кусок,
+    // однажды собранный, годится для просмотра с любого места в нём.
+    const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
+    const first = await fetchChunk(base, mine)
+    setPreparing(false)
+    if (!first || !alive.current || mine !== run.current) return
+    state.moveHead(at)
+    if (!(await show(first, shownRef.current, Math.max(0, at - first.at), mine))) return
+    // Белая игла встаёт на место, откуда начали.
+    useCompose.getState().setPlayback(true)
+    setPlaying(true)
+    void fill()
+  }, [fetchChunk, show, fill])
+
+  /** Кусок доиграл — включаем следующий, он уже загружен во второе видео. */
+  const onEnded = useCallback(
+    async (index: number) => {
+      if (index !== shownRef.current) return
+      const mine = run.current
+      let next = queue.current.shift() ?? null
+      if (!next) {
+        const at = nextStart()
+        if (at === null) {
+          stop()
+          return
+        }
+        setPreparing(true)
+        next = await fetchChunk(at, mine)
+        setPreparing(false)
+        if (mine !== run.current) return
+        if (!next || !alive.current) {
+          stop()
+          return
+        }
+      }
+      if (!(await show(next, 1 - index, 0, mine))) {
+        if (mine === run.current) stop()
+        return
+      }
+      preload()
+      void fill()
+    },
+    [fetchChunk, nextStart, show, preload, fill, stop],
+  )
+
+  /** Пока играет — двигаем иглу и снимаем уровень. */
+  useEffect(() => {
+    if (!playing) return
     void audio.current?.ctx.resume()
     // Громкость слушателя живёт на узле графа: так шкала уровня показывает
     // сам монтаж, а не то, насколько тихо человек сделал себе в наушниках.
-    // Если графа нет (браузер не дал), ставим её прямо элементу — иначе
-    // ползунок не делал бы ничего вовсе.
-    if (audio.current) {
-      audio.current.gain.gain.value = volume
-      element.volume = 1
-    } else {
-      element.volume = volume
+    // Если графа нет (браузер не дал), ставим её прямо видео.
+    for (const index of [0, 1]) {
+      const target = element(index)
+      if (target) target.volume = audio.current ? 1 : volume
     }
+    if (audio.current) audio.current.gain.gain.value = volume
 
     const buffer = new Float32Array(1024)
     const read = (node: AnalyserNode): number => {
@@ -309,13 +378,14 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     // приходят вовсе, и игла замирала бы вместе с показаниями.
     const timer = setInterval(() => {
       const current = chunk.current
-      if (current) useCompose.getState().setPlayhead(current.at + element.currentTime)
+      const target = element(shownRef.current)
+      if (current && target) useCompose.getState().moveHead(current.at + target.currentTime)
       if (audio.current) {
         setLevels({ left: read(audio.current.left), right: read(audio.current.right) })
       }
     }, 60)
     return () => clearInterval(timer)
-  }, [playing, volume, video])
+  }, [playing, volume, element])
 
   /**
    * Громкость монтажа и выравнивание слышны сразу.
@@ -323,8 +393,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
    * Обе настройки живут в куске, который собирает программа, поэтому уже
    * играющий кусок про них не знает: человек ставит галочку «выровнять звук»,
    * а шкала показывает прежнее — и решает, что галочка не работает. Поэтому на
-   * такую правку просмотр пересобирается с того же места. Небольшая задержка
-   * есть, но она честнее, чем неверные показания.
+   * такую правку просмотр пересобирается с того же места.
    *
    * Ждём немного: у фейдера на одно движение приходится десяток изменений, и
    * пересобирать кусок на каждое незачем.
@@ -346,9 +415,13 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
           state.loudnorm !== prev.loudnorm
         ) {
           usePreviewReady.getState().clear()
+          // Собранное впрок показывает уже не то — следующие куски заново.
+          queue.current = []
+          const spare = element(1 - shownRef.current)
+          if (spare) delete spare.dataset.chunk
         }
       }),
-    [],
+    [element],
   )
 
   useEffect(() => {
@@ -372,14 +445,19 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     localStorage.setItem(QUALITY_KEY, String(quality))
     height.current = quality === 'auto' ? START_HEIGHT : quality
     usePreviewReady.getState().clear()
+    queue.current = []
   }, [quality])
 
   // Громкость прослушивания меняется на ходу и запоминается.
   useEffect(() => {
     if (audio.current) audio.current.gain.gain.value = volume
-    else if (video.current) video.current.volume = volume
+    else
+      for (const index of [0, 1]) {
+        const target = element(index)
+        if (target) target.volume = volume
+      }
     localStorage.setItem('sgh.composeVolume', String(volume))
-  }, [volume, video])
+  }, [volume, element])
 
   useEffect(() => {
     alive.current = true
@@ -392,6 +470,6 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
 
   return {
     playing, preparing, error, levels, volume, setVolume, loop, setLoop,
-    quality, setQuality, start, stop, onEnded,
+    quality, setQuality, start, stop, onEnded, shown,
   }
 }

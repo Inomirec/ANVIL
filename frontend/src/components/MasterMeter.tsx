@@ -10,10 +10,11 @@ import { dbToGain, gainToDb, MAX_DB, MIN_DB, volumeLabel } from '../composeStore
  * на панели под окном просмотра, и на файл не влияет.
  *
  * **Вид задаётся шириной, а не отдельной кнопкой.** Шину тянут за левую
- * границу, и она показывает ровно столько, сколько помещается: сначала один
- * ползунок с уровнем прямо на нём, потом полоски каналов с делениями, потом
- * деления отдельной колонкой между каналами. Сжатая до упора — исчезает,
- * оставляя полоску, за которую её возвращают обратно.
+ * границу, и видов у неё два: узкий — один ползунок с уровнем прямо на нём,
+ * средний — ползунок и полоски каналов с делениями поверх. Третий, с
+ * делениями отдельной колонкой между каналами, убран: цифры посреди двух
+ * шкал читались плохо. Сжатая до упора шина исчезает, оставляя полоску, за
+ * которую её возвращают обратно.
  *
  * Подписи делений нарисованы **внутри** шкалы: вынесенные наружу, они
  * занимали ширину, которой у шины и так немного.
@@ -32,14 +33,12 @@ const PEAK_HOLD_MS = 1200
 
 /** Ширина шины: от полоски-ручки до полной раскладки. */
 export const METER_MIN = 7
-export const METER_MAX = 150
+export const METER_MAX = 70
 export const METER_DEFAULT = 62
 /** Ниже этой ширины показывать нечего — остаётся только ручка. */
 const HIDDEN_BELOW = 18
 /** С этой ширины рядом с ползунком помещаются полоски каналов. */
 const CHANNELS_FROM = 46
-/** А с этой — деления встают отдельной колонкой между каналами. */
-const RULER_FROM = 74
 
 /** Доля высоты шкалы для уровня в децибелах. */
 function share(db: number): number {
@@ -162,8 +161,8 @@ export function MasterMeter({
       {/* Подпись громкости — внутри шины, как и деления шкалы: вынесенная
           вниз, она была шире колонки и раздвигала всё окно. */}
       <span
-          className={`pointer-events-none absolute left-0 w-full bg-black/55 text-center font-mono text-[7.5px] leading-[9px] tabular-nums ${
-            master > 1 ? 'text-warn' : 'text-white/75'
+          className={`pointer-events-none absolute left-0 w-full rounded-[3px] bg-accent text-center font-mono text-[8.5px] font-semibold leading-[13px] tabular-nums ${
+            master > 1 ? 'text-warn' : 'text-white'
           }`}
           style={{
             top: `${(1 - (gainToDb(master) - MIN_DB) / (MAX_DB - MIN_DB)) * 100}%`,
@@ -175,9 +174,10 @@ export function MasterMeter({
     </div>
   )
 
+  // Шина, запомненная шире нынешнего предела, встаёт на предел.
+  width = Math.min(width, METER_MAX)
   const shown = width >= HIDDEN_BELOW
   const withChannels = width >= CHANNELS_FROM
-  const withRuler = width >= RULER_FROM
 
   return (
     <div
@@ -203,9 +203,8 @@ export function MasterMeter({
                 {fader}
                 <div className="relative flex min-h-0 gap-[3px]">
                   <Channel db={levels.left} peak={peaks.left} />
-                  {withRuler && <Ruler />}
                   <Channel db={levels.right} peak={peaks.right} />
-                  {!withRuler && <Marks />}
+                  <Marks />
                 </div>
               </>
             ) : (
@@ -246,23 +245,6 @@ function shortLabel(gain: number): string {
   if (gain <= 0) return '−∞'
   const db = gainToDb(gain)
   return `${db > 0 ? '+' : ''}${Math.round(db)} дБ`
-}
-
-/** Деления отдельной колонкой — между каналами, когда места хватает. */
-function Ruler() {
-  return (
-    <div className="relative w-[18px]">
-      {MARKS.map((db) => (
-        <div
-          key={db}
-          className="absolute inset-x-0 text-center font-mono text-[7.5px] leading-[9px] tabular-nums text-ink-faint"
-          style={markPlace(db)}
-        >
-          {db}
-        </div>
-      ))}
-    </div>
-  )
 }
 
 /** Подписи делений, нарисованные поверх полосок. */

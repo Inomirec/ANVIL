@@ -456,6 +456,12 @@ def mask_margin(clip: ComposeClip) -> tuple[float, float]:
     width, height = mask_size(clip)
     box_w = max(clip.mask.w * width, 2.0)
     box_h = max(clip.mask.h * height, 2.0)
+    if clip.mask.shape == "ellipse":
+        # Край овала считается в долях самого овала (`shape_render`): у
+        # вытянутого вдоль длинной стороны он шире в пикселях. Запас поровну
+        # «в пикселях» обрезал его там резкой линией — края не хватало места.
+        # Поэтому и запас — та же доля от каждой стороны.
+        return _feather(clip) / 2, _feather(clip) / 2
     soft = _feather(clip) * min(box_w, box_h) / 2
     return soft / box_w, soft / box_h
 

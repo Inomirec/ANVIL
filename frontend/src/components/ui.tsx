@@ -499,7 +499,8 @@ export function Dropdown<T extends string>({
   className = '',
 }: {
   value: T
-  options: { value: T; label: string; hint?: string }[]
+  /** ``title`` — пояснение пункта при наведении. */
+  options: { value: T; label: string; hint?: string; title?: string }[]
   onChange: (value: T) => void
   /** Кнопка, по которой список открывается. */
   children: ReactNode
@@ -565,6 +566,7 @@ export function Dropdown<T extends string>({
             <button
               key={item.value}
               type="button"
+              title={item.title}
               onMouseDown={(event) => event.stopPropagation()}
               onClick={() => {
                 onChange(item.value)

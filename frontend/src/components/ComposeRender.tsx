@@ -127,6 +127,15 @@ const VIDEO_CODECS = [
  * Кодеки звука и подписи битрейта у каждого свои: 96 кбит/с у Opus — обычный
  * выбор, а у MP3 — уже слышно.
  */
+/** Подписи битрейта звука — буквами, как у видео; что они значат — в подсказке. */
+function soundMarks(small: number, medium: number, large: number) {
+  return [
+    { value: small, label: 'S', hint: 'S — для речи: голос разборчив, музыка звучит глуховато' },
+    { value: medium, label: 'M', hint: 'M — обычно: и речь, и музыка звучат чисто' },
+    { value: large, label: 'L', hint: 'L — с запасом: для музыки, на слух не отличить от исходника' },
+  ]
+}
+
 const AUDIO_CODECS: {
   value: string
   label: string
@@ -134,31 +143,35 @@ const AUDIO_CODECS: {
   min: number
   max: number
   normal: number
-  marks: { value: number; label: string }[]
+  marks: { value: number; label: string; hint?: string }[]
 }[] = [
   {
     value: 'opus', label: 'Opus', title: 'Лучше всех при малом весе',
     min: 32, max: 320, normal: 160,
-    marks: [{ value: 64, label: 'речь' }, { value: 128, label: 'обычно' }, { value: 192, label: 'музыка' }, { value: 256, label: 'отлично' }],
+    marks: soundMarks(64, 128, 192),
   },
   {
     value: 'aac', label: 'AAC', title: 'Играет везде',
     min: 64, max: 320, normal: 192,
-    marks: [{ value: 96, label: 'речь' }, { value: 160, label: 'обычно' }, { value: 256, label: 'музыка' }, { value: 320, label: 'отлично' }],
+    marks: soundMarks(96, 160, 256),
   },
   {
     value: 'mp3', label: 'MP3', title: 'Играет везде, даже в старом',
     min: 96, max: 320, normal: 256,
-    marks: [{ value: 128, label: 'речь' }, { value: 192, label: 'обычно' }, { value: 256, label: 'музыка' }, { value: 320, label: 'максимум' }],
+    marks: soundMarks(128, 192, 320),
   },
   { value: 'flac', label: 'FLAC', title: 'Без потерь — тяжёлый', min: 0, max: 0, normal: 0, marks: [] },
   { value: 'none', label: 'Нет', title: 'Без звука', min: 0, max: 0, normal: 0, marks: [] },
 ]
 
+/**
+ * Контейнер — «коробка», в которую кладутся видео и звук. На картинку и вес
+ * почти не влияет, влияет на то, что файл откроет.
+ */
 const CONTAINERS = [
-  { value: 'mp4', label: 'MP4' },
-  { value: 'mkv', label: 'MKV' },
-  { value: 'webm', label: 'WebM' },
+  { value: 'mp4', label: 'MP4', title: 'Открывается везде: в плеерах, браузерах, на телефоне и в SIGame. Если не знаете, что выбрать, — это' },
+  { value: 'mkv', label: 'MKV', title: 'Для архива и монтажных программ: держит любые кодеки и несколько дорожек. Телефоны и браузеры открывают не всегда' },
+  { value: 'webm', label: 'WebM', title: 'Для сайтов: открывается в браузерах. Внутри только AV1 или VP9 и Opus' },
 ]
 
 /**
@@ -177,16 +190,16 @@ function round250(value: number): number {
   return Math.max(250, Math.round(value / 250) * 250)
 }
 
-export function bitrateMarks(codec: string, frame: Frame): { value: number; label: string }[] {
+export function bitrateMarks(codec: string, frame: Frame): { value: number; label: string; hint: string }[] {
   const pixels = Math.max(1, frame.width * frame.height)
   const normal = (NORMAL_1080[codec] ?? NORMAL_1080.h264) * Math.pow(pixels / (1920 * 1080), 0.75)
   return [
     // Буквы, а не слова: слова не помещались в строку и шли лесенкой в два
     // ряда — шкала занимала втрое больше места. S — экономно, M — обычно,
     // L — с запасом; словами — в подсказке.
-    { value: round250(normal * 0.55), label: 'S' },
-    { value: round250(normal), label: 'M' },
-    { value: round250(normal * 2), label: 'L' },
+    { value: round250(normal * 0.55), label: 'S', hint: 'S — экономно: файл лёгкий, но в движении и на мелких деталях видно мыло и квадратики' },
+    { value: round250(normal), label: 'M', hint: 'M — обычно: на глаз как исходник, вес разумный. Подходит почти всегда' },
+    { value: round250(normal * 2), label: 'L', hint: 'L — с запасом: разницы с исходником не видно и на сложных сценах, файл тяжелее' },
   ]
 }
 
@@ -218,10 +231,20 @@ export function bitrateForFrame(value: number, codec: string, from: Frame, to: F
  * в узкой колонке больше не помещается. Слова описывают картинку, а не
  * сравнение с исходником: исходников на таймлайне может быть сколько угодно.
  */
-const QUALITY_SCALE: Record<string, { best: number; worst: number; marks: { crf: number; label: string }[] }> = {
-  av1_svt: { best: 16, worst: 52, marks: [{ crf: 46, label: 'L' }, { crf: 35, label: 'M' }, { crf: 24, label: 'H' }] },
-  h265: { best: 14, worst: 40, marks: [{ crf: 34, label: 'L' }, { crf: 27, label: 'M' }, { crf: 20, label: 'H' }] },
-  h264: { best: 12, worst: 38, marks: [{ crf: 32, label: 'L' }, { crf: 25, label: 'M' }, { crf: 18, label: 'H' }] },
+const QUALITY_HINTS = {
+  L: 'Low — низкое: файл совсем лёгкий, но картинка заметно хуже исходника — мыло, квадратики в движении',
+  M: 'Medium — среднее: на обычном экране почти как исходник, вес умеренный',
+  H: 'High — высокое: на глаз не отличить от исходника, файл тяжелее',
+}
+const qualityMarks = (low: number, mid: number, high: number) => [
+  { crf: low, label: 'L', hint: QUALITY_HINTS.L },
+  { crf: mid, label: 'M', hint: QUALITY_HINTS.M },
+  { crf: high, label: 'H', hint: QUALITY_HINTS.H },
+]
+const QUALITY_SCALE: Record<string, { best: number; worst: number; marks: { crf: number; label: string; hint: string }[] }> = {
+  av1_svt: { best: 16, worst: 52, marks: qualityMarks(46, 35, 24) },
+  h265: { best: 14, worst: 40, marks: qualityMarks(34, 27, 20) },
+  h264: { best: 12, worst: 38, marks: qualityMarks(32, 25, 18) },
 }
 
 function qualityScale(codec: string) {
@@ -238,24 +261,23 @@ function qualityWord(codec: string, crf: number): string {
 }
 
 
-/** Названия скоростей: у AV1 это числа, у остальных — слова. */
-function speedOptions(codec: string): { value: string; label: string }[] {
-  if (codec === 'av1_svt') {
-    return [
-      { value: '2', label: 'Очень медленно' },
-      { value: '4', label: 'Медленно' },
-      { value: '5', label: 'Обычно' },
-      { value: '7', label: 'Быстро' },
-      { value: '9', label: 'Очень быстро' },
-    ]
-  }
-  return [
-    { value: 'veryslow', label: 'Очень медленно' },
-    { value: 'slow', label: 'Медленно' },
-    { value: 'medium', label: 'Обычно' },
-    { value: 'fast', label: 'Быстро' },
-    { value: 'veryfast', label: 'Очень быстро' },
-  ]
+/**
+ * Скорость кодирования. Это не скорость видео, а сколько кодировщик
+ * старается: медленнее — при том же весе картинка чуть лучше (или при той же
+ * картинке файл легче), быстрее — готово раньше. У AV1 это числа, у
+ * остальных — слова.
+ */
+const SPEED_HINTS = [
+  'Дольше всех — в разы дольше обычного. Выигрыш в весе небольшой: для архива, когда время не жалко',
+  'Заметно дольше обычного, файл чуть легче при той же картинке',
+  'Обычный выбор: разумное время и хороший результат',
+  'Быстрее, файл немного тяжелее при той же картинке',
+  'Быстрее всех — для черновиков: файл заметно тяжелее или хуже',
+]
+function speedOptions(codec: string): { value: string; label: string; title: string }[] {
+  const values = codec === 'av1_svt' ? ['2', '4', '5', '7', '9'] : ['veryslow', 'slow', 'medium', 'fast', 'veryfast']
+  const labels = ['Очень медленно', 'Медленно', 'Обычно', 'Быстро', 'Очень быстро']
+  return values.map((value, index) => ({ value, label: labels[index], title: SPEED_HINTS[index] }))
 }
 
 /** Короткая строка под кнопкой: что получится, не открывая окно. */
@@ -282,15 +304,18 @@ function Choice({
   value,
   options,
   onChange,
+  hint,
 }: {
   label: string
   value: string
-  options: { value: string; label: string }[]
+  options: { value: string; label: string; title?: string }[]
   onChange: (value: string) => void
+  /** Что это за настройка — подсказка у заголовка. */
+  hint?: string
 }) {
   return (
     <div className="min-w-0 flex-1">
-      <span className="label">{label}</span>
+      <span className="label" title={hint}>{label}</span>
       <Dropdown
         value={value}
         options={options}
@@ -435,7 +460,7 @@ export function ComposeRenderPanel({
               min={scale.best}
               max={scale.worst}
               reset={flip(scale.marks[2].crf)}
-              marks={scale.marks.map((mark) => ({ value: flip(mark.crf), label: mark.label }))}
+              marks={scale.marks.map((mark) => ({ value: flip(mark.crf), label: mark.label, hint: mark.hint }))}
               onChange={(position) => {
                 const crf = Math.round(flip(position))
                 setLast((was) => ({ ...was, crf }))
@@ -480,12 +505,14 @@ export function ComposeRenderPanel({
         <div className="flex gap-2">
           <Choice
             label="Скорость"
+            hint="Сколько кодировщик старается. На само видео (длину, скорость воспроизведения) не влияет: медленнее — дольше ждать, но файл чуть лучше"
             value={value.speedPreset}
             options={speedOptions(value.videoCodec)}
             onChange={(speedPreset) => set({ speedPreset })}
           />
           <Choice
-            label="Файл"
+            label="Контейнер"
+            hint="Формат файла — «коробка», в которую кладутся видео и звук. Если не знаете, что выбрать, — MP4"
             value={value.container}
             options={CONTAINERS}
             onChange={(container) => set({ container })}

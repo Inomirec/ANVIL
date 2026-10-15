@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Camera,
   ChevronDown,
@@ -230,7 +230,7 @@ export function ComposeTab() {
   // 1080p на 480p было бы втрое больше нужного. Свой размер кадра —
   // исключение: там человек сам знает, чего хочет.
   const lastFrame = useRef<{ width: number; height: number } | null>(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const was = lastFrame.current
     lastFrame.current = { width, height }
     if (!was || custom || (was.width === width && was.height === height)) return
@@ -256,8 +256,10 @@ export function ComposeTab() {
   // Окно сохранённых монтажей: программа сама помнит только последний.
   const [projectsOpen, setProjectsOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const spareRef = useRef<HTMLVideoElement>(null)
+  const videoPair = useRef<[typeof videoRef, typeof videoRef]>([videoRef, spareRef]).current
   const frameBox = useRef<HTMLDivElement>(null)
-  const player = useComposePlayer(videoRef)
+  const player = useComposePlayer(videoPair)
   // Чтение файла занимает мгновение, но окно без этого выглядит зависшим.
   // Держим и место, откуда началась работа: значок должен появиться под
   // курсором сразу, а не после первого движения мыши.
@@ -933,13 +935,22 @@ export function ComposeTab() {
                 }}
               >
                 {/* Пока смотрим — играет собранный кусок, иначе показываем
-                    кадр под иглой. Снаружи разницы нет: то же окно. */}
-                <video
-                  ref={videoRef}
-                  className={`h-full w-full object-contain ${player.playing ? '' : 'hidden'}`}
-                  onEnded={() => void player.onEnded()}
-                  onError={() => player.stop()}
-                />
+                    кадр под иглой. Снаружи разницы нет: то же окно. Видео два
+                    и играют по очереди: следующий кусок уже загружен во
+                    второе, и на стыке нет пустого кадра. */}
+                {[videoRef, spareRef].map((ref, index) => (
+                  <video
+                    key={index}
+                    ref={ref}
+                    className={`absolute inset-0 h-full w-full object-contain ${
+                      player.playing && player.shown === index ? '' : 'invisible'
+                    }`}
+                    onEnded={() => void player.onEnded(index)}
+                    onError={() => {
+                      if (player.shown === index) player.stop()
+                    }}
+                  />
+                ))}
                 {!player.playing && frameUrl && (
                   <img src={frameUrl} alt="" className="h-full w-full object-contain" />
                 )}

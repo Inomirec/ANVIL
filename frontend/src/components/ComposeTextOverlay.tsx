@@ -285,7 +285,6 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
         // пишут и нажатие внутри ставит курсор.
         padding: FRAME_PAD,
       }}
-      title="Потяните за рамку, чтобы подвинуть. Нажмите на текст, чтобы писать"
       onMouseDown={(event) => {
         if (event.target === box.current) begin(event)
       }}
@@ -313,11 +312,16 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
             [
               ...(stroke ? ringStroke(v.stroke, v.strokeColor) : []),
               ...(shadow
-                ? [`${share(v.shadowX)} ${share(v.shadowY)} 0 ${withAlpha(v.shadowColor, v.shadowAlpha)}`]
+                ? [
+                    // Размытие в CSS задаётся радиусом — это примерно две
+                    // сигмы размытия, которым тень размывает сборка.
+                    `${share(v.shadowX)} ${share(v.shadowY)} ${share(2 * (v.shadowBlur ?? 0))} ${withAlpha(v.shadowColor, v.shadowAlpha)}`,
+                  ]
                 : []),
             ].join(', ') || undefined,
           background: v.box ? withAlpha(v.boxColor, v.boxAlpha) : undefined,
           padding: v.box ? share(v.boxPad) : undefined,
+          borderRadius: v.box && v.boxRadius ? share(v.boxRadius) : undefined,
         }}
         onMouseDown={(event) => {
           // В редактируемой надписи нажатие ставит курсор и выделяет слова,

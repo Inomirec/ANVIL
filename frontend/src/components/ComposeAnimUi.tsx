@@ -139,12 +139,31 @@ export function PlaceFields({ clip, size = true }: { clip: ComposeClip; size?: b
       {row(
         'opacity',
         'Видимость',
-        <NumberBox
-          value={now.opacity * 100}
-          unit="%"
-          title="Непрозрачность клипа: 100 — виден целиком, 0 — не виден вовсе"
-          onDone={(value) => applyValues(clip.id, { opacity: Math.min(100, Math.max(0, value)) / 100 })}
-        />,
+        <>
+          {/* Ползунок — подбирать на глаз, поле — вписать точно. */}
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(now.opacity * 100)}
+            title="Непрозрачность клипа: вправо — виден целиком, влево — не виден вовсе. Двойное нажатие вернёт 100%"
+            onMouseDown={(event) => {
+              useCompose.getState().mark()
+              if (event.detail >= 2) {
+                event.preventDefault()
+                applyValues(clip.id, { opacity: 1 })
+              }
+            }}
+            onChange={(event) => applyValues(clip.id, { opacity: Number(event.target.value) / 100 })}
+            className="min-w-0 flex-1"
+          />
+          <NumberBox
+            value={now.opacity * 100}
+            unit="%"
+            title="Непрозрачность клипа: 100 — виден целиком, 0 — не виден вовсе"
+            onDone={(value) => applyValues(clip.id, { opacity: Math.min(100, Math.max(0, value)) / 100 })}
+          />
+        </>,
       )}
       {size &&
         row(

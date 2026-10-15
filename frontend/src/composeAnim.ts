@@ -22,6 +22,38 @@ export interface AnimKey {
   v: number
   /** Точки своей формы маски — у показателя `mask.points` вместо числа. */
   p?: [number, number][]
+  /** Как идёт переход от этого ключа к следующему; нет — плавно. */
+  e?: Ease
+}
+
+/** Виды перехода между ключами — те же, что на сервере (`anim.EASES`). */
+export type Ease = 'linear' | 'fast' | 'slow' | 'smooth' | 'sharp' | 'hold'
+export const EASES: { value: Ease; label: string; hint: string }[] = [
+  { value: 'linear', label: 'Linear', hint: 'Ровно, с одной скоростью от ключа до ключа' },
+  { value: 'fast', label: 'Fast', hint: 'Резко трогается и плавно приходит' },
+  { value: 'slow', label: 'Slow', hint: 'Плавно трогается и резко приходит' },
+  { value: 'smooth', label: 'Smooth', hint: 'Плавный разгон и плавное торможение — обычный переход' },
+  { value: 'sharp', label: 'Sharp', hint: 'Сильный разгон и сильное торможение: середину проскакивает быстро' },
+  { value: 'hold', label: 'Hold', hint: 'Стоит на месте до следующего ключа и меняется на нём скачком' },
+]
+
+/** Доля пути `s` (0…1) по кривой перехода. */
+export function ease(kind: Ease | undefined, s: number): number {
+  const x = Math.min(1, Math.max(0, s))
+  switch (kind) {
+    case 'linear':
+      return x
+    case 'fast':
+      return 1 - (1 - x) * (1 - x)
+    case 'slow':
+      return x * x
+    case 'sharp':
+      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(2 - 2 * x, 3) / 2
+    case 'hold':
+      return 0
+    default:
+      return x * x * (3 - 2 * x)
+  }
 }
 
 /** Значение показателя: число, а у точек своей формы — список точек. */
@@ -117,7 +149,7 @@ function rawAt(clip: ComposeClip, field: string, local: number): number {
   // Высота «как ширина» (ноль) у одного из ключей — берём размер в тот же
   // миг, как и сервер; иначе высота съезжала бы к нулю между ключами.
   if (field === 'sizeY' && keys.some((key) => key.v > 0) && keys.some((key) => key.v <= 0)) {
-    keys = keys.map((key) => (key.v > 0 ? key : { t: key.t, v: rawAt(clip, 'size', key.t) }))
+    keys = keys.map((key) => (key.v > 0 ? key : { ...key, v: rawAt(clip, 'size', key.t) }))
   }
   if (local <= keys[0].t) return keys[0].v
   for (let index = 0; index < keys.length - 1; index++) {
@@ -125,7 +157,7 @@ function rawAt(clip: ComposeClip, field: string, local: number): number {
     const right = keys[index + 1]
     if (local < right.t) {
       const s = (local - left.t) / Math.max(right.t - left.t, 1e-3)
-      return left.v + (right.v - left.v) * s * s * (3 - 2 * s)
+      return left.v + (right.v - left.v) * ease(left.e, s)
     }
   }
   return keys[keys.length - 1].v
@@ -153,7 +185,7 @@ export function pointsAt(clip: ComposeClip, local: number): [number, number][] {
       // Число точек разное — форма меняется скачком на ключе.
       if (a.length !== b.length) return a
       const s = (local - left.t) / Math.max(right.t - left.t, 1e-3)
-      const e = s * s * (3 - 2 * s)
+      const e = ease(left.e, s)
       return a.map(([x, y], i) => [x + (b[i][0] - x) * e, y + (b[i][1] - y) * e])
     }
   }
@@ -239,7 +271,10 @@ export function withKey(clip: ComposeClip, group: AnimGroup, local: number, valu
   for (const field of group.fields) {
     const value = values[field] ?? anyAt(clip, field, local)
     const rest = (anim[field] ?? []).filter((key) => Math.abs(key.t - at) >= KEY_NEAR / 2)
+    // Переписанный ключ сохраняет свой вид перехода.
+    const was = (anim[field] ?? []).find((key) => Math.abs(key.t - at) < KEY_NEAR / 2)?.e
     const key: AnimKey = Array.isArray(value) ? { t: at, v: 0, p: value } : { t: at, v: value }
+    if (was) key.e = was
     anim[field] = [...rest, key].sort((a, b) => a.t - b.t)
   }
   return anim

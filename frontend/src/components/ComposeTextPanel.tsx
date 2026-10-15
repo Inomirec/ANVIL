@@ -297,7 +297,8 @@ export function SliderNumber({
   /** Подпись строкой над ползунком — для длинных подписей. */
   stacked?: boolean
   /** Рекомендованные значения — подписи под шкалой, нажатие ставит значение. */
-  marks?: { value: number; label: string }[]
+  /** ``hint`` — что даёт это значение, во всплывающей подсказке. */
+  marks?: { value: number; label: string; hint?: string }[]
   /** Что стоит справа от подписи — например, часики ключей. */
   aside?: React.ReactNode
   /**
@@ -360,7 +361,7 @@ export function SliderNumber({
               key={mark.value}
               type="button"
               onClick={() => onChange(mark.value)}
-              title={readout ? `Поставить «${mark.label}»` : `Поставить ${mark.value}${unit ? ' ' + unit : ''}`}
+              title={mark.hint ? (readout ? mark.hint : `${mark.hint} — ${mark.value}${unit ? ' ' + unit : ''}`) : readout ? `Поставить «${mark.label}»` : `Поставить ${mark.value}${unit ? ' ' + unit : ''}`}
               className={`absolute top-0 whitespace-nowrap text-[9.5px] leading-none transition-colors ${
                 edge === 'middle' ? '-translate-x-1/2' : edge === 'end' ? '-translate-x-full' : ''
               } ${near ? 'text-accent-soft' : 'text-ink-faint hover:text-ink-dim'}`}
@@ -693,6 +694,16 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
               reset={75}
               onChange={(value) => put({ shadowAlpha: value / 100 })}
             />
+            <SliderNumber
+              label="Размытие"
+              value={px(v.shadowBlur)}
+              min={0}
+              max={30}
+              step={0.5}
+              unit="px"
+              reset={0}
+              onChange={(value) => put({ shadowBlur: fraction(value) })}
+            />
           </div>
           <ColorSquare value={v.shadowColor} title="Цвет тени" onChange={(value) => put({ shadowColor: value })} />
         </div>
@@ -718,6 +729,15 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
               unit="px"
               reset={EFFECT_PIXELS.boxPad}
               onChange={(value) => put({ boxPad: fraction(value) })}
+            />
+            <SliderNumber
+              label="Скругление"
+              value={px(v.boxRadius)}
+              min={0}
+              max={60}
+              unit="px"
+              reset={0}
+              onChange={(value) => put({ boxRadius: fraction(value) })}
             />
           </div>
           <ColorSquare value={v.boxColor} title="Цвет подложки" onChange={(value) => put({ boxColor: value })} />
