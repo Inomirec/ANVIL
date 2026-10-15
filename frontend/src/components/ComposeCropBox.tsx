@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { clipRect, shownAt, useCompose, type ComposeClip } from '../composeStore'
 import { useHandles } from '../lib/handles'
+import { magnetOn } from '../lib/magnet'
 import { BoxOutline } from './BoxOutline'
 
 /**
@@ -35,6 +36,7 @@ const HANDLES: { id: string; x: number; y: number; sides: Side[]; cursor: string
 ]
 
 function stickTo(value: number): number {
+  if (!magnetOn()) return value
   for (const guide of [0, 0.5, 1]) if (Math.abs(value - guide) < STICK) return guide
   return value
 }

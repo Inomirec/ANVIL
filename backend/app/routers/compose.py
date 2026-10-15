@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import os
 import json
 import re
 import tempfile
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
 from .. import paths
 from ..core import binaries, compose, fonts, fsutil, pipeline, trash
@@ -94,7 +96,9 @@ async def frame(request: ComposeFrameRequest) -> Response:
 
 
 #: Где лежат черновики просмотра и сколько их держим.
-_DRAFT_KEEP = 12
+#: Сорок кусков по 12 секунд — восемь минут монтажа: всё, что отмечено на
+#: линейке как собранное, должно и правда лежать в запасе.
+_DRAFT_KEEP = 40
 #: Пока собирается один кусок, следующий ждёт: иначе десяток ffmpeg разом
 #: положит машину, ради которой всё это и затевалось.
 _draft_lock = asyncio.Lock()
@@ -144,7 +148,12 @@ async def draft(request: ComposeDraftRequest) -> dict:
     key = hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:20]
     target = _draft_dir() / f"{key}.mp4"
 
-    if not target.exists():
+    if target.exists():
+        # Кусок снова понадобился — он свежий: чистка убирает давно не нужные,
+        # а не давно собранные.
+        with contextlib.suppress(OSError):
+            os.utime(target)
+    else:
         async with _draft_lock:
             # Пока ждали очереди, соседний запрос мог всё собрать за нас.
             if not target.exists():
@@ -271,6 +280,29 @@ async def open_project(name: str) -> dict:
     except (OSError, ValueError) as exc:
         raise HTTPException(400, "Файл монтажа испорчен и не читается") from exc
     return {"name": target.stem, "project": data}
+
+
+class ProjectRename(BaseModel):
+    to: str
+
+
+@router.post("/projects/{name}/rename")
+async def rename_project(name: str, request: ProjectRename) -> dict:
+    """Переименовывает сохранённый проект — это просто другое имя файла.
+
+    Занятое имя не трогаем: молча затереть другой проект хуже, чем попросить
+    придумать другое.
+    """
+    source = _project_path(name)
+    if not source.is_file():
+        raise HTTPException(404, "Такого проекта нет — возможно, файл удалили")
+    target = _project_path(request.to)
+    if target == source:
+        return {"name": target.stem}
+    if target.exists():
+        raise HTTPException(409, f"Проект «{target.stem}» уже есть — выберите другое имя")
+    await asyncio.to_thread(source.rename, target)
+    return {"name": target.stem}
 
 
 @router.delete("/projects/{name}")

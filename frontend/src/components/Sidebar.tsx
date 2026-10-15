@@ -10,6 +10,7 @@ import {
   FolderTree,
   LayoutGrid,
   List,
+  Rows3,
   Image as ImageIcon,
   Music,
   RefreshCw,
@@ -28,6 +29,38 @@ import { Button, IconButton, Modal, Segmented, Spinner } from './ui'
 const PAGE = 120
 
 const LAYOUT_KEY = 'sgh.libraryLayout'
+
+/**
+ * Вид списка файлов: строки с превью, плитки — и таблица, без превью, по
+ * строке на файл, как в проводнике: когда файлов сотни, их листают, а не
+ * разглядывают. Кнопка переключает по кругу.
+ */
+type Layout = 'list' | 'grid' | 'table'
+const NEXT_LAYOUT: Record<Layout, Layout> = { list: 'grid', grid: 'table', table: 'list' }
+const LAYOUT_TITLE: Record<Layout, string> = {
+  list: 'Показать списком',
+  grid: 'Показать плиткой',
+  table: 'Показать таблицей — без превью, по строке на файл',
+}
+
+/**
+ * Имя файла в одну строку. Не влезло — полное имя всплывает при наведении:
+ * у длинного имени и его копии с припиской в конце иначе видно одно и то же.
+ */
+function FileName({ name, className }: { name: string; className: string }) {
+  return (
+    <p
+      className={`truncate ${className}`}
+      onMouseEnter={(event) => {
+        const element = event.currentTarget
+        if (element.scrollWidth > element.clientWidth) element.title = name
+        else element.removeAttribute('title')
+      }}
+    >
+      {name}
+    </p>
+  )
+}
 
 type SortKey = 'name' | 'size' | 'modified' | 'kind'
 
@@ -76,11 +109,12 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
   )
   // Режим показа запоминаем: большинство файлов узнаются по превью, но кому-то
   // привычнее плотный список.
-  const [layout, setLayout] = useState<'list' | 'grid'>(
-    () => (localStorage.getItem(LAYOUT_KEY) as 'list' | 'grid') ?? 'list',
-  )
+  const [layout, setLayout] = useState<Layout>(() => {
+    const saved = localStorage.getItem(LAYOUT_KEY)
+    return saved === 'grid' || saved === 'table' ? saved : 'list'
+  })
 
-  function switchLayout(next: 'list' | 'grid') {
+  function switchLayout(next: Layout) {
     setLayout(next)
     localStorage.setItem(LAYOUT_KEY, next)
   }
@@ -311,11 +345,11 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
           <FolderTree size={12} />
         </IconButton>
         <IconButton
-          onClick={() => switchLayout(layout === 'list' ? 'grid' : 'list')}
-          title={layout === 'list' ? 'Показать плиткой' : 'Показать списком'}
+          onClick={() => switchLayout(NEXT_LAYOUT[layout])}
+          title={LAYOUT_TITLE[NEXT_LAYOUT[layout]]}
           className="h-6 w-6"
         >
-          {layout === 'list' ? <LayoutGrid size={12} /> : <List size={12} />}
+          {layout === 'list' ? <LayoutGrid size={12} /> : layout === 'grid' ? <Rows3 size={12} /> : <List size={12} />}
         </IconButton>
         <IconButton onClick={() => void refreshLibrary()} title="Обновить список" className="h-6 w-6">
           {loading ? <Spinner size={12} /> : <RefreshCw size={12} />}
@@ -392,9 +426,10 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
             ))}
           </ul>
         ) : (
-          <ul className="space-y-0.5">
+          <ul className={layout === 'table' ? '' : 'space-y-0.5'}>
             {shown.map((file) => (
               <FileRow
+                dense={layout === 'table'}
                 key={file.path}
                 file={file}
                 active={activePath === file.path}
@@ -462,6 +497,7 @@ function dragToTimeline(path: string) {
 }
 
 function FileRow({
+  dense = false,
   file,
   active,
   checked,
@@ -471,6 +507,8 @@ function FileRow({
   onDelete,
   onCancelDelete,
 }: {
+  /** Строка таблицы: без превью и второй строки, значок вида и вес справа. */
+  dense?: boolean
   file: LibraryFile
   active: boolean
   checked: boolean
@@ -487,7 +525,7 @@ function FileRow({
   return (
     <li>
       <div
-        className={`group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors ${
+        className={`group flex cursor-pointer items-center ${dense ? 'gap-1.5 px-1.5 py-[3px]' : 'gap-2.5 rounded-lg px-2 py-1.5'} transition-colors ${
           active ? 'bg-accent/12 ring-1 ring-accent/35' : 'hover:bg-surface-2'
         }`}
         onClick={onOpen}
@@ -507,6 +545,9 @@ function FileRow({
           {checked ? <CheckSquare size={14} /> : <Square size={14} />}
         </button>
 
+        {dense ? (
+          <Icon size={13} className="shrink-0 text-ink-faint" />
+        ) : (
         <div className="relative h-9 w-14 shrink-0 overflow-hidden rounded bg-surface-3">
           {showThumb ? (
             <img
@@ -523,11 +564,16 @@ function FileRow({
             </span>
           )}
         </div>
+        )}
 
+        {dense ? (
+          <>
+            <FileName name={file.name} className={`min-w-0 flex-1 text-[12px] ${active ? 'text-ink' : 'text-ink-dim'}`} />
+            <span className="shrink-0 text-[10.5px] tabular-nums text-ink-faint group-hover:hidden">{humanSize(file.size)}</span>
+          </>
+        ) : (
         <div className="min-w-0 flex-1">
-          <p className={`truncate text-[12.5px] ${active ? 'text-ink' : 'text-ink-dim'}`}>
-            {file.name}
-          </p>
+          <FileName name={file.name} className={`text-[12.5px] ${active ? 'text-ink' : 'text-ink-dim'}`} />
           <p className="truncate text-[10.5px] text-ink-faint">
             {file.ext.toUpperCase()} · {humanSize(file.size)}
             {file.relative.includes('\\') || file.relative.includes('/')
@@ -535,6 +581,7 @@ function FileRow({
               : ''}
           </p>
         </div>
+        )}
 
         {confirming ? (
           <div className="flex shrink-0 items-center gap-1">
@@ -656,9 +703,7 @@ function FileTile({
         </div>
 
         <div className={`px-1.5 py-1 ${active ? 'bg-accent/12' : 'bg-surface-2'}`}>
-          <p className="truncate text-[11.5px] text-ink-dim" title={file.name}>
-            {file.name}
-          </p>
+          <FileName name={file.name} className="text-[11.5px] text-ink-dim" />
           <p className="truncate text-[10px] text-ink-faint">
             {file.ext.toUpperCase()} · {humanSize(file.size)}
           </p>

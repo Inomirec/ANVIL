@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useHandles } from '../lib/handles'
+import { magnetOn } from '../lib/magnet'
 import { BoxOutline } from './BoxOutline'
 import {
   clampPlace,
@@ -56,6 +57,7 @@ const SNAP = 0.012
 
 /** Двигает значение к ближайшей направляющей, если она рядом. */
 export function stick(anchors: number[], shift: number, guides: number[]): number {
+  if (!magnetOn()) return shift
   let best = 0
   let closest = SNAP
   for (const anchor of anchors) {

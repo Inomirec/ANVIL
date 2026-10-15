@@ -9,6 +9,7 @@ import {
   Layers,
   Link2,
   Loader2,
+  Magnet,
   Music2 as MusicTrack,
   PaintBucket,
   Type,
@@ -26,6 +27,9 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
+import { VolumeControl } from './VolumeControl'
+import { usePreviewReady } from '../hooks/useComposePlayer'
+import { setMagnet, useMagnet } from '../lib/magnet'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
 import { cutTimes, frameCode, scenesOf, useScenes } from '../lib/scenes'
@@ -212,6 +216,9 @@ export function ComposeTimeline({
   const clearMarks = useCompose((state) => state.clearMarks)
   const groupClips = useCompose((state) => state.groupClips)
   const ungroupClips = useCompose((state) => state.ungroupClips)
+  const magnet = useMagnet()
+  // Громкость до выключения звука значком — к ней и возвращаемся.
+  const heardBefore = useRef(0.8)
 
   // Сжатые дорожки и ширина колонки с названиями — про то, как человеку
   // удобно смотреть, а не про сам монтаж: в файл проекта это не идёт, но
@@ -817,10 +824,10 @@ export function ComposeTimeline({
           посередине — просмотр, справа — что делают со всем монтажом и с
           самим таймлайном. Середина держится по центру окна и не ездит,
           когда слева появляются надписи вроде «добавляю файл…». */}
-      <div className="grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-line-soft px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line-soft px-2">
         {/* Слева: что делают с клипами и дорожками */}
-        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-          <IconButton
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+          <IconButton className="h-7 w-7"
             title="Отменить последнее действие (Ctrl+Z)"
             onClick={() => useCompose.getState().undo()}
           >
@@ -829,10 +836,10 @@ export function ComposeTimeline({
 
           <span className="mx-0.5 h-4 w-px bg-line-soft" />
 
-          <IconButton title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
+          <IconButton className="h-7 w-7" title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
             <Scissors size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Удалить выбранное (Delete)"
             onClick={() => selected.length && removeClips(selected)}
             disabled={!selected.length}
@@ -842,27 +849,30 @@ export function ComposeTimeline({
 
           <span className="mx-0.5 h-4 w-px bg-line-soft" />
 
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Добавить видеодорожку — она ляжет верхним слоем"
             onClick={() => addTrack('video')}
             disabled={tracks.length >= MAX_TRACKS}
           >
             <Layers size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Добавить звуковую дорожку"
             onClick={() => addTrack('audio')}
             disabled={tracks.length >= MAX_TRACKS}
           >
             <MusicTrack size={14} />
           </IconButton>
-          <IconButton
+
+          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+
+          <IconButton className="h-7 w-7"
             title="Положить заливку под иглу: сплошной цвет под картинки с полями, под заставку или полосой поверх кадра"
             onClick={() => addColor('#101018')}
           >
             <PaintBucket size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Положить надпись под иглу: субтитр, заголовок или подпись поверх кадра"
             onClick={() => addText()}
           >
@@ -870,9 +880,13 @@ export function ComposeTimeline({
           </IconButton>
           <KeyBar />
 
+          {/* Сколько выбрано — числом: слово в плотной панели обрезалось. */}
           {selected.length > 1 && (
-            <span className="ml-1 shrink-0 text-[11px] text-accent-soft">
-              выбрано: {selected.length}
+            <span
+              className="ml-1 shrink-0 bg-accent/20 px-1.5 font-mono text-[11px] tabular-nums text-accent-soft"
+              title={`Выбрано клипов: ${selected.length}`}
+            >
+              {selected.length}
             </span>
           )}
           {/* Чтение файла занимает мгновение, но без этого окно выглядит
@@ -886,8 +900,8 @@ export function ComposeTimeline({
         </div>
 
         {/* Посередине: просмотр */}
-        <div className="flex items-center gap-1.5">
-          <IconButton
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton className="h-7 w-7"
             title="В начало монтажа"
             onClick={() => {
               player.stop()
@@ -896,7 +910,7 @@ export function ComposeTimeline({
           >
             <SkipBack size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title={player.playing ? 'Пауза' : 'Смотреть с иглы (пробел)'}
             onClick={() => (player.playing ? player.stop() : player.start())}
             active={player.playing}
@@ -909,7 +923,7 @@ export function ComposeTimeline({
               <PlayIcon size={14} />
             )}
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Повторять по кругу"
             onClick={() => player.setLoop(!player.loop)}
             active={player.loop}
@@ -917,56 +931,67 @@ export function ComposeTimeline({
             <Repeat size={14} />
           </IconButton>
           {/* Громкость прослушивания: на готовый файл не влияет, поэтому стоит
-              здесь, рядом с кнопками просмотра, а не на шине громкости. */}
-          <div
-            className="flex w-[86px] items-center gap-1"
-            title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}
-          >
-            <Headphones size={13} className="shrink-0 text-ink-faint" />
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(player.volume * 100)}
-              onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
-              className="w-full"
-            />
-          </div>
+              здесь, рядом с кнопками просмотра. Значком, а ползунок всплывает
+              над ним: полоска в строке не давала панели уместиться. */}
+          <VolumeControl
+            small
+            volume={player.volume}
+            muted={player.volume === 0}
+            title={`Громкость прослушивания ${Math.round(player.volume * 100)}% — на готовый файл не влияет`}
+            onMute={() => {
+              if (player.volume > 0) {
+                heardBefore.current = player.volume
+                player.setVolume(0)
+              } else player.setVolume(heardBefore.current || 0.8)
+            }}
+            onChange={player.setVolume}
+          />
         </div>
 
         {/* Справа: как выглядит сам таймлайн. Где стоит игла и что уйдёт в
             файл, видно на самом таймлайне — метками и её чертой, поэтому
             словами это здесь не повторяем: место на панели дороже. */}
-        <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-0.5 overflow-hidden">
 
-          <IconButton title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
+          <IconButton className="h-7 w-7" title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
             <FlagTriangleRight size={14} />
           </IconButton>
-          <IconButton title="Конец отрезка сборки (O)" onClick={markOut} active={renderOut !== null}>
+          <IconButton className="h-7 w-7" title="Конец отрезка сборки (O)" onClick={markOut} active={renderOut !== null}>
             <FlagTriangleLeft size={14} />
           </IconButton>
           {(renderIn !== null || renderOut !== null) && (
-            <IconButton title="Собрать всё целиком" onClick={clearMarks}>
+            <IconButton className="h-7 w-7" title="Собрать всё целиком" onClick={clearMarks}>
               <X size={14} />
             </IconButton>
           )}
 
           <span className="mx-0.5 h-4 w-px bg-line-soft" />
 
-          <IconButton
+          <IconButton className="h-7 w-7"
+            title={
+              magnet
+                ? 'Прилипание включено: клипы, игла и рамки в кадре липнут к краям, сетке и друг к другу. Нажмите, чтобы выключить'
+                : 'Прилипание выключено: всё ставится точно по мыши. Нажмите, чтобы включить'
+            }
+            active={magnet}
+            onClick={() => setMagnet(!magnet)}
+          >
+            <Magnet size={14} />
+          </IconButton>
+          <IconButton className="h-7 w-7"
             title="Сжать дорожки, чтобы поместились все (Ё)"
             active={compact}
             onClick={() => setCompact(!compact)}
           >
             {compact ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Отдалить (колесо мыши)"
             onClick={() => keepPlayhead(Math.max(minScale(), scale / 1.4))}
           >
             <ZoomOut size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Показать монтаж целиком"
             onClick={() => {
               // До этого же места доходит и колесо, только за полтора десятка
@@ -983,7 +1008,7 @@ export function ComposeTimeline({
           >
             <Scan size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             title="Приблизить (колесо мыши)"
             onClick={() => keepPlayhead(Math.min(MAX_SCALE, scale * 1.4))}
           >
@@ -1201,11 +1226,11 @@ export function ComposeTimeline({
               {crossfades(track).map((zone) => (
                 <div
                   key={`${zone.from}-${zone.to}`}
-                  className="pointer-events-none absolute top-1.5 overflow-hidden rounded bg-accent/10 ring-1 ring-inset ring-accent/40"
+                  className="pointer-events-none absolute top-0 overflow-hidden bg-accent/10 ring-1 ring-inset ring-accent/40"
                   style={{
                     left: zone.from * scale,
                     width: Math.max((zone.to - zone.from) * scale, 2),
-                    height: heightFor(track) - 12,
+                    height: heightFor(track) - 1,
                   }}
                 >
                   <svg className="h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -1757,8 +1782,9 @@ function ClipMenu({
       )}
       <div className="my-1 h-px bg-line-soft" />
       {item('Копировать', 'Ctrl+C', () => state.copyClips(state.selected.length ? state.selected : [clipId]))}
-      {item('Сгруппировать', 'G', () => state.groupClips(state.selected), !many)}
-      {item('Убрать из группы', 'U', () => state.ungroupClips(state.selected), !clip.groupId)}
+      {clip.groupId
+        ? item('Убрать группу', 'U', () => state.ungroupClips(state.selected, clipId))
+        : item('Сгруппировать', 'G', () => state.groupClips(state.selected), !many)}
       <div className="my-1 h-px bg-line-soft" />
       {clip.kind === 'audio' &&
         item(clip.muted ? 'Вернуть звук' : 'Заглушить', '', () =>
@@ -2044,6 +2070,7 @@ function Ruler({
   const from = renderIn ?? 0
   const to = renderOut ?? duration
   const marked = renderIn !== null || renderOut !== null
+  const ready = usePreviewReady((state) => state.ranges)
 
   return (
     <div
@@ -2068,6 +2095,16 @@ function Ruler({
           }}
         />
       )}
+      {/* Собранные для просмотра куски — тонкой полоской по низу линейки:
+          здесь просмотр пойдёт без ожидания. Правка монтажа её сбрасывает. */}
+      {ready.map((range) => (
+        <div
+          key={range.at}
+          className="pointer-events-none absolute bottom-0 h-[3px] bg-ok/70"
+          style={{ left: range.at * scale, width: Math.max(range.span * scale, 1) }}
+          title="Собрано для просмотра — сыграет без ожидания"
+        />
+      ))}
       {marks.map((at) => (
         <div key={at} className="absolute top-0 h-full" style={{ left: at * scale }}>
           <div className="h-2 w-px bg-line" />
@@ -2256,10 +2293,12 @@ function ClipBox({
       // Углы у клипа прямые: скруглённые съедают края, и при плотной
       // раскладке — особенно на сжатых дорожках — непонятно, где кончается
       // один клип и начинается соседний.
-      className={`group absolute top-1.5 overflow-hidden border ${
-        active ? 'border-accent ring-1 ring-accent/50' : 'border-line-soft'
+      // Клип — во всю высоту дорожки, без полей сверху и снизу: поля съедали
+      // место, а на сжатых дорожках клипы от них сплющивались вдвое.
+      className={`group absolute top-0 overflow-hidden border ${
+        active ? 'border-accent ring-1 ring-inset ring-accent/50' : 'border-line-soft'
       }`}
-      style={{ left: clip.start * scale, width: box, height: height - 12 }}
+      style={{ left: clip.start * scale, width: box, height: height - 1 }}
       onContextMenu={onMenu}
       onMouseDown={(event) => {
         if (event.button !== 0) return
@@ -2296,7 +2335,7 @@ function ClipBox({
           to={clip.sourceIn + clip.duration * speedOf(clip)}
           reverse={Boolean(clip.reverse)}
           width={box}
-          height={height - 14}
+          height={height - 3}
         />
       ) : (
         <div

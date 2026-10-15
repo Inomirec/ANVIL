@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { create } from 'zustand'
 import { api } from '../lib/api'
 import { useCompose } from '../composeStore'
 import type { MeterLevels } from '../components/MasterMeter'
@@ -34,6 +35,30 @@ interface Chunk {
   at: number
   span: number
 }
+
+/**
+ * Какие куски монтажа уже собраны для просмотра — тонкая полоска на линейке.
+ * Собранный кусок программа отдаёт из запаса мгновенно, поэтому по полоске
+ * видно, что этот отрезок будет играть без ожидания. Любая правка монтажа
+ * полоску сбрасывает: прежние куски показывают уже не то.
+ */
+export const usePreviewReady = create<{
+  ranges: { at: number; span: number }[]
+  version: number
+  add: (at: number, span: number, version: number) => void
+  clear: () => void
+}>((set, get) => ({
+  ranges: [],
+  version: 0,
+  add(at, span, version) {
+    if (version !== get().version) return
+    if (get().ranges.some((range) => Math.abs(range.at - at) < 0.01)) return
+    set({ ranges: [...get().ranges, { at, span }] })
+  },
+  clear() {
+    set({ ranges: [], version: get().version + 1 })
+  },
+}))
 
 export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>) {
   const [playing, setPlaying] = useState(false)
@@ -99,6 +124,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   const fetchChunk = useCallback(
     async (at: number, mine: number): Promise<Chunk | null> => {
       const started = performance.now()
+      const version = usePreviewReady.getState().version
       try {
         const asked = qualityRef.current
         const data = await api.composeDraft({
@@ -113,6 +139,10 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
         const spent = (performance.now() - started) / 1000
         if (asked === 'auto' && spent > SLOW_SECONDS && height.current > MIN_HEIGHT) {
           height.current = Math.max(MIN_HEIGHT, Math.round(height.current / 1.5))
+          // Следующие куски будут мельче — собранные крупные уже не пригодятся.
+          usePreviewReady.getState().clear()
+        } else {
+          usePreviewReady.getState().add(data.at, data.span, version)
         }
         if (data.missing?.length) useCompose.getState().reportMissing(data.missing)
         return { url: data.url, at: data.at, span: data.span }
@@ -164,7 +194,10 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     // Игла осталась в самом конце — начинаем сначала, как любой плеер.
     // Иначе нажатие на «играть» не делало ничего: показывать уже нечего.
     if (at >= finish - 0.05) at = 0
-    const first = await fetchChunk(at, mine)
+    // Кусок — с ровной отметки, а играть — с иглы внутри него: так кусок,
+    // однажды собранный, годится для просмотра с любого места в нём.
+    const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
+    const first = await fetchChunk(base, mine)
     setPreparing(false)
     // Пока кусок готовился, человек мог нажать «стоп» — тогда молча уходим.
     if (!first || !alive.current || mine !== run.current) return
@@ -172,7 +205,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
     chunk.current = first
     ahead.current = null
     element.src = first.url
-    element.currentTime = 0
+    element.currentTime = Math.max(0, at - first.at)
     try {
       await element.play()
       if (mine !== run.current) return
@@ -301,6 +334,23 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   const startRef = useRef(start)
   startRef.current = start
 
+  useEffect(
+    () =>
+      useCompose.subscribe((state, prev) => {
+        if (
+          state.tracks !== prev.tracks ||
+          state.width !== prev.width ||
+          state.height !== prev.height ||
+          state.fps !== prev.fps ||
+          state.masterVolume !== prev.masterVolume ||
+          state.loudnorm !== prev.loudnorm
+        ) {
+          usePreviewReady.getState().clear()
+        }
+      }),
+    [],
+  )
+
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const off = useCompose.subscribe((state, prev) => {
@@ -321,6 +371,7 @@ export function useComposePlayer(video: React.RefObject<HTMLVideoElement | null>
   useEffect(() => {
     localStorage.setItem(QUALITY_KEY, String(quality))
     height.current = quality === 'auto' ? START_HEIGHT : quality
+    usePreviewReady.getState().clear()
   }, [quality])
 
   // Громкость прослушивания меняется на ходу и запоминается.

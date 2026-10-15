@@ -28,6 +28,7 @@ import contextlib
 import hashlib
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -358,11 +359,19 @@ def text_file(text: str) -> Path:
     stamp = hashlib.sha1(clean.encode("utf-8")).hexdigest()[:16]
     # Приставка в имени — чтобы не взять из кэша файл, записанный по-старому.
     target = folder / f"lf-{stamp}.txt"
-    if not target.exists():
+    if target.exists():
+        # Надпись снова нужна — она свежая. Без этого файл, записанный давно,
+        # тут же стирался чисткой ниже как старый, и сборка падала на «Cannot
+        # read file» — у надписи, которую просто долго не меняли.
+        with contextlib.suppress(OSError):
+            os.utime(target)
+    else:
         target.write_bytes(clean.encode("utf-8"))
     # Заодно подчищаем надписи, которые больше никому не нужны.
     edge = time.time() - _TEXT_AGE
     for stale in folder.glob("*.txt"):
+        if stale == target:
+            continue
         with contextlib.suppress(OSError):
             if stale.stat().st_mtime < edge:
                 stale.unlink()
@@ -506,6 +515,9 @@ async def _render_fill(clip: ComposeClip, width: int, height: int) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / f"{hashlib.sha1(stamp.encode()).hexdigest()[:20]}.png"
     if target.exists():
+        # Снова нужна — свежая: иначе чистка по возрасту стёрла бы её посреди работы.
+        with contextlib.suppress(OSError):
+            os.utime(target)
         return target
 
     inputs: list[str] = [
@@ -574,6 +586,9 @@ async def _render_mask(clip: ComposeClip) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / f"s-{key}.png"
     if target.exists():
+        # Снова нужна — свежая: иначе чистка по возрасту стёрла бы её посреди работы.
+        with contextlib.suppress(OSError):
+            os.utime(target)
         return target
     partial = target.with_suffix(".part.png")
     chain = f"geq=lum='{expression}'"
@@ -616,6 +631,9 @@ async def _render_mask_sequence(clip: ComposeClip, fps: int) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / f"q-{hashlib.sha1(stamp.encode('utf-8')).hexdigest()[:20]}.mkv"
     if target.exists():
+        # Снова нужна — свежая: иначе чистка по возрасту стёрла бы её посреди работы.
+        with contextlib.suppress(OSError):
+            os.utime(target)
         return target
     partial = target.with_suffix(".part.mkv")
     process = await asyncio.create_subprocess_exec(

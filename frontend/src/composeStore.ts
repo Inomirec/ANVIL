@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { magnetOn } from './lib/magnet'
 import { effectKind } from './composeEffects'
 import {
   CROP_FIELDS,
@@ -751,7 +752,8 @@ interface State extends Saved {
   /** Укорачивает растянутый клип, если он накрыл чужой переход. */
   trimOverlaps: (id: string) => void
   groupClips: (ids: string[]) => void
-  ungroupClips: (ids: string[]) => void
+  /** ``keep`` — какой клип оставить выделенным (по нему открыли меню). */
+  ungroupClips: (ids: string[], keep?: string) => void
   /** Запомнить выбранные клипы, чтобы вставить их копию. */
   copyClips: (ids: string[]) => number
   /** Положить запомненные клипы, начиная от иглы. */
@@ -1932,13 +1934,15 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   /** Выпускает клипы из группы — дальше они ходят сами по себе. */
-  ungroupClips(ids) {
+  ungroupClips(ids, keep) {
     get().mark()
     set((state) => {
-      // Выделение сужаем до того клипа, который человек брал в руки. Пока
-      // группа была, выбранными числились оба её клипа — и Delete сразу
-      // после разрыва уносил и второй, хотя связи между ними уже нет.
-      const alone = state.picked.filter((id) => ids.includes(id))
+      // Выделение сужаем до одного клипа — того, по которому открыли меню,
+      // а с клавиатуры — последнего, которого человек брал в руки. Пока
+      // группа была, выбранными числились все её клипы — и Delete сразу
+      // после разрыва уносил и остальные, хотя связи между ними уже нет.
+      const picked = state.picked.filter((id) => ids.includes(id))
+      const alone = keep ? [keep] : picked.length ? [picked[picked.length - 1]] : []
       return {
         tracks: state.tracks.map((track) => ({
           ...track,
@@ -1947,6 +1951,7 @@ export const useCompose = create<State>((set, get) => ({
           ),
         })),
         selected: alone.length ? alone : state.selected,
+        picked: alone.length ? alone : state.picked,
       }
     })
     save(get())
@@ -2523,6 +2528,8 @@ export function snapFrame(value: number, points: number[], within: number, fps: 
 }
 
 export function snap(value: number, points: number[], within: number): number {
+  // Прилипание выключено кнопкой с магнитом — ставим ровно по мыши.
+  if (!magnetOn()) return value
   let best = value
   let distance = within
   for (const point of points) {

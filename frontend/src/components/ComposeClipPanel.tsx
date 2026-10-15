@@ -10,9 +10,10 @@ import {
   RotateCw,
   SquareDashed,
   Undo2,
+  Volume2,
   X,
 } from 'lucide-react'
-import { isCropped, newMask, speedOf, useCompose, type ClipEffect, type ClipMask, type ComposeClip } from '../composeStore'
+import { MIN_DB, dbToGain, gainToDb, isCropped, newMask, speedOf, useCompose, type ClipEffect, type ClipMask, type ComposeClip } from '../composeStore'
 import { POINTS, shownAt, valueAt, withoutGroup } from '../composeAnim'
 import {
   EFFECTS,
@@ -68,6 +69,8 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
 
       {picture && <MaskCard clip={picture} mask={picture.mask ?? null} />}
 
+      {sound && <SoundCard clip={sound} />}
+
       {parts.map((part) => (
         <div key={part.clip.id} className="space-y-2">
           {both && (part.clip.effects ?? []).length > 0 && (
@@ -80,7 +83,63 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
           ))}
         </div>
       ))}
+
+      {/* Эффектов пока нет — колонка не должна выглядеть пустой и сломанной. */}
+      {!parts.some((part) => (part.clip.effects ?? []).length) && (
+        <p className="px-1 pt-1 text-center text-[11.5px] leading-snug text-ink-faint/70">
+          Здесь появятся эффекты клипа — их добавляют кнопкой «Добавить эффект» внизу
+          колонки.
+        </p>
+      )}
     </div>
+  )
+}
+
+/**
+ * Громкость, появление и уход звука — числами. На самом клипе их тянут на
+ * глаз (шторка и уголки), здесь — ставят точно. Колонка у звукового клипа
+ * без этого была совсем пустой.
+ */
+function SoundCard({ clip }: { clip: ComposeClip }) {
+  const updateClip = useCompose((state) => state.updateClip)
+  const mark = useCompose((state) => state.mark)
+  const half = Math.max(0, Math.round((clip.duration / 2) * 100) / 100)
+  const put = (patch: Partial<ComposeClip>) => updateClip(clip.id, patch)
+  return (
+    <Card id="sound" title="Звук" icon={<Volume2 size={13} />}>
+      <div className="space-y-2" onMouseDownCapture={() => mark()}>
+        <SliderNumber
+          label="Громкость"
+          unit="дБ"
+          value={Math.round(gainToDb(Math.min(clip.volume, 1)) * 10) / 10}
+          min={MIN_DB}
+          max={0}
+          step={0.5}
+          reset={0}
+          onChange={(db) => put({ volume: Math.min(1, dbToGain(db)) })}
+        />
+        <SliderNumber
+          label="Появление"
+          unit="с"
+          value={clip.fadeIn}
+          min={0}
+          max={half}
+          step={0.05}
+          reset={0}
+          onChange={(fadeIn) => put({ fadeIn: Math.min(half, Math.max(0, fadeIn)) })}
+        />
+        <SliderNumber
+          label="Уход"
+          unit="с"
+          value={clip.fadeOut}
+          min={0}
+          max={half}
+          step={0.05}
+          reset={0}
+          onChange={(fadeOut) => put({ fadeOut: Math.min(half, Math.max(0, fadeOut)) })}
+        />
+      </div>
+    </Card>
   )
 }
 

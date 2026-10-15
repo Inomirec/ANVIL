@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, Save, Trash2 } from 'lucide-react'
+import { FolderOpen, Pencil, Save, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useCompose } from '../composeStore'
 import { useStore } from '../store'
@@ -34,6 +34,8 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
   const [folder, setFolder] = useState('')
   const [name, setName] = useState(openedAs || 'Проект')
   const [busy, setBusy] = useState(false)
+  // Какой проект сейчас переименовывают и что набрано.
+  const [renaming, setRenaming] = useState<{ from: string; to: string } | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -91,6 +93,23 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
     }
   }
 
+  async function rename() {
+    if (!renaming) return
+    const to = renaming.to.trim()
+    if (!to || to === renaming.from) {
+      setRenaming(null)
+      return
+    }
+    try {
+      const data = await api.composeProjectRename(renaming.from, to)
+      if (openedAs === renaming.from) setOpenedAs(data.name)
+      setRenaming(null)
+      await refresh()
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    }
+  }
+
   async function remove(underName: string) {
     if (!window.confirm(`Убрать проект «${underName}»? Файл уйдёт в корзину.`)) return
     try {
@@ -143,11 +162,39 @@ export function ComposeProjects({ open, onClose }: { open: boolean; onClose: () 
                   }`}
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px]">{item.name}</p>
+                    {renaming?.from === item.name ? (
+                      <input
+                        autoFocus
+                        className="field py-0.5 text-[13px]"
+                        value={renaming.to}
+                        onChange={(event) => setRenaming({ from: item.name, to: event.target.value })}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') void rename()
+                          if (event.key === 'Escape') {
+                            event.stopPropagation()
+                            setRenaming(null)
+                          }
+                        }}
+                        onBlur={() => void rename()}
+                      />
+                    ) : (
+                      <p className="truncate text-[13px]" title={item.name}>
+                        {item.name}
+                      </p>
+                    )}
                     <p className="text-[11px] text-ink-faint">
                       {item.clips} {clipWord(item.clips)} · {when(item.savedAt)}
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    title="Переименовать проект"
+                    onClick={() => setRenaming({ from: item.name, to: item.name })}
+                    disabled={busy}
+                    className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-surface-3 hover:text-ink disabled:opacity-40"
+                  >
+                    <Pencil size={14} />
+                  </button>
                   {/* Записать поверх — самое частое действие: человек открыл
                       проект, поправил и хочет сохранить его туда же, не
                       набирая имя заново. */}

@@ -226,6 +226,8 @@ export const api = {
     request<{ name: string; project: unknown }>(
       `/api/compose/projects/${encodeURIComponent(name)}`,
     ),
+  composeProjectRename: (name: string, to: string) =>
+    post<{ name: string }>(`/api/compose/projects/${encodeURIComponent(name)}/rename`, { to }),
   composeProjectRemove: (name: string) =>
     request<{ ok: boolean }>(`/api/compose/projects/${encodeURIComponent(name)}`, {
       method: 'DELETE',
