@@ -337,8 +337,10 @@ export function SliderNumber({
   // Метки стоят плотно, если соседние ближе чем на полшкалы: шкала в колонке
   // шириной в полторы сотни пикселей, и слова соседних подписей налезали
   // друг на друга. Тогда подписи идут лесенкой — соседи в разных рядах.
+  // Подписи-буквы (S, M, L) не налезают и стоят в один ряд.
   const crowded = Boolean(
-    marks?.some((mark, index) => index > 0 && (mark.value - marks[index - 1].value) / (max - min) < 0.6),
+    marks?.some((mark) => mark.label.length > 2) &&
+      marks?.some((mark, index) => index > 0 && (mark.value - marks[index - 1].value) / (max - min) < 0.6),
   )
   const scale = marks?.length ? (
     <div className="min-w-0 flex-1">

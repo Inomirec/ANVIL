@@ -84,6 +84,8 @@ def _user32():
     ]
     user32.MonitorFromWindow.restype = ctypes.c_void_p
     user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.MonitorFromRect.restype = ctypes.c_void_p
+    user32.MonitorFromRect.argtypes = [ctypes.c_void_p, wintypes.DWORD]
     user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     return user32
@@ -132,17 +134,37 @@ def install(
         if message == WM_NCCALCSIZE and wparam:
             params = ctypes.cast(lparam, ctypes.POINTER(_NCCALCSIZE_PARAMS)).contents
             top = params.rgrc[0].top
+            # Куда окно встанет — до обработки, пока это ещё прямоугольник окна.
+            proposed = wintypes.RECT(
+                params.rgrc[0].left, params.rgrc[0].top, params.rgrc[0].right, params.rgrc[0].bottom
+            )
             result = user32.CallWindowProcW(original[0], window, message, wparam, lparam)
             if user32.IsZoomed(window):
                 # Развёрнутое окно Windows выносит за край экрана на толщину
                 # рамки, а толщина у каждого монитора своя (разный масштаб):
                 # считая её по главному, на втором мониторе получали белые
                 # полосы по краям. Поэтому страница занимает ровно рабочую
-                # область того монитора, где стоит окно.
-                monitor = user32.MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST)
+                # область того монитора, куда окно встаёт.
+                #
+                # Монитор — по новому месту окна, а не по нынешнему: свёрнутое
+                # окно Windows держит на −32000, и при возврате из свёрнутого
+                # «ближайшим» оказывался монитор слева — страница уезжала на
+                # него, а развёрнутое окно оставалось белым.
+                monitor = user32.MonitorFromRect(ctypes.byref(proposed), MONITOR_DEFAULTTONEAREST)
                 info = _MONITORINFO()
                 info.cbSize = ctypes.sizeof(_MONITORINFO)
-                if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                found = user32.GetMonitorInfoW(monitor, ctypes.byref(info))
+                work = info.rcWork
+                # Только если окно и правда накрывает рабочую область. Развёрнутое
+                # окно, которое передвинули программно, остаётся «развёрнутым»,
+                # но стоит в стороне — страница должна остаться в нём.
+                if (
+                    found
+                    and proposed.left <= work.left
+                    and proposed.top <= work.top
+                    and proposed.right >= work.right
+                    and proposed.bottom >= work.bottom
+                ):
                     params.rgrc[0] = info.rcWork
                     return result
             # Всё как у обычной рамки, кроме верха: там была строка заголовка.

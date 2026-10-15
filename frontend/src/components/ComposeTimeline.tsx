@@ -2095,12 +2095,13 @@ function Ruler({
           }}
         />
       )}
-      {/* Собранные для просмотра куски — тонкой полоской по низу линейки:
+      {/* Собранные для просмотра куски — тонкой полоской по верху линейки
+          (по низу она закрывала подписи времени):
           здесь просмотр пойдёт без ожидания. Правка монтажа её сбрасывает. */}
       {ready.map((range) => (
         <div
           key={range.at}
-          className="pointer-events-none absolute bottom-0 h-[3px] bg-ok/70"
+          className="pointer-events-none absolute top-0 h-[2px] bg-ok/80"
           style={{ left: range.at * scale, width: Math.max(range.span * scale, 1) }}
           title="Собрано для просмотра — сыграет без ожидания"
         />

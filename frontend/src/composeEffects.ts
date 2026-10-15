@@ -190,6 +190,13 @@ export const EFFECTS: EffectKind[] = [
     ],
   },
   {
+    type: 'gain',
+    name: 'Усиление громкости',
+    target: 'audio',
+    hint: 'Сделать этот клип громче. Шторка на клипе только приглушает, а усиление всей дорожки задевает и остальные клипы на ней',
+    params: [{ key: 'db', label: 'Насколько громче', min: 0, max: 20, step: 0.5, unit: 'дБ', default: 6, marks: [{ value: 3, label: 'чуть' }, { value: 6, label: 'заметно' }, { value: 12, label: 'сильно' }] }],
+  },
+  {
     type: 'voice_denoise',
     name: 'Шумоподавление голоса',
     target: 'audio',

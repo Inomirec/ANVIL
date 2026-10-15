@@ -181,9 +181,12 @@ export function bitrateMarks(codec: string, frame: Frame): { value: number; labe
   const pixels = Math.max(1, frame.width * frame.height)
   const normal = (NORMAL_1080[codec] ?? NORMAL_1080.h264) * Math.pow(pixels / (1920 * 1080), 0.75)
   return [
-    { value: round250(normal * 0.55), label: 'экономно' },
-    { value: round250(normal), label: 'обычно' },
-    { value: round250(normal * 2), label: 'с запасом' },
+    // Буквы, а не слова: слова не помещались в строку и шли лесенкой в два
+    // ряда — шкала занимала втрое больше места. S — экономно, M — обычно,
+    // L — с запасом; словами — в подсказке.
+    { value: round250(normal * 0.55), label: 'S' },
+    { value: round250(normal), label: 'M' },
+    { value: round250(normal * 2), label: 'L' },
   ]
 }
 
@@ -216,9 +219,9 @@ export function bitrateForFrame(value: number, codec: string, from: Frame, to: F
  * сравнение с исходником: исходников на таймлайне может быть сколько угодно.
  */
 const QUALITY_SCALE: Record<string, { best: number; worst: number; marks: { crf: number; label: string }[] }> = {
-  av1_svt: { best: 16, worst: 52, marks: [{ crf: 46, label: 'низкое' }, { crf: 35, label: 'среднее' }, { crf: 24, label: 'высокое' }] },
-  h265: { best: 14, worst: 40, marks: [{ crf: 34, label: 'низкое' }, { crf: 27, label: 'среднее' }, { crf: 20, label: 'высокое' }] },
-  h264: { best: 12, worst: 38, marks: [{ crf: 32, label: 'низкое' }, { crf: 25, label: 'среднее' }, { crf: 18, label: 'высокое' }] },
+  av1_svt: { best: 16, worst: 52, marks: [{ crf: 46, label: 'L' }, { crf: 35, label: 'M' }, { crf: 24, label: 'H' }] },
+  h265: { best: 14, worst: 40, marks: [{ crf: 34, label: 'L' }, { crf: 27, label: 'M' }, { crf: 20, label: 'H' }] },
+  h264: { best: 12, worst: 38, marks: [{ crf: 32, label: 'L' }, { crf: 25, label: 'M' }, { crf: 18, label: 'H' }] },
 }
 
 function qualityScale(codec: string) {

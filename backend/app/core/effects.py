@@ -256,6 +256,11 @@ def _audio_effect(effect: ClipEffect) -> str:
         # в паузах подтягивается вместе с голосом.
         gain = _number(effect, "strength", 10, 1, 30)
         return f"dynaudnorm=f=250:g=15:p=0.95:m={gain:.1f}"
+    if kind == "gain":
+        # Усиление одного клипа. Шторка на клипе только приглушает, а
+        # поднимать громкость можно было лишь всей дорожке.
+        db = _number(effect, "db", 6, 0, 20)
+        return f"volume={db:.1f}dB"
     if kind == "echo":
         delay = _number(effect, "delay", 300, 20, 1500)
         decay = _number(effect, "decay", 40, 5, 90) / 100
