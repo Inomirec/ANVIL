@@ -168,7 +168,7 @@ def commands(
     *,
     skip: float,
     take: float,
-    fps: int,
+    fps: float,
     scale: Callable[[float], float] | None = None,
     digits: int = 3,
 ) -> list[tuple[float, str]]:

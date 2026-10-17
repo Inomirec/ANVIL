@@ -57,7 +57,7 @@ class Timing:
 
     skip: float
     take: float
-    fps: int
+    fps: float
     tag: str
 
 

@@ -524,7 +524,9 @@ class ComposeProject(ComposeModel):
     #: чёрными полями: обрезать чужой кадр за человека нельзя.
     width: int = Field(default=1280, ge=16, le=7680)
     height: int = Field(default=720, ge=16, le=4320)
-    fps: int = Field(default=30, ge=1, le=120)
+    #: Частота кадров. Бывает дробной: 23.976, 29.97, 59.94 — частоты
+    #: телевидения, на деле 24000/1001 и т. п. (`compose.rate`).
+    fps: float = Field(default=60, ge=1, le=120)
     #: Громкость всего монтажа разом — фейдер мастер-шины. Влияет на готовый
     #: файл, в отличие от громкости прослушивания.
     master_volume: float = Field(default=1.0, ge=0.0, le=4.0)

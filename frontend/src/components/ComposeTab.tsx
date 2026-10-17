@@ -21,6 +21,8 @@ import {
   FRAME_QUALITY,
   FRAME_RATES,
   FRAME_SHAPES,
+  fpsLabel,
+  parseFps,
   hasClipsIn,
   renderSpan,
   shownAt,
@@ -1090,11 +1092,12 @@ export function ComposeTab() {
             id="compose.frame"
             summary={
               custom
-                ? `${width}×${height} · ${fps} к/с`
-                : `${quality}p · ${turned ? shape.split(':').reverse().join(':') : shape} · ${fps} к/с`
+                ? `${width}×${height} · ${fpsLabel(fps)} к/с`
+                : `${quality}p · ${turned ? shape.split(':').reverse().join(':') : shape} · ${fpsLabel(fps)} к/с`
             }
             action={
-              !custom && (
+              <div className="flex items-center gap-1.5">
+              {!custom && (
                 // Поворот не объясняем словами: подписи форм сами
                 // переворачиваются, и сразу видно, что получится.
                 <button
@@ -1109,7 +1112,12 @@ export function ComposeTab() {
                   <RotateCw size={11} />
                   вертикально
                 </button>
-              )
+              )}
+              {/* Частота кадров — тоже свойство кадра: по ней собираются и
+                  просмотр, и готовый файл, к её сетке прилипают игла и клипы.
+                  Маленьким полем: число вписывают или берут из списка. */}
+              <FpsField value={fps} onChange={setFps} />
+              </div>
             }
           >
             <Segmented
@@ -1151,14 +1159,6 @@ export function ComposeTab() {
                 }))}
               />
             )}
-            {/* Частота кадров — тоже свойство кадра проекта: по ней собирается
-                и просмотр, и готовый файл, к ней прилипают игла и клипы. */}
-            <Segmented
-              columns={FRAME_RATES.length}
-              value={String(fps)}
-              onChange={(value) => setFps(Number(value))}
-              options={FRAME_RATES.map((value) => ({ value: String(value), label: `${value} к/с` }))}
-            />
           </Section>
 
           {/* Сборка — тут же, когда ничего не выбрано: колонка пустовала ровно
@@ -1287,6 +1287,48 @@ export function ComposeTab() {
           localStorage.setItem('sgh.composeOut', path)
         }}
       />
+    </div>
+  )
+}
+
+/**
+ * Частота кадров: маленькое поле, куда число вписывают, и список рядом.
+ * Набранное применяется по Enter или когда поле оставили — как размер кадра.
+ */
+function FpsField({ value, onChange }: { value: number; onChange: (fps: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const apply = () => {
+    if (draft === null) return
+    const next = parseFps(draft)
+    if (next !== null) onChange(next)
+    setDraft(null)
+  }
+  const picked = FRAME_RATES.find((item) => Math.abs(item.value - value) < 1e-3)
+  return (
+    <div className="flex items-center rounded-md border border-line-soft bg-surface-2 text-[11px]">
+      <input
+        value={draft ?? fpsLabel(value)}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={apply}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+          if (event.key === 'Escape') setDraft(null)
+        }}
+        className="w-[46px] bg-transparent py-0.5 pl-1.5 text-right font-mono tabular-nums text-ink outline-none"
+      />
+      <span className="pl-0.5 text-ink-faint">к/с</span>
+      <Dropdown
+        value={picked ? String(picked.value) : ''}
+        align="right"
+        options={FRAME_RATES.map((item) => ({ value: String(item.value), label: item.label }))}
+        onChange={(next) => {
+          setDraft(null)
+          onChange(Number(next))
+        }}
+        className="flex h-5 items-center px-1 text-ink-faint hover:text-ink"
+      >
+        <ChevronDown size={12} />
+      </Dropdown>
     </div>
   )
 }

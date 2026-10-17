@@ -421,8 +421,38 @@ export const MIN_CLIP_SECONDS = 0.2
 //: монтажа почти не нужны: кому надо — задаст размер вручную.
 export const FRAME_QUALITY = [480, 720, 1080]
 
-/** Частота кадров проекта. 30 — обычная; 24 — кино, 25 — европейское ТВ, 60 — плавное движение. */
-export const FRAME_RATES = [24, 25, 30, 60]
+/**
+ * Частоты кадров в списке. «Телевизионные» 23.976, 29.97 и 59.94 — на деле
+ * 24000/1001 и т. п.; храним их точным числом, сервер пишет дробью.
+ */
+export const FRAME_RATES: { value: number; label: string }[] = [
+  { value: 24000 / 1001, label: '23.976 — кино, видео с камер и телефонов' },
+  { value: 24, label: '24 — кино' },
+  { value: 25, label: '25 — европейское ТВ' },
+  { value: 30000 / 1001, label: '29.97 — ТВ, видео с камер и телефонов' },
+  { value: 30, label: '30' },
+  { value: 50, label: '50 — европейское ТВ, плавное движение' },
+  { value: 60000 / 1001, label: '59.94 — ТВ, плавное движение' },
+  { value: 60, label: '60 — плавное движение' },
+]
+
+/** Частота кадров словами: 23.976, 29.97, 60. */
+export function fpsLabel(fps: number): string {
+  const near = FRAME_RATES.find((item) => Math.abs(item.value - fps) < 1e-3)
+  if (near) return near.label.split(' ')[0]
+  return String(Math.round(fps * 1000) / 1000)
+}
+
+/**
+ * Набранное число — в частоту. «29.97» и «29,97» — это 30000/1001: иначе
+ * частота расходилась бы с настоящей на тысячные.
+ */
+export function parseFps(text: string): number | null {
+  const number = Number(text.replace(',', '.'))
+  if (!Number.isFinite(number) || number <= 0) return null
+  const near = FRAME_RATES.find((item) => Math.abs(item.value - number) < 0.01)
+  return near ? near.value : Math.min(120, Math.max(1, number))
+}
 
 export const FRAME_SHAPES = [
   { value: '16:9', label: '16:9', hint: 'Обычное широкое видео' },
@@ -813,7 +843,7 @@ function emptyProject(): Saved {
   return {
     width: 1280,
     height: 720,
-    fps: 30,
+    fps: 60,
     quality: 720,
     shape: '16:9',
     turned: false,

@@ -146,7 +146,7 @@ def _window(clip: ComposeClip, at: float, span: float) -> tuple[float, float, fl
     return seek, take, offset
 
 
-def _still_seek(clip: ComposeClip, at: float, fps: int) -> float:
+def _still_seek(clip: ComposeClip, at: float, fps: float) -> float:
     """Откуда читать ролик ради одного кадра под иглой.
 
     В готовом файле кадр монтажа показывает последний кадр ролика, который
@@ -163,7 +163,7 @@ def _still_seek(clip: ComposeClip, at: float, fps: int) -> float:
     return max(clip.source_in, frame / rate - 0.25 / rate, 0.0)
 
 
-def fit_filter(width: int, height: int, fps: int) -> str:
+def fit_filter(width: int, height: int, fps: float) -> str:
     """Вписать чужой кадр в кадр проекта, добив поля чёрным.
 
     Именно вписать, а не обрезать: человек положил на дорожку свой файл и не
@@ -178,13 +178,29 @@ def fit_filter(width: int, height: int, fps: int) -> str:
     """
     return (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
-        f"format=yuva420p,pad={width}:{height}:-1:-1:color=black@0,setsar=1,fps={fps}"
+        f"format=yuva420p,pad={width}:{height}:-1:-1:color=black@0,setsar=1,fps={rate(fps)}"
     )
 
 
 def _even(value: int) -> int:
     """Кодировщики не берут нечётные размеры кадра."""
     return max(2, value - value % 2)
+
+
+def rate(fps: float) -> str:
+    """Частота кадров для ffmpeg — точной дробью.
+
+    Частоты «как в телевидении» — 23.976, 29.97, 59.94 — на самом деле
+    24000/1001, 30000/1001, 60000/1001. Записанные десятичной дробью, они
+    расходились бы с настоящими на тысячные, и за минуту набегал бы кадр.
+    """
+    whole = round(fps)
+    if abs(fps - whole) < 1e-6:
+        return str(whole)
+    ntsc = round(fps * 1.001)
+    if abs(fps - ntsc * 1000 / 1001) < 1e-3:
+        return f"{ntsc * 1000}/1001"
+    return f"{fps:.6f}"
 
 
 def _place_in_time(offset: float) -> str:
@@ -199,7 +215,7 @@ def _place_in_time(offset: float) -> str:
     return f"PTS-STARTPTS+round({offset:.6f}/TB)"
 
 
-def _frames_span(take: float, fps: int) -> str:
+def _frames_span(take: float, fps: float) -> str:
     """`-t` для входа без файла (заливка, надпись, повтор картинки).
 
     `-t` оставляет только кадры, целиком уложившиеся в срок, и при округлении
@@ -239,7 +255,7 @@ def animated(clip: ComposeClip) -> bool:
     return clip.kind in {"video", "image", "color"} and anim.animated(clip, *PLACE_FIELDS)
 
 
-def animated_place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: float) -> str:
+def animated_place_filter(clip: ComposeClip, width: int, height: int, fps: float, skip: float) -> str:
     """Размер по ключам, кадр за кадром.
 
     ``t`` внутри цепочки клипа отсчитывается от начала прочитанного куска, а
@@ -256,16 +272,16 @@ def animated_place_filter(clip: ComposeClip, width: int, height: int, fps: int, 
             base_h = max(clip.size_y if clip.size_y > 0 else clip.size, 1e-3)
             return (
                 f"format=rgba,scale=w='max(2,trunc(iw*({size})/{base_w:.5f}/2)*2)'"
-                f":h='max(2,trunc(ih*({tall})/{base_h:.5f}/2)*2)':eval=frame,setsar=1,fps={fps}"
+                f":h='max(2,trunc(ih*({tall})/{base_h:.5f}/2)*2)':eval=frame,setsar=1,fps={rate(fps)}"
             )
         # У сплошного цвета формы нет — он занимает место целиком.
         return (
             f"scale=w='max(2,trunc({width}*({size})/2)*2)':h='max(2,trunc({height}*({tall})/2)*2)'"
-            f":eval=frame,setsar=1,fps={fps}"
+            f":eval=frame,setsar=1,fps={rate(fps)}"
         )
     return (
         f"scale=w='max(2,trunc({width}*({size})/2)*2)':h='max(2,trunc({height}*({tall})/2)*2)'"
-        f":force_original_aspect_ratio=decrease:eval=frame:flags=bicubic,setsar=1,fps={fps}"
+        f":force_original_aspect_ratio=decrease:eval=frame:flags=bicubic,setsar=1,fps={rate(fps)}"
     )
 
 
@@ -306,7 +322,7 @@ def clip_box(clip: ComposeClip, width: int, height: int) -> tuple[int, int]:
     return _even_near(width * clip.size), _even_near(height * tall)
 
 
-def place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: float = 0.0) -> str:
+def place_filter(clip: ComposeClip, width: int, height: int, fps: float, skip: float = 0.0) -> str:
     """Во весь кадр или своим размером в своём месте.
 
     Нетронутый клип вписывается в кадр как обычно — с чёрными полями, если
@@ -321,14 +337,14 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: flo
     if clip.kind == "text":
         # Слой уже размером с кадр — подгонять нечего, остаётся написать.
         if text_layered(clip):
-            return f"{text_layers(clip, width, height, skip)},setsar=1,fps={fps}"
-        return f"{text_filter(clip, width, height, skip)},setsar=1,fps={fps}"
+            return f"{text_layers(clip, width, height, skip)},setsar=1,fps={rate(fps)}"
+        return f"{text_filter(clip, width, height, skip)},setsar=1,fps={rate(fps)}"
 
     if not is_placed(clip):
         return fit_filter(width, height, fps) + zoom_filter(clip, width, height)
 
     if clip.kind == "color" and clip.fill_image:
-        return f"format=rgba,setsar=1,fps={fps}"
+        return f"format=rgba,setsar=1,fps={rate(fps)}"
 
     box_w, box_h = clip_box(clip, width, height)
     parts: list[str] = []
@@ -340,7 +356,7 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: int, skip: flo
     fit = "" if clip.kind == "color" else ":force_original_aspect_ratio=decrease"
     parts.append(f"scale={box_w}:{box_h}{fit}:flags=lanczos")
     parts.append("setsar=1")
-    parts.append(f"fps={fps}")
+    parts.append(f"fps={rate(fps)}")
     return ",".join(parts)
 
 
@@ -763,7 +779,7 @@ async def _render_mask(clip: ComposeClip) -> Path:
     return target
 
 
-async def _render_mask_sequence(clip: ComposeClip, fps: int) -> Path:
+async def _render_mask_sequence(clip: ComposeClip, fps: float) -> Path:
     """Маска своей формы с меняющимися точками — роликом на весь клип.
 
     Кадры рисует программа (``effects.sequence_frame``) и отдаёт ffmpeg
@@ -778,7 +794,7 @@ async def _render_mask_sequence(clip: ComposeClip, fps: int) -> Path:
         clip.mask.model_dump_json(),
         json.dumps({field: [key.model_dump() for key in keys] for field, keys in sorted(clip.anim.items())
                     if field.startswith("mask.")}),
-        f"{size}|{frames}|{fps}",
+        f"{size}|{frames}|{rate(fps)}",
     ])
     folder = paths.data_dir() / "masks"
     folder.mkdir(parents=True, exist_ok=True)
@@ -791,7 +807,7 @@ async def _render_mask_sequence(clip: ComposeClip, fps: int) -> Path:
     partial = target.with_suffix(".part.mkv")
     process = await asyncio.create_subprocess_exec(
         binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{size[0]}x{size[1]}", "-r", str(fps),
+        "-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{size[0]}x{size[1]}", "-r", rate(fps),
         "-i", "-", "-c:v", "ffv1", str(partial),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.DEVNULL,
@@ -865,7 +881,7 @@ def video_fades(
     take: float,
     *,
     moment: float | None = None,
-    fps: int = 25,
+    fps: float = 25,
     tag: str = "o",
 ) -> str:
     """Появление и уход картинки; ``moment`` — для одиночного кадра."""
@@ -877,7 +893,7 @@ def video_fades(
     return _video_fade_filters(clip, at, take, fps, tag)
 
 
-def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: int = 25, tag: str = "o") -> str:
+def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: float = 25, tag: str = "o") -> str:
     """Появление и уход картинки по краям клипа.
 
     Затухание делаем по прозрачности (``alpha=1``), а не в чёрный: под нижним
@@ -1042,7 +1058,7 @@ def build_segment(
         # получал никакой. Соседние куски просмотра браузер читал по-разному,
         # и заливка на стыке меняла оттенок. В конце — bt709 с явной пометкой.
         chain.append(
-            f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f},format=gbrp[bg]"
+            f"color=c=black:s={width}x{height}:r={rate(fps)}:d={span:.3f},format=gbrp[bg]"
         )
 
     index = 0
@@ -1073,7 +1089,7 @@ def build_segment(
                 # Прозрачность задаём прямо во входе: добавленная позже, в
                 # цепочке фильтров, она уже ничего не значит — слой к тому
                 # времени непрозрачный, и надпись закрывает собой весь кадр.
-                "-i", f"color=c=black@0:s={width}x{height}:r={fps},format=yuva420p",
+                "-i", f"color=c=black@0:s={width}x{height}:r={rate(fps)},format=yuva420p",
             ]
         elif clip.kind == "color" and clip.fill_image:
             # Заливку со скруглением, рамкой и тенью нарисовали заранее —
@@ -1085,7 +1101,7 @@ def build_segment(
             box = clip_box(clip, width, height) if is_placed(clip) else (width, height)
             inputs += [
                 "-f", "lavfi", "-t", _frames_span(take, fps),
-                "-i", f"color=c={clip.color}:s={box[0]}x{box[1]}:r={fps}",
+                "-i", f"color=c={clip.color}:s={box[0]}x{box[1]}:r={rate(fps)}",
             ]
         elif clip.kind == "image":
             # Картинка — один кадр; без повтора она исчезнет сразу же.
@@ -1151,7 +1167,7 @@ def build_segment(
                     f"[fb{index}]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease:flags=lanczos"
                     f"[ffg{index}];"
                     f"[fbg{index}][ffg{index}]overlay=(W-w)/2:(H-h)/2,"
-                    f"format=yuva420p,setsar=1,fps={fps}{fades},"
+                    f"format=yuva420p,setsar=1,fps={rate(fps)}{fades},"
                     f"setpts={_place_in_time(offset)}[v{index}]"
                 )
             else:
