@@ -193,7 +193,7 @@ const webmAudio = (codec: string) => codec === 'opus' || codec === 'none'
  * Контейнер — «коробка», в которую кладутся видео и звук. На картинку и вес
  * почти не влияет, влияет на то, что файл откроет.
  */
-const CONTAINERS = [
+export const CONTAINERS = [
   { value: 'mp4', label: 'MP4', title: 'Универсальный контейнер: проигрывается на большинстве устройств' },
   {
     value: 'mkv', label: 'MKV',
@@ -326,8 +326,8 @@ const SPEED_HINTS = [
   'Кодирование быстрее обычного, но картинка при том же весе немного хуже, а файл при том же качестве немного тяжелее',
   'Программа потратит меньше всего времени на кодирование, но пострадает качество картинки, а итоговый файл будет заметно тяжелее',
 ]
-function speedOptions(codec: string): { value: string; label: string; title: string }[] {
-  const values = codec === 'av1_svt' ? ['2', '4', '5', '7', '9'] : ['veryslow', 'slow', 'medium', 'fast', 'veryfast']
+export function speedOptions(codec: string): { value: string; label: string; title: string }[] {
+  const values = codec.startsWith('av1') ? ['2', '4', '5', '7', '9'] : ['veryslow', 'slow', 'medium', 'fast', 'veryfast']
   const labels = ['Очень медленно', 'Медленно', 'Обычно', 'Быстро', 'Очень быстро']
   return values.map((value, index) => ({ value, label: labels[index], title: SPEED_HINTS[index] }))
 }
@@ -351,7 +351,7 @@ export function renderSummary(value: RenderSettings): string {
 }
 
 /** Список-кнопка в строку: скорость, формат файла. */
-function Choice({
+export function Choice({
   label,
   value,
   options,
@@ -360,7 +360,7 @@ function Choice({
 }: {
   label: string
   value: string
-  options: { value: string; label: string; title?: string }[]
+  options: { value: string; label: string; title?: string; disabled?: boolean }[]
   onChange: (value: string) => void
   /** Что это за настройка — подсказка у заголовка. */
   hint?: string

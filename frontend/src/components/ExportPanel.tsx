@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AudioLines, FileX2, FolderInput, Gauge, Headphones, Play, Terminal, Zap } from 'lucide-react'
+import { AudioLines, FileX2, FolderInput, Headphones, Play, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural, timecode } from '../lib/format'
-import { loadPrefs, savePrefs, SPEED_LABELS, speedPreset } from '../lib/prefs'
+import { loadPrefs, savePrefs } from '../lib/prefs'
+import { Choice, CONTAINERS, speedOptions } from './ComposeRender'
 import type { AudioOptions, FileInfo, Preset, VideoOptions } from '../lib/types'
 import { useStore } from '../store'
 import type { TrimState } from './MediaEditor'
@@ -171,8 +172,10 @@ export function ExportPanel({
   const [suffix, setSuffix] = useState('_sig')
   // Своя приписка из настроек важнее приписки пресета.
   const fixedSuffix = useStore((state) => state.settings?.export.file_suffix ?? '')
-  // Скорость кодирования поверх пресета: нет — как задано в пресете.
-  const [speed, setSpeed] = useState<number | null>(() => loadPrefs().videoSpeed ?? null)
+  // Скорость и контейнер выбирает человек, пресет их не трогает: пресет
+  // отвечает за силу сжатия. Умолчание — «Обычно» и MP4.
+  const [speed, setSpeed] = useState<number>(() => loadPrefs().videoSpeed ?? 2)
+  const [container, setContainer] = useState(() => loadPrefs().videoContainer ?? 'mp4')
 
   // Приписка к имени по основным пресетам: в папке потом сразу видно, чем
   // сжимали, — иначе три версии одного ролика различаются только весом.
@@ -251,6 +254,11 @@ export function ExportPanel({
   // применяется — у них своя разметка, и номер оттуда ничего не значит.
   const tracks = file.media?.audioTracks ?? []
 
+  // WebM держит только AV1 и Opus: у пресетов на H.264 или с AAC он
+  // недоступен, и тогда собираем в MP4.
+  const webmFits = video.codec.startsWith('av1') && (audio.codec === 'opus' || audio.codec === 'none')
+  const shownContainer = container === 'webm' && !webmFits ? 'mp4' : container
+
   const buildRequest = (source: string, withTrim: boolean) => ({
     source,
     kind: gif ? (toWebp ? ('image' as const) : ('video' as const)) : file.kind,
@@ -261,7 +269,8 @@ export function ExportPanel({
     // Затухания нарисованы на дорожках открытого файла — в пакет их не тащим.
     video: {
       ...video,
-      ...(speed !== null ? { speed_preset: speedPreset(video.codec, speed) } : {}),
+      // Без пересжатия скорость и контейнер не нужны: файл копируется как есть.
+      ...(streamCopy ? {} : { speed_preset: speedOptions(video.codec)[speed].value, container: shownContainer }),
       fade_in: withTrim ? fades.video.in : 0,
       fade_out: withTrim ? fades.video.out : 0,
     },
@@ -460,6 +469,35 @@ export function ExportPanel({
               </button>
             ))}
           </div>
+          {!streamCopy && !isAudio && !toWebp && (
+            <div className="flex gap-2">
+              <Choice
+                label="Скорость"
+                hint="Сколько кодировщик старается. На само видео не влияет: медленнее — дольше ждать, но файл чуть лучше"
+                value={speedOptions(video.codec)[speed].value}
+                options={speedOptions(video.codec)}
+                onChange={(value) => {
+                  const level = speedOptions(video.codec).findIndex((item) => item.value === value)
+                  setSpeed(level)
+                  savePrefs({ videoSpeed: level })
+                }}
+              />
+              <Choice
+                label="Контейнер"
+                hint="Формат файла — «коробка», в которую кладутся видео и звук. Если не знаете, что выбрать, — MP4"
+                value={shownContainer}
+                options={CONTAINERS.map((item) => ({
+                  ...item,
+                  // В WebM кладутся только AV1 и Opus.
+                  disabled: item.value === 'webm' && !webmFits,
+                }))}
+                onChange={(value) => {
+                  setContainer(value)
+                  savePrefs({ videoContainer: value })
+                }}
+              />
+            </div>
+          )}
         </Section>
 
 
@@ -486,9 +524,6 @@ export function ExportPanel({
                 ...(!streamCopy && !isAudio && status?.gpuAvailable && video.use_gpu
                   ? [{ icon: Zap, label: 'Кодировать на видеокарте' }]
                   : []),
-                ...(!streamCopy && !isAudio && !toWebp && speed !== null
-                  ? [{ icon: Gauge, label: `Скорость: ${SPEED_LABELS[speed].toLowerCase()}` }]
-                  : []),
                 ...(!streamCopy && !gif && audio.loudnorm ? [{ icon: AudioLines, label: 'Выравнивание звука' }] : []),
                 ...(!streamCopy && !gif && audio.mono ? [{ icon: Headphones, label: 'Звук в моно' }] : []),
                 ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
@@ -498,22 +533,6 @@ export function ExportPanel({
           }
         >
           <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
-            {!streamCopy && !isAudio && !toWebp && (
-              <Select
-                label="Скорость"
-                value={speed === null ? 'preset' : String(speed)}
-                options={[
-                  { value: 'preset', label: 'Как в пресете' },
-                  ...SPEED_LABELS.map((label, index) => ({ value: String(index), label })),
-                ]}
-                onChange={(value) => {
-                  const next = value === 'preset' ? null : Number(value)
-                  setSpeed(next)
-                  savePrefs({ videoSpeed: next })
-                }}
-                hint="Сколько кодировщик старается. Медленнее — дольше ждать, но картинка чище при том же весе или файл легче при той же картинке. Быстрее — наоборот."
-              />
-            )}
             {!streamCopy && !isAudio && status?.gpuAvailable && (
               <Toggle
                 checked={video.use_gpu}

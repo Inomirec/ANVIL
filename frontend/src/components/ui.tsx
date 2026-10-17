@@ -500,7 +500,8 @@ export function Dropdown<T extends string>({
 }: {
   value: T
   /** ``title`` — пояснение пункта при наведении. */
-  options: { value: T; label: string; hint?: string; title?: string }[]
+  /** ``disabled`` — пункт виден, но выбрать его нельзя. */
+  options: { value: T; label: string; hint?: string; title?: string; disabled?: boolean }[]
   onChange: (value: T) => void
   /** Кнопка, по которой список открывается. */
   children: ReactNode
@@ -567,12 +568,13 @@ export function Dropdown<T extends string>({
               key={item.value}
               type="button"
               title={item.title}
+              disabled={item.disabled}
               onMouseDown={(event) => event.stopPropagation()}
               onClick={() => {
                 onChange(item.value)
                 setOpen(false)
               }}
-              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors ${
+              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                 item.value === value
                   ? 'bg-accent/20 text-accent-soft'
                   : 'text-ink-dim hover:bg-surface-3 hover:text-ink'

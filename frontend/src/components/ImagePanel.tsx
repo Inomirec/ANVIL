@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, FileX2, FolderInput, Gauge, Play } from 'lucide-react'
+import { Eye, FileX2, FolderInput, Play } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural } from '../lib/format'
 import { imageEffort, loadPrefs, savePrefs, SPEED_LABELS } from '../lib/prefs'
+import { Choice } from './ComposeRender'
 import { strokesToPng } from '../lib/paint'
 import type { FileInfo, ImageOptions, ImagePreview, Preset } from '../lib/types'
 import { useStore } from '../store'
@@ -379,6 +380,19 @@ export function ImagePanel({
             onChange={(value) => setOptions({ ...options, max_dimension: Number(value) })}
             hint="Уменьшает только слишком большие картинки, маленькие не растягивает."
           />
+          {/* Скорость — как в монтаже. У JPEG и PNG её нет. */}
+          {(options.format === 'avif' || options.format === 'webp') && (
+            <Choice
+              label="Скорость"
+              hint="Сколько кодировщик старается. Медленнее — дольше ждать, но при том же качестве файл чуть легче"
+              value={String(speed)}
+              options={SPEED_LABELS.map((label, index) => ({ value: String(index), label }))}
+              onChange={(value) => {
+                setSpeed(Number(value))
+                savePrefs({ imageSpeed: Number(value) })
+              }}
+            />
+          )}
         </Section>
 
         {/* Вес результата виден на самой картинке — на кнопке «После» над ней,
@@ -391,7 +405,6 @@ export function ImagePanel({
             <MarkIcons
               marks={[
                 ...(deleteOriginal ? [{ icon: FileX2, label: 'Оригинал уйдёт в корзину', danger: true }] : []),
-                ...(speed !== 2 ? [{ icon: Gauge, label: `Скорость: ${SPEED_LABELS[speed].toLowerCase()}` }] : []),
                 ...(showPreview ? [{ icon: Eye, label: 'Показывать превью' }] : []),
                 ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
               ]}
@@ -404,16 +417,6 @@ export function ImagePanel({
             </p>
           )}
 
-          <Select
-            label="Скорость"
-            value={String(speed)}
-            options={SPEED_LABELS.map((label, index) => ({ value: String(index), label }))}
-            onChange={(value) => {
-              setSpeed(Number(value))
-              savePrefs({ imageSpeed: Number(value) })
-            }}
-            hint="Сколько кодировщик старается. Медленнее — дольше ждать, но при том же качестве файл чуть легче. На JPEG и PNG не влияет."
-          />
           <Toggle
             checked={showPreview}
             onChange={setShowPreview}

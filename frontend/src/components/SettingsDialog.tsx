@@ -379,7 +379,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 checked={settings.hints ?? true}
                 onChange={(value) => void patch({ hints: value })}
                 label="Подсказки"
-                hint="Пояснения при наведении на кнопки и настройки. Если всё и так понятно, их можно выключить."
+                hint="Включает или отключает отображение всплывающих подсказок при наведении на объект интерфейса."
               />
             </Section>
 
