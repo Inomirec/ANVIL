@@ -11,6 +11,17 @@
  * нашей, а потом возвращается на место.
  */
 
+/**
+ * Включены ли подсказки. Опытному человеку они мешают — выключаются в
+ * настройках. Выключенные не показываются вовсе, ни свои, ни системные:
+ * `title` всё равно убирается на время наведения.
+ */
+let enabled = true
+
+export function setTooltipsEnabled(value: boolean): void {
+  enabled = value
+}
+
 /** Сколько ждать, прежде чем показать подсказку, — как у системной. */
 const DELAY = 450
 /** Отступ от края окна и от элемента. */
@@ -41,7 +52,7 @@ export function installTooltips(): () => void {
   }
 
   const place = () => {
-    if (!owner) return
+    if (!owner || !enabled) return
     const text = owner.dataset.tip
     if (!text) return
     tip.textContent = text

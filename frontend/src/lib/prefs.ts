@@ -29,6 +29,29 @@ export interface Prefs {
   imagePreview?: boolean
   /** Складывать результат в подпапку рядом с оригиналом. */
   subfolder?: boolean
+  /** Скорость кодирования видео: 0 — очень медленно … 4 — очень быстро; нет — как в пресете. */
+  videoSpeed?: number | null
+  /** То же у картинок; нет — обычная. */
+  imageSpeed?: number
+}
+
+/** Скорость кодирования — одни и те же подписи у видео и картинок. */
+export const SPEED_LABELS = ['Очень медленно', 'Медленно', 'Обычно', 'Быстро', 'Очень быстро']
+
+/**
+ * Скорость в настройку кодировщика. У AV1 это число (меньше — медленнее и
+ * лучше), у H.264 и H.265 — название. На видеокарте сервер переводит то же
+ * самое в её собственную шкалу.
+ */
+export function speedPreset(codec: string, level: number): string {
+  const names = ['veryslow', 'slow', 'medium', 'fast', 'veryfast']
+  const numbers = ['2', '4', '6', '8', '10']
+  return (codec.startsWith('av1') ? numbers : names)[Math.min(4, Math.max(0, level))]
+}
+
+/** Усилие кодировщика картинок (`effort`, 0 — медленно и лучше, 8 — быстро). */
+export function imageEffort(level: number): number {
+  return [0, 2, 4, 6, 8][Math.min(4, Math.max(0, level))]
 }
 
 export function loadPrefs(): Prefs {

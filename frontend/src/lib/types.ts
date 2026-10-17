@@ -221,8 +221,12 @@ export interface AppSettings {
     download_playlists: boolean
     playlist_limit: number
   }
+  /** Подсказки при наведении. */
+  hints?: boolean
   export: {
     output_folder: string
+    /** Приписка к имени обработанного файла. Пусто — по пресету. */
+    file_suffix?: string
     concurrency: number
     image_concurrency: number
     default_video_preset: string

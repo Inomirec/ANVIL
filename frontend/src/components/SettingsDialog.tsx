@@ -136,6 +136,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     await applyPools()
   }
 
+  // Приписку применяем, когда поле оставили: на каждую букву переписывать
+  // настройки незачем.
+  const [suffixDraft, setSuffixDraft] = useState<string | null>(null)
+
   async function patch(value: Record<string, unknown>) {
     try {
       await api.patchSettings(value)
@@ -348,6 +352,34 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 className="field font-mono text-[12px]"
                 value={settings.export.output_folder}
                 onChange={(event) => void patch({ export: { output_folder: event.target.value } })}
+              />
+            </Section>
+
+            {/* Пусто — по пресету: «_баланс», «_avif» и т. п. Заданная
+                приписка одна на всё: видео, звук и картинки. */}
+            <Section title="Приписка для обработанных файлов">
+              <input
+                className="field font-mono text-[12px]"
+                value={suffixDraft ?? settings.export.file_suffix ?? ''}
+                placeholder="По пресету: _баланс, _avif, _jpg…"
+                onChange={(event) => setSuffixDraft(event.target.value)}
+                onBlur={() => {
+                  if (suffixDraft === null) return
+                  void patch({ export: { file_suffix: suffixDraft } })
+                  setSuffixDraft(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+                }}
+              />
+            </Section>
+
+            <Section title="Доп настройки">
+              <Toggle
+                checked={settings.hints ?? true}
+                onChange={(value) => void patch({ hints: value })}
+                label="Подсказки"
+                hint="Пояснения при наведении на кнопки и настройки. Если всё и так понятно, их можно выключить."
               />
             </Section>
 

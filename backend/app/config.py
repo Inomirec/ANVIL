@@ -6,7 +6,7 @@ import json
 import threading
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .paths import config_file, default_workspace, ensure_dirs
 
@@ -60,6 +60,15 @@ class ExportSettings(BaseModel):
     #: маленькая, и на хорошем процессоре их идёт много, даже когда видео
     #: тянется по одному.
     image_concurrency: int = Field(default=1, ge=1, le=16)
+    #: Приписка к имени обработанного файла. Пусто — по пресету: «_баланс»,
+    #: «_avif» и т. п., как было всегда; заданная — одна на всё.
+    file_suffix: str = Field(default="", max_length=40)
+
+    @field_validator("file_suffix")
+    @classmethod
+    def _clean_suffix(cls, value: str) -> str:
+        """Знаки, которых не бывает в именах файлов Windows, выбрасываем."""
+        return "".join(ch for ch in value if ch not in '<>:"/\\|?*' and ord(ch) >= 32).rstrip(". ")
 
 
 class Settings(BaseModel):
@@ -74,6 +83,8 @@ class Settings(BaseModel):
     download: DownloadSettings = Field(default_factory=DownloadSettings)
     export: ExportSettings = Field(default_factory=ExportSettings)
     binaries: BinaryOverrides = Field(default_factory=BinaryOverrides)
+    #: Подсказки при наведении. Опытному человеку они только мешают.
+    hints: bool = True
 
     def resolved_workspace(self) -> str:
         if self.active_workspace:

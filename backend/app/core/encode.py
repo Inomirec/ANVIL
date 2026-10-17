@@ -179,10 +179,27 @@ def target_height(options: VideoOptions, info: MediaInfo | None) -> int | None:
     return source
 
 
+#: Скорость процессорных кодировщиков — в пресет видеокарты (p7 — медленно и
+#: качественно, p1 — быстро). Иначе на видеокарте выбранная скорость молча
+#: превращалась в средний p5.
+_GPU_BY_NAME = {
+    "veryslow": "p7", "slower": "p7", "slow": "p6", "medium": "p5",
+    "fast": "p4", "faster": "p3", "veryfast": "p2", "superfast": "p1", "ultrafast": "p1",
+}
+
+
 def _gpu_preset(speed: str) -> str:
     """Пресет скорости для NVENC: p1 — быстро, p7 — качественно."""
-    if isinstance(speed, str) and speed.startswith("p"):
+    if not isinstance(speed, str):
+        return "p5"
+    if speed.startswith("p"):
         return speed
+    if speed in _GPU_BY_NAME:
+        return _GPU_BY_NAME[speed]
+    if speed.isdigit():
+        # Скорость SVT-AV1: меньше — медленнее и качественнее.
+        level = int(speed)
+        return "p7" if level <= 2 else "p6" if level <= 4 else "p5" if level <= 6 else "p3" if level <= 8 else "p2"
     return "p5"
 
 

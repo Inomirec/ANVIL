@@ -7,6 +7,7 @@ import { ComposeTab } from './components/ComposeTab'
 import { DownloadPanel } from './components/DownloadPanel'
 import { ExportPanel } from './components/ExportPanel'
 import { FolderPicker } from './components/FolderPicker'
+import { setTooltipsEnabled } from './lib/tooltips'
 import { GifView } from './components/GifView'
 import { TopResizeEdge, WindowButtons, useWindowChrome } from './components/WindowBar'
 import { ImageEditor, ImagePanel, emptyImageEdit, type ImageEdit } from './components/ImageEditor'
@@ -27,6 +28,9 @@ export default function App() {
   const bootstrap = useStore((state) => state.bootstrap)
   const ready = useStore((state) => state.ready)
   const status = useStore((state) => state.status)
+  // Подсказки при наведении можно выключить в настройках.
+  const hints = useStore((state) => state.settings?.hints ?? true)
+  useEffect(() => setTooltipsEnabled(hints), [hints])
   const connected = useStore((state) => state.connected)
   const activeInfo = useStore((state) => state.activeInfo)
   const activePath = useStore((state) => state.activePath)

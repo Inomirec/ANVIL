@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, FileX2, FolderInput, Play } from 'lucide-react'
+import { Eye, FileX2, FolderInput, Gauge, Play } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural } from '../lib/format'
-import { loadPrefs, savePrefs } from '../lib/prefs'
+import { imageEffort, loadPrefs, savePrefs, SPEED_LABELS } from '../lib/prefs'
 import { strokesToPng } from '../lib/paint'
 import type { FileInfo, ImageOptions, ImagePreview, Preset } from '../lib/types'
 import { useStore } from '../store'
@@ -87,6 +87,10 @@ export function ImagePanel({
   // Удаление исходника — не настройка сжатия, а решение про файл, поэтому
   // живёт отдельно от options и уходит в запрос, а не в параметры кодека.
   const [deleteOriginal, setDeleteOriginal] = useState(() => loadPrefs().imageReplace ?? false)
+  // Своя приписка из настроек важнее приписки формата.
+  const fixedSuffix = useStore((state) => state.settings?.export.file_suffix ?? '')
+  // Скорость (усилие) кодировщика: 2 — обычная.
+  const [speed, setSpeed] = useState(() => loadPrefs().imageSpeed ?? 2)
   const [intoSubfolder, setIntoSubfolder] = useState(
     () => loadPrefs().subfolder ?? localStorage.getItem('sgh.outputSubfolder') !== 'off',
   )
@@ -163,7 +167,7 @@ export function ImagePanel({
     const mine = ++requestId.current
     const timer = setTimeout(() => {
       api
-        .imagePreview({ source: file.path, image: { ...options, ...editPayload } })
+        .imagePreview({ source: file.path, image: { ...options, effort: imageEffort(speed), ...editPayload } })
         .then((result) => {
           if (mine !== requestId.current) return
           setPreview(result)
@@ -180,7 +184,7 @@ export function ImagePanel({
 
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.path, encodeKey(options), editPayload, showPreview])
+  }, [file.path, encodeKey(options), speed, editPayload, showPreview])
 
   // Панель живёт до конца выбора файла — прибираем превью за собой.
   useEffect(() => () => onPreview(null), [onPreview])
@@ -190,6 +194,7 @@ export function ImagePanel({
     kind: 'image' as const,
     image: {
       ...options,
+      effort: imageEffort(speed),
       // Правки нарисованы для конкретной картинки — в пакет их не тащим.
       crop: withEdits ? editPayload.crop : null,
       boxes: withEdits ? editPayload.boxes : [],
@@ -198,7 +203,7 @@ export function ImagePanel({
     },
     // Без подпапки результат ложится прямо туда, где лежал оригинал.
     output_dir: intoSubfolder ? null : parentDir(source),
-    suffix: SUFFIXES[options.format] ?? '_сжатый',
+    suffix: fixedSuffix || (SUFFIXES[options.format] ?? '_сжатый'),
     preset_label: activePreset?.label,
     replace_original: deleteOriginal,
     allow_format_switch: switchFormats,
@@ -386,6 +391,7 @@ export function ImagePanel({
             <MarkIcons
               marks={[
                 ...(deleteOriginal ? [{ icon: FileX2, label: 'Оригинал уйдёт в корзину', danger: true }] : []),
+                ...(speed !== 2 ? [{ icon: Gauge, label: `Скорость: ${SPEED_LABELS[speed].toLowerCase()}` }] : []),
                 ...(showPreview ? [{ icon: Eye, label: 'Показывать превью' }] : []),
                 ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
               ]}
@@ -398,6 +404,16 @@ export function ImagePanel({
             </p>
           )}
 
+          <Select
+            label="Скорость"
+            value={String(speed)}
+            options={SPEED_LABELS.map((label, index) => ({ value: String(index), label }))}
+            onChange={(value) => {
+              setSpeed(Number(value))
+              savePrefs({ imageSpeed: Number(value) })
+            }}
+            hint="Сколько кодировщик старается. Медленнее — дольше ждать, но при том же качестве файл чуть легче. На JPEG и PNG не влияет."
+          />
           <Toggle
             checked={showPreview}
             onChange={setShowPreview}

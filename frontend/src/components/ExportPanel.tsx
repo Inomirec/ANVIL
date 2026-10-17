@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AudioLines, FileX2, FolderInput, Headphones, Play, Terminal, Zap } from 'lucide-react'
+import { AudioLines, FileX2, FolderInput, Gauge, Headphones, Play, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural, timecode } from '../lib/format'
-import { loadPrefs, savePrefs } from '../lib/prefs'
+import { loadPrefs, savePrefs, SPEED_LABELS, speedPreset } from '../lib/prefs'
 import type { AudioOptions, FileInfo, Preset, VideoOptions } from '../lib/types'
 import { useStore } from '../store'
 import type { TrimState } from './MediaEditor'
@@ -169,6 +169,10 @@ export function ExportPanel({
   })
   const [streamCopy, setStreamCopy] = useState(false)
   const [suffix, setSuffix] = useState('_sig')
+  // Своя приписка из настроек важнее приписки пресета.
+  const fixedSuffix = useStore((state) => state.settings?.export.file_suffix ?? '')
+  // Скорость кодирования поверх пресета: нет — как задано в пресете.
+  const [speed, setSpeed] = useState<number | null>(() => loadPrefs().videoSpeed ?? null)
 
   // Приписка к имени по основным пресетам: в папке потом сразу видно, чем
   // сжимали, — иначе три версии одного ролика различаются только весом.
@@ -257,6 +261,7 @@ export function ExportPanel({
     // Затухания нарисованы на дорожках открытого файла — в пакет их не тащим.
     video: {
       ...video,
+      ...(speed !== null ? { speed_preset: speedPreset(video.codec, speed) } : {}),
       fade_in: withTrim ? fades.video.in : 0,
       fade_out: withTrim ? fades.video.out : 0,
     },
@@ -270,7 +275,7 @@ export function ExportPanel({
     },
     stream_copy: streamCopy,
     replace_original: deleteOriginal,
-    suffix: toWebp ? '_webp' : suffix,
+    suffix: fixedSuffix || (toWebp ? '_webp' : suffix),
     preset_label: activePreset?.label,
   })
 
@@ -481,6 +486,9 @@ export function ExportPanel({
                 ...(!streamCopy && !isAudio && status?.gpuAvailable && video.use_gpu
                   ? [{ icon: Zap, label: 'Кодировать на видеокарте' }]
                   : []),
+                ...(!streamCopy && !isAudio && !toWebp && speed !== null
+                  ? [{ icon: Gauge, label: `Скорость: ${SPEED_LABELS[speed].toLowerCase()}` }]
+                  : []),
                 ...(!streamCopy && !gif && audio.loudnorm ? [{ icon: AudioLines, label: 'Выравнивание звука' }] : []),
                 ...(!streamCopy && !gif && audio.mono ? [{ icon: Headphones, label: 'Звук в моно' }] : []),
                 ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
@@ -490,6 +498,22 @@ export function ExportPanel({
           }
         >
           <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
+            {!streamCopy && !isAudio && !toWebp && (
+              <Select
+                label="Скорость"
+                value={speed === null ? 'preset' : String(speed)}
+                options={[
+                  { value: 'preset', label: 'Как в пресете' },
+                  ...SPEED_LABELS.map((label, index) => ({ value: String(index), label })),
+                ]}
+                onChange={(value) => {
+                  const next = value === 'preset' ? null : Number(value)
+                  setSpeed(next)
+                  savePrefs({ videoSpeed: next })
+                }}
+                hint="Сколько кодировщик старается. Медленнее — дольше ждать, но картинка чище при том же весе или файл легче при той же картинке. Быстрее — наоборот."
+              />
+            )}
             {!streamCopy && !isAudio && status?.gpuAvailable && (
               <Toggle
                 checked={video.use_gpu}
