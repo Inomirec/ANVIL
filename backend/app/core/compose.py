@@ -420,13 +420,24 @@ def text_layers(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
             tall = (0.72 + (lines - 1) * step) * clip.font_size * height + 2 * clip.box_pad * height
             radius = min(clip.box_radius * height, tall / 2)
             red, green, blue = _rgb(clip.box_color)
-            alpha = round(255 * clip.box_alpha)
+            sigma = max(0.5, 0.537 * radius)
+            # Край — не обрезка «да/нет» по половине, а плавный спуск шириной
+            # в пиксель: у размытой прозрачности на краю наклон около
+            # 1 / (2.5 сигмы) на пиксель, и умножение на 2.5 сигмы растягивает
+            # его ровно на пиксель. Резкая обрезка давала ступеньки, и край
+            # подложки «рассыпался» даже в 1080p. Считаем в 16 битах: в 8
+            # битах размытие на большом радиусе даёт всего пару уровней на
+            # пиксель, и край гулял. `steps=4` — гауссово размытие точнее
+            # обычного приближения.
+            steep = 2.5 * sigma
+            share = max(0.0, min(1.0, clip.box_alpha))
             branches.append((
                 "box",
-                f"{text_filter(clip, width, height, skip, role='box')},format=gbrap,"
-                f"lut=c0={red}:c1={green}:c2={blue},"
-                f"gblur=sigma={max(0.5, 0.537 * radius):.2f}:planes=8,"
-                f"lut=c3='if(gt(val,127),{alpha},0)'",
+                f"{text_filter(clip, width, height, skip, role='box')},format=gbrap16le,"
+                f"lut=c0={red * 257}:c1={green * 257}:c2={blue * 257},"
+                f"gblur=sigma={sigma:.2f}:steps=4:planes=8,"
+                f"lut=c3='clip((val-32767.5)*{steep:.3f}+32767.5,0,65535)*{share:.4f}',"
+                f"format=gbrap",
             ))
         else:
             branches.append(("box", text_filter(clip, width, height, skip, role="box")))
