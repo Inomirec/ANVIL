@@ -29,7 +29,7 @@ export function LinkPreview({
   onApply: (start: number | null, end: number | null) => void
 }) {
   const toast = useStore((state) => state.toast)
-  const setQueueOpen = useStore((state) => state.setQueueOpen)
+  const revealQueue = useStore((state) => state.revealQueue)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const [info, setInfo] = useState<ResolvedLink | null>(null)
@@ -160,7 +160,7 @@ export function LinkPreview({
         max_height: 360,
       })
       toast('Черновик добавлен в очередь — потом разметьте его в медиатеке', 'ok')
-      setQueueOpen(true)
+      revealQueue()
       onClose()
     } catch (err) {
       toast((err as Error).message, 'error')
@@ -178,7 +178,7 @@ export function LinkPreview({
         max_height: 0,
       })
       toast('Отрезок добавлен в очередь скачивания', 'ok')
-      setQueueOpen(true)
+      revealQueue()
       onClose()
     } catch (err) {
       toast((err as Error).message, 'error')

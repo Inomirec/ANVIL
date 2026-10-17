@@ -68,7 +68,7 @@ export function ImagePanel({
   const checked = useStore((state) => state.checked)
   const files = useStore((state) => state.files)
   const toast = useStore((state) => state.toast)
-  const setQueueOpen = useStore((state) => state.setQueueOpen)
+  const revealQueue = useStore((state) => state.revealQueue)
 
   const imagePresets: Preset[] = useMemo(() => presets.image ?? [], [presets])
   // Панель пересоздаётся при смене файла, поэтому выбор человека держим
@@ -280,7 +280,7 @@ export function ImagePanel({
         const store = useStore.getState()
         store.setChecked(store.checked.filter((path) => !sent.has(path)))
       }
-      setQueueOpen(true)
+      revealQueue()
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {

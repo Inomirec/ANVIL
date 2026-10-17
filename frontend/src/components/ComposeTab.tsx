@@ -196,7 +196,7 @@ export function ComposeTab() {
   const setMasterVolume = useCompose((state) => state.setMasterVolume)
 
   const toast = useStore((state) => state.toast)
-  const setQueueOpen = useStore((state) => state.setQueueOpen)
+  const revealQueue = useStore((state) => state.revealQueue)
   const settings = useStore((state) => state.settings)
 
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
@@ -603,7 +603,7 @@ export function ComposeTab() {
         start: state.renderIn,
         end: state.renderOut,
       })
-      setQueueOpen(true)
+      revealQueue()
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {
@@ -629,7 +629,7 @@ export function ComposeTab() {
         outputName: outputName.trim() || DEFAULT_NAME,
       })
       toast('Кадр сохранён — в полном размере кадра проекта, без сжатия', 'ok')
-      setQueueOpen(true)
+      revealQueue()
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {

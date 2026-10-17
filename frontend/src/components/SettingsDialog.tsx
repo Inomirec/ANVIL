@@ -65,7 +65,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const refreshLibrary = useStore((state) => state.refreshLibrary)
 
   const jobs = useStore((state) => state.jobs)
-  const setQueueOpen = useStore((state) => state.setQueueOpen)
+  const revealQueue = useStore((state) => state.revealQueue)
 
   const [benchId, setBenchId] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
@@ -118,7 +118,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     try {
       const job = await api.benchmark()
       setBenchId(job.id)
-      setQueueOpen(true)
+      revealQueue()
     } catch (error) {
       toast((error as Error).message, 'error')
     }

@@ -10,6 +10,8 @@ import {
   Image as ImageIcon,
   Loader2,
   ScrollText,
+  PanelBottomClose,
+  PanelBottomOpen,
   Trash2,
   X,
 } from 'lucide-react'
@@ -23,7 +25,7 @@ import { Button, IconButton, Modal } from './ui'
 //: Сколько строк очереди показываем разом.
 const ROW_LIMIT = 200
 //: Под сколько строк раскрывается панель. Дальше список листают.
-const ROWS_SHOWN = 4
+const ROWS_SHOWN = 3
 //: Высота свёрнутой строки очереди и отступы списка, в пикселях.
 const HEAD_HEIGHT = 42
 const LIST_PADDING = 16
@@ -34,6 +36,8 @@ const FULL_HEIGHT = 290
 export function JobQueue() {
   const jobs = useStore((state) => state.jobs)
   const open = useStore((state) => state.queueOpen)
+  const queueAuto = useStore((state) => state.queueAuto)
+  const setQueueAuto = useStore((state) => state.setQueueAuto)
   const setOpen = useStore((state) => state.setQueueOpen)
   const toast = useStore((state) => state.toast)
   const refreshJobs = useStore((state) => state.refreshJobs)
@@ -87,8 +91,8 @@ export function JobQueue() {
   }
 
   // Раскрытая очередь занимает столько, сколько нужно её строкам, но не
-  // больше четырёх: на один сжатый файл разворачивать пол-окна незачем, а
-  // дальше четвёртой строки список всё равно листают. Высоту строки меряем,
+  // больше трёх: на один сжатый файл разворачивать пол-окна незачем, а
+  // дальше третьей строки список всё равно листают. Высоту строки меряем,
   // а не считаем: у строки с ошибкой есть объяснение, у раскрытой — журнал.
   const list = useRef<HTMLUListElement>(null)
   const [listHeight, setListHeight] = useState(0)
@@ -178,6 +182,23 @@ export function JobQueue() {
             {failed === 1 ? '1 ошибка' : `Ошибок: ${failed}`}
           </button>
         )}
+
+        {/* Раскрываться ли очереди самой при каждой обработке. Кто следит
+            за работой по счётчику в строке, тому раскрытый список мешает. */}
+        <button
+          type="button"
+          onClick={() => setQueueAuto(!queueAuto)}
+          title={
+            queueAuto
+              ? 'Очередь раскрывается сама, когда начинается обработка. Нажмите, чтобы не раскрывалась'
+              : 'Очередь не раскрывается сама. Нажмите, чтобы раскрывалась при каждой обработке'
+          }
+          className={`shrink-0 rounded-lg p-1.5 transition-colors ${
+            queueAuto ? 'text-ink-faint hover:bg-surface-3 hover:text-ink-dim' : 'bg-accent/15 text-accent-soft'
+          }`}
+        >
+          {queueAuto ? <PanelBottomOpen size={14} /> : <PanelBottomClose size={14} />}
+        </button>
 
         {finished.length > 0 && (
           <button

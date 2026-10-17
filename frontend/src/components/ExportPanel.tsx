@@ -136,7 +136,7 @@ export function ExportPanel({
   const checked = useStore((state) => state.checked)
   const files = useStore((state) => state.files)
   const toast = useStore((state) => state.toast)
-  const setQueueOpen = useStore((state) => state.setQueueOpen)
+  const revealQueue = useStore((state) => state.revealQueue)
   const status = useStore((state) => state.status)
 
   const isAudio = file.kind === 'audio'
@@ -196,7 +196,9 @@ export function ExportPanel({
   // При первом показе (и при смене типа файла) берём пресет по умолчанию.
   useEffect(() => {
     const prefs = loadPrefs()
-    const remembered = gif ? prefs.gifPreset : isAudio ? prefs.audioPreset : prefs.videoPreset
+    // «Архив» слит с «Качеством»: запомненный «Архив» открывается «Качеством».
+    const saved = gif ? prefs.gifPreset : isAudio ? prefs.audioPreset : prefs.videoPreset
+    const remembered = saved === 'archive_av1' ? 'pack_quality' : saved
     const first =
       kindPresets.find((preset) => preset.id === remembered && preset.available !== false) ??
       kindPresets.find((preset) => preset.available !== false)
@@ -325,7 +327,7 @@ export function ExportPanel({
         const store = useStore.getState()
         store.setChecked(store.checked.filter((path) => !sent.has(path)))
       }
-      setQueueOpen(true)
+      revealQueue()
       onDone?.()
     } catch (error) {
       toast((error as Error).message, 'error')
@@ -369,7 +371,7 @@ export function ExportPanel({
     setBusy(true)
     try {
       await api.exportRaw(command, file.path)
-      setQueueOpen(true)
+      revealQueue()
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {

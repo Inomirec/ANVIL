@@ -45,7 +45,7 @@ export function DownloadPanel() {
   const settings = useStore((state) => state.settings)
   const presets = useStore((state) => state.presets)
   const toast = useStore((state) => state.toast)
-  const setQueueOpen = useStore((state) => state.setQueueOpen)
+  const revealQueue = useStore((state) => state.revealQueue)
   const status = useStore((state) => state.status)
   const refreshSettings = useStore((state) => state.refreshSettings)
 
@@ -260,7 +260,7 @@ export function DownloadPanel() {
         `В очередь добавлено ${result.jobs.length} ${plural(result.jobs.length, ['ссылка', 'ссылки', 'ссылок'])}`,
         'ok',
       )
-      setQueueOpen(true)
+      revealQueue()
       // Ссылки намеренно оставляем на месте: из одного ролика часто нужно
       // вырезать несколько кусков, и вбивать адрес заново каждый раз —
       // лишняя работа. Ненужную строку можно убрать крестиком.
@@ -303,7 +303,7 @@ export function DownloadPanel() {
         auto_process_preset: autoPreset || null,
       })
       toast('Выбранные картинки добавлены в очередь', 'ok')
-      setQueueOpen(true)
+      revealQueue()
       setGallery(null)
       setPicked([])
     } catch (error) {

@@ -73,6 +73,11 @@ interface State {
   toast: (text: string, tone?: Toast['tone'], group?: string) => void
   dismissToast: (id: number) => void
   setQueueOpen: (open: boolean) => void
+  /** Раскрываться ли очереди самой, когда начинается обработка. */
+  queueAuto: boolean
+  setQueueAuto: (value: boolean) => void
+  /** Раскрыть очередь, потому что началась обработка, — если это не выключено. */
+  revealQueue: () => void
   /** Задача, у которой раскрыт журнал. Остальным записи не копим. */
   logJobId: string | null
   setLogJob: (id: string | null) => void
@@ -113,6 +118,13 @@ export const useStore = create<State>((set, get) => ({
   toasts: [],
   logJobId: null,
   queueOpen: false,
+  queueAuto: (() => {
+    try {
+      return localStorage.getItem('sgh.queueAuto') !== 'off'
+    } catch {
+      return true
+    }
+  })(),
 
   async bootstrap() {
     try {
@@ -369,6 +381,19 @@ export const useStore = create<State>((set, get) => ({
 
   setQueueOpen(open) {
     set({ queueOpen: open })
+  },
+
+  setQueueAuto(value) {
+    set({ queueAuto: value })
+    try {
+      localStorage.setItem('sgh.queueAuto', value ? 'on' : 'off')
+    } catch {
+      /* не запомнилось — не беда */
+    }
+  },
+
+  revealQueue() {
+    if (get().queueAuto) set({ queueOpen: true })
   },
 
   setLogJob(id) {

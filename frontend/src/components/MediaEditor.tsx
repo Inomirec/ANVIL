@@ -87,7 +87,7 @@ export function MediaEditor({
   const [dim, setDim] = useState(0)
 
   const toast = useStore((state) => state.toast)
-  const setQueueOpen = useStore((state) => state.setQueueOpen)
+  const revealQueue = useStore((state) => state.revealQueue)
 
   const isVideo = file.kind === 'video'
   // Колесо над кадром приближает его, зажатое колесо таскает: мелкую надпись
@@ -294,13 +294,13 @@ export function MediaEditor({
     try {
       await api.exportFrame({ source: file.path, time: media.currentTime })
       toast('Кадр сохранён — без сжатия, в том же качестве, что в видео', 'ok')
-      setQueueOpen(true)
+      revealQueue()
     } catch (error) {
       toast((error as Error).message, 'error')
     } finally {
       setGrabbing(false)
     }
-  }, [file.path, isVideo, toast, setQueueOpen])
+  }, [file.path, isVideo, toast, revealQueue])
 
   // Горячие клавиши работают, пока фокус не в поле ввода.
   useEffect(() => {
@@ -482,7 +482,7 @@ export function MediaEditor({
         {!file.playable && (
           <div className="absolute inset-x-0 top-0 z-10 bg-warn/15 px-4 py-2 text-center text-[12px] text-warn">
             Формат «.{file.ext}» не показывается в предпросмотре. Обработать файл
-            можно и так — или сначала перегнать его в MP4 пресетом «Конвертация в MP4».
+            можно и так — или сначала перегнать его пресетом «Конвертация в H.264».
           </div>
         )}
 
