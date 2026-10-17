@@ -424,8 +424,10 @@ export const FRAME_QUALITY = [480, 720, 1080]
 export const FRAME_SHAPES = [
   { value: '16:9', label: '16:9', hint: 'Обычное широкое видео' },
   { value: '4:3', label: '4:3', hint: 'Старое телевидение' },
+  // Все формы — широкие, вертикальную даёт кнопка «вертикально». Квадрат —
+  // крайним: поворачивать у него нечего.
+  { value: '3:2', label: '3:2', hint: 'Как фотография' },
   { value: '1:1', label: '1:1', hint: 'Квадрат' },
-  { value: '2:3', label: '2:3', hint: 'Как фотография' },
 ]
 
 /** Считает размер кадра из качества, формы и поворота. */
@@ -890,7 +892,14 @@ function normalize(input: unknown): Saved {
     if (!tracks.some((track) => track.kind === 'audio')) {
       tracks.push({ id: 'a1', kind: 'audio', clips: [], level: 1 })
     }
-    return { ...empty, ...data, tracks }
+    // Форма «2:3» стала «3:2» с поворотом: все формы теперь широкие.
+    const legacy = data.shape === '2:3'
+    return {
+      ...empty,
+      ...data,
+      ...(legacy ? { shape: '3:2', turned: !data.turned } : {}),
+      tracks,
+    }
   } catch {
     return empty
   }

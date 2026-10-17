@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { ArrowLeftRight, Check, ChevronDown } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowLeftRight, AudioLines, ChevronDown, Zap } from 'lucide-react'
 import { SliderNumber } from './ComposeTextPanel'
 import { useCompose } from '../composeStore'
-import { Dropdown, Section, Segmented, Toggle } from './ui'
+import { Dropdown, MarkIcons, Section, Segmented, Toggle } from './ui'
 
 /**
  * Настройки сборки монтажа — прямо в правой колонке, когда ничего не выбрано.
@@ -65,7 +65,7 @@ export const BUILTIN_PRESETS: RenderPreset[] = [
   {
     id: 'h264-best',
     label: 'Лучшее качество · H.264',
-    tech: 'H.264 · AAC 256 · MP4 · играет везде',
+    tech: 'H.264 · AAC 256 · MP4',
     videoCodec: 'h264',
     crf: 16,
     bitrateKbps: 0,
@@ -122,10 +122,19 @@ export function sameAs(value: RenderSettings, preset: RenderPreset, frame: Frame
 export const AUDIO_FILE: Record<string, string> = { mp3: 'MP3', aac: 'M4A', opus: 'Opus', flac: 'FLAC' }
 
 const VIDEO_CODECS = [
-  { value: 'av1_svt', label: 'AV1', title: 'Меньше вес при том же качестве' },
-  { value: 'h265', label: 'H.265', title: 'Между AV1 и H.264' },
-  { value: 'h264', label: 'H.264', title: 'Играет везде, даже в старом' },
-  { value: 'none', label: 'Нет', title: 'Без картинки — соберётся один звук: MP3, M4A, Opus или FLAC по кодеку звука' },
+  {
+    value: 'av1_svt', label: 'AV1',
+    title: 'Лучшее качество при меньшем весе: из трёх кодеков файл самый лёгкий. Кодируется дольше остальных, а совсем старые телефоны и телевизоры могут его не открыть',
+  },
+  {
+    value: 'h265', label: 'H.265',
+    title: 'Файл примерно в полтора раза легче, чем у H.264 с той же картинкой, а кодируется быстрее AV1. Телефоны и телевизоры играют его хорошо, а браузерам и Windows иногда нужно расширение',
+  },
+  {
+    value: 'h264', label: 'H.264',
+    title: 'Самый совместимый: открывается на любом устройстве и в любой программе, в том числе в монтажных. Кодируется быстро, но файл тяжелее, чем у AV1 и H.265',
+  },
+  { value: 'none', label: 'Нет', title: 'Без картинки — соберётся только звук: MP3, M4A, Opus или FLAC по кодеку звука' },
 ]
 
 /**
@@ -151,32 +160,49 @@ const AUDIO_CODECS: {
   marks: { value: number; label: string; hint?: string }[]
 }[] = [
   {
-    value: 'opus', label: 'Opus', title: 'Лучше всех при малом весе',
+    value: 'opus', label: 'Opus',
+    title: 'Лучший звук при малом весе: на 128 кбит/с звучит как MP3 на 192–256. Совсем старые плееры и некоторые монтажные программы его не открывают',
     min: 32, max: 320, normal: 160,
     marks: soundMarks(64, 128, 192),
   },
   {
-    value: 'aac', label: 'AAC', title: 'Играет везде',
+    value: 'aac', label: 'AAC',
+    title: 'Обычный звук для MP4: открывается на всех телефонах, в браузерах и монтажных программах. При том же весе звучит лучше MP3',
     min: 64, max: 320, normal: 192,
     marks: soundMarks(96, 160, 256),
   },
   {
-    value: 'mp3', label: 'MP3', title: 'Играет везде, даже в старом',
+    value: 'mp3', label: 'MP3',
+    title: 'Самый старый и совместимый формат: его откроет любой плеер, даже автомагнитола. Чтобы звучать как AAC или Opus, ему нужен битрейт выше',
     min: 96, max: 320, normal: 256,
     marks: soundMarks(128, 192, 320),
   },
-  { value: 'flac', label: 'FLAC', title: 'Без потерь — тяжёлый', min: 0, max: 0, normal: 0, marks: [] },
+  {
+    value: 'flac', label: 'FLAC',
+    title: 'Без потерь: звук сохраняется в точности, но весит в несколько раз больше. Для архива и дальнейшей обработки; внутри MP4 открывается не каждым плеером',
+    min: 0, max: 0, normal: 0, marks: [],
+  },
   { value: 'none', label: 'Нет', title: 'Без звука', min: 0, max: 0, normal: 0, marks: [] },
 ]
+
+/** Что можно положить в WebM. */
+const webmVideo = (codec: string) => codec === 'av1_svt' || codec === 'none'
+const webmAudio = (codec: string) => codec === 'opus' || codec === 'none'
 
 /**
  * Контейнер — «коробка», в которую кладутся видео и звук. На картинку и вес
  * почти не влияет, влияет на то, что файл откроет.
  */
 const CONTAINERS = [
-  { value: 'mp4', label: 'MP4', title: 'Открывается везде: в плеерах, браузерах, на телефоне и в SIGame. Если не знаете, что выбрать, — это' },
-  { value: 'mkv', label: 'MKV', title: 'Для архива и монтажных программ: держит любые кодеки и несколько дорожек. Телефоны и браузеры открывают не всегда' },
-  { value: 'webm', label: 'WebM', title: 'Для сайтов: открывается в браузерах. Внутри только AV1 или VP9 и Opus' },
+  { value: 'mp4', label: 'MP4', title: 'Универсальный контейнер: проигрывается на большинстве устройств' },
+  {
+    value: 'mkv', label: 'MKV',
+    title: 'Служебных данных чуть меньше, чем у MP4, но на вес это почти не влияет — меньше процента. Файл не портится, если запись оборвалась. Телефоны, браузеры и монтажные программы открывают его хуже, чем MP4',
+  },
+  {
+    value: 'webm', label: 'WebM',
+    title: 'Открытый формат для сайтов: браузеры играют его сами, без расширений. Внутри только AV1 и Opus — остальные кодеки при нём выключены',
+  },
 ]
 
 /**
@@ -216,6 +242,15 @@ export function bitrateMarks(codec: string, frame: Frame): { value: number; labe
     { value: round250(normal), label: 'M', hint: BITRATE_HINTS.M },
     { value: round250(normal * 2), label: 'L', hint: BITRATE_HINTS.L },
   ]
+}
+
+/**
+ * Кадр, по которому считается шкала битрейта. У «Своего» размера — как у
+ * 1080p: размер человек набирает сам, бывает любым, и шкала по нему то
+ * сжималась в угол, то улетала за край, утаскивая битрейт за собой.
+ */
+export function scaleFrame(frame: Frame, custom: boolean): Frame {
+  return custom ? { width: 1920, height: 1080 } : frame
 }
 
 /** Обычный битрейт для кодека и кадра — его ставим при смене кодека. */
@@ -285,11 +320,11 @@ function qualityWord(codec: string, crf: number): string {
  * остальных — слова.
  */
 const SPEED_HINTS = [
-  'Программа потратит больше всего времени на кодирование — в несколько раз дольше обычного. Картинка при том же весе станет чуть чище, а файл при том же качестве — чуть легче. Звук скорость не затрагивает',
+  'Программа потратит больше всего времени на кодирование — в несколько раз дольше обычного. Картинка при том же весе станет чуть чище, а файл при том же качестве — чуть легче',
   'Кодирование заметно дольше обычного. Картинка при том же весе немного чище, файл при том же качестве немного легче',
   'Обычное время кодирования, хорошая картинка и разумный вес файла. Подходит почти всегда',
   'Кодирование быстрее обычного, но картинка при том же весе немного хуже, а файл при том же качестве немного тяжелее',
-  'Программа потратит меньше всего времени на кодирование, но пострадает качество картинки, а итоговый файл будет заметно тяжелее. Звук скорость не затрагивает',
+  'Программа потратит меньше всего времени на кодирование, но пострадает качество картинки, а итоговый файл будет заметно тяжелее',
 ]
 function speedOptions(codec: string): { value: string; label: string; title: string }[] {
   const values = codec === 'av1_svt' ? ['2', '4', '5', '7', '9'] : ['veryslow', 'slow', 'medium', 'fast', 'veryfast']
@@ -361,7 +396,8 @@ export function ComposeRenderPanel({
 }) {
   const width = useCompose((state) => state.width)
   const height = useCompose((state) => state.height)
-  const frame = { width, height }
+  const custom = useCompose((state) => state.custom)
+  const frame = scaleFrame({ width, height }, custom)
   const range = bitrateRange(value.videoCodec, frame)
   const set = (patch: Partial<RenderSettings>) => onChange({ ...value, ...patch })
   const sound = AUDIO_CODECS.find((item) => item.value === value.audioCodec) ?? AUDIO_CODECS[0]
@@ -372,6 +408,32 @@ export function ComposeRenderPanel({
   const flip = (crf: number) => scale.best + scale.worst - crf
   // Последние значения обоих способов — переключение туда и обратно их не теряет.
   const [last, setLast] = useState({ bitrate: value.bitrateKbps || bitrateNormal(value.videoCodec, frame), crf: value.crf })
+
+  // WebM держит только AV1 и Opus. Собирают один звук — контейнера нет.
+  const webm = value.container === 'webm' && !value.audioOnly
+  /** Смена кодека видео. */
+  const videoPatch = (codec: string): Partial<RenderSettings> => ({
+    videoCodec: codec,
+    // У AV1 и H.264 скорости называются по-разному: чужое имя кодировщик не
+    // примет. Битрейт — обычный для кодека. Качество тоже своё у каждого —
+    // берём «высокое» его шкалы.
+    ...(codec !== value.videoCodec
+      ? {
+          speedPreset: speedOptions(codec)[2].value,
+          crf: qualityScale(codec).marks[2].crf,
+          ...(byBitrate ? { bitrateKbps: bitrateNormal(codec, frame) } : {}),
+        }
+      : {}),
+  })
+
+  // Битрейт вне шкалы (остался от прежнего кадра или от старой версии)
+  // возвращаем в её пределы: иначе ползунок стоит в упоре, а сборка идёт с
+  // числом, которого не видно и не задать руками.
+  const outside = byBitrate && (value.bitrateKbps < range.min || value.bitrateKbps > range.max)
+  useEffect(() => {
+    if (outside) set({ bitrateKbps: Math.min(range.max, Math.max(range.min, value.bitrateKbps)) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outside])
 
   // Способ задания веса — маленькой кнопкой на месте названия: отдельная
   // строка ради переключателя занимала место в узкой колонке.
@@ -393,7 +455,7 @@ export function ComposeRenderPanel({
 
   return (
     <>
-    <Section title="Наборы" id="compose.render" summary={presetName(value, frame)}>
+    <Section title="Шаблоны" id="compose.render" summary={presetName(value, frame)}>
       <div className="grid gap-1.5">
         {BUILTIN_PRESETS.map((preset) => {
           const picked = sameAs(value, preset, frame)
@@ -432,27 +494,14 @@ export function ComposeRenderPanel({
       <Segmented
         columns={4}
         value={value.audioOnly ? 'none' : value.videoCodec}
-        options={VIDEO_CODECS}
+        options={VIDEO_CODECS.map((item) => ({ ...item, disabled: webm && !webmVideo(item.value) }))}
         onChange={(codec) =>
           codec === 'none'
             ? set({
                 audioOnly: true,
                 ...(value.audioCodec === 'none' ? { audioCodec: 'mp3', audioBitrateKbps: 256 } : {}),
               })
-            : set({
-                audioOnly: false,
-                videoCodec: codec,
-                // У AV1 и H.264 скорости называются по-разному: чужое имя
-                // кодировщик не примет. Битрейт — обычный для кодека.
-                // Качество тоже своё у каждого — берём «высокое» его шкалы.
-                ...(codec !== value.videoCodec
-                  ? {
-                      speedPreset: speedOptions(codec)[2].value,
-                      crf: qualityScale(codec).marks[2].crf,
-                      ...(byBitrate ? { bitrateKbps: bitrateNormal(codec, frame) } : {}),
-                    }
-                  : {}),
-              })
+            : set({ audioOnly: false, ...videoPatch(codec) })
         }
       />
       {!value.audioOnly &&
@@ -509,7 +558,17 @@ export function ComposeRenderPanel({
             hint="Формат файла — «коробка», в которую кладутся видео и звук. Если не знаете, что выбрать, — MP4"
             value={value.container}
             options={CONTAINERS}
-            onChange={(container) => set({ container })}
+            onChange={(container) =>
+              set({
+                container,
+                // В WebM кладутся только AV1 и Opus: чужие кодеки меняем сами,
+                // а кнопки их выключены, пока выбран WebM.
+                ...(container === 'webm' && value.videoCodec !== 'av1_svt' ? videoPatch('av1_svt') : {}),
+                ...(container === 'webm' && !webmAudio(value.audioCodec)
+                  ? { audioCodec: 'opus', audioBitrateKbps: AUDIO_CODECS[0].normal }
+                  : {}),
+              })
+            }
           />
         </div>
       )}
@@ -531,6 +590,7 @@ export function ComposeRenderPanel({
           value: item.value,
           label: item.label,
           title: item.title,
+          disabled: webm && !webmAudio(item.value),
         }))}
         onChange={(audioCodec) => {
           const next = AUDIO_CODECS.find((item) => item.value === audioCodec)!
@@ -555,7 +615,19 @@ export function ComposeRenderPanel({
 
     {/* Видеокарта и выравнивание — не про набор, а про сборку вообще: наборы
         их не трогают и подсветку набора они не гасят. */}
-    <Section title="Дополнительные настройки" id="compose.renderExtra">
+    <Section
+      title="Доп настройки"
+      id="compose.renderExtra"
+      // Свёрнутый раздел показывает значками, что в нём включено.
+      summary={
+        <MarkIcons
+          marks={[
+            ...(!value.audioOnly && value.useGpu ? [{ icon: Zap, label: 'Кодировать на видеокарте' }] : []),
+            ...(loudnorm ? [{ icon: AudioLines, label: 'Выровнять громкость' }] : []),
+          ]}
+        />
+      }
+    >
       <div className="space-y-1">
         {!value.audioOnly && (
           <Toggle

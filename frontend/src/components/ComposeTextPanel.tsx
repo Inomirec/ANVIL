@@ -358,7 +358,9 @@ export function SliderNumber({
           const edge = share < 0.12 ? 'start' : share > 0.88 ? 'end' : 'middle'
           return (
             <button
-              key={mark.value}
+              // По номеру, а не по значению: при совпавших значениях
+              // одинаковые ключи оставляли на шкале лишние подписи.
+              key={index}
               type="button"
               onClick={() => onChange(mark.value)}
               title={mark.hint ? (readout ? mark.hint : `${mark.hint} — ${mark.value}${unit ? ' ' + unit : ''}`) : readout ? `Поставить «${mark.label}»` : `Поставить ${mark.value}${unit ? ' ' + unit : ''}`}

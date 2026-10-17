@@ -380,7 +380,7 @@ export function ImagePanel({
             поэтому отдельного окошка «было → стало» здесь нет. Остаётся только
             ошибка просчёта: её больше показать негде. */}
         <Section
-          title="Остальные настройки"
+          title="Доп настройки"
           id="image.result"
           summary={
             <MarkIcons

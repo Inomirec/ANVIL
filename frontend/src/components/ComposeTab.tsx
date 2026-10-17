@@ -45,6 +45,7 @@ import {
   ComposeRenderPanel,
   DEFAULT_RENDER,
   bitrateForFrame,
+  scaleFrame,
   type RenderSettings,
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
@@ -225,18 +226,19 @@ export function ComposeTab() {
       return DEFAULT_RENDER
     }
   })
-  // Сменили размер кадра набором (480p, 720p, 1080p, форма) — битрейт
-  // переезжает следом: подписи шкалы считаются от кадра, и «обычно» для
-  // 1080p на 480p было бы втрое больше нужного. Свой размер кадра —
-  // исключение: там человек сам знает, чего хочет.
+  // Сменили размер кадра (480p, 720p, 1080p, форма) — битрейт переезжает
+  // следом: подписи шкалы считаются от кадра, и «обычно» для 1080p на 480p
+  // было бы втрое больше нужного. У «Своего» размера шкала как у 1080p
+  // (`scaleFrame`), и туда битрейт переезжает так же.
   const lastFrame = useRef<{ width: number; height: number } | null>(null)
   useLayoutEffect(() => {
+    const now = scaleFrame({ width, height }, custom)
     const was = lastFrame.current
-    lastFrame.current = { width, height }
-    if (!was || custom || (was.width === width && was.height === height)) return
+    lastFrame.current = now
+    if (!was || (was.width === now.width && was.height === now.height)) return
     setRender((current) => {
       if (current.bitrateKbps <= 0) return current
-      const next = { ...current, bitrateKbps: bitrateForFrame(current.bitrateKbps, current.videoCodec, was, { width, height }) }
+      const next = { ...current, bitrateKbps: bitrateForFrame(current.bitrateKbps, current.videoCodec, was, now) }
       localStorage.setItem('sgh.composeRender', JSON.stringify(next))
       return next
     })
@@ -1074,10 +1076,35 @@ export function ComposeTab() {
               видно по самим кнопкам, а форму кадра показывает рамка в окне
               просмотра. Раздел «Клип» тоже убран — имя файла, громкость и
               затухания живут на самом таймлайне. */}
+          {/* Качество и форма — одним разделом: друг без друга они кадр не
+              задают, а порознь занимали вдвое больше места. Подсказок у
+              кнопок нет — подписи и так понятны. */}
           <Section
-            title="Качество"
-            id="compose.quality"
-            summary={custom ? `${width}×${height}` : `${quality}p`}
+            title="Кадр"
+            id="compose.frame"
+            summary={
+              custom
+                ? `${width}×${height}`
+                : `${quality}p · ${turned ? shape.split(':').reverse().join(':') : shape}`
+            }
+            action={
+              !custom && (
+                // Поворот не объясняем словами: подписи форм сами
+                // переворачиваются, и сразу видно, что получится.
+                <button
+                  type="button"
+                  disabled={shape === '1:1'}
+                  onClick={() => setTurned(!turned)}
+                  title="Повернуть кадр: из 16:9 получится 9:16"
+                  className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-35 ${
+                    turned ? 'bg-accent/20 text-accent-soft' : 'text-ink-faint hover:bg-surface-3'
+                  }`}
+                >
+                  <RotateCw size={11} />
+                  вертикально
+                </button>
+              )
+            }
           >
             <Segmented
               columns={4}
@@ -1087,15 +1114,11 @@ export function ComposeTab() {
                 else setQuality(Number(value))
               }}
               options={[
-                ...FRAME_QUALITY.map((value) => ({
-                  value: String(value),
-                  label: `${value}p`,
-                  title: 'Короткая сторона кадра',
-                })),
-                { value: 'custom', label: 'Свой', title: 'Задать ширину и высоту вручную' },
+                ...FRAME_QUALITY.map((value) => ({ value: String(value), label: `${value}p` })),
+                { value: 'custom', label: 'Свой' },
               ]}
             />
-            {custom && (
+            {custom ? (
               <div className="flex items-end gap-2">
                 <SizeField
                   label="Ширина"
@@ -1111,31 +1134,7 @@ export function ComposeTab() {
                   onDone={(next) => setCustomSize(width, next)}
                 />
               </div>
-            )}
-          </Section>
-
-          {!custom && (
-            <Section
-              title="Форма"
-              id="compose.shape"
-              summary={turned ? shape.split(':').reverse().join(':') : shape}
-              action={
-                // Поворот не объясняем словами: подписи форм сами
-                // переворачиваются, и сразу видно, что получится.
-                <button
-                  type="button"
-                  disabled={shape === '1:1'}
-                  onClick={() => setTurned(!turned)}
-                  title="Повернуть кадр: из 16:9 получится 9:16"
-                  className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-35 ${
-                    turned ? 'bg-accent/20 text-accent-soft' : 'text-ink-faint hover:bg-surface-3'
-                  }`}
-                >
-                  <RotateCw size={11} />
-                  вертикально
-                </button>
-              }
-            >
+            ) : (
               <Segmented
                 columns={4}
                 value={shape}
@@ -1143,11 +1142,10 @@ export function ComposeTab() {
                 options={FRAME_SHAPES.map((item) => ({
                   value: item.value,
                   label: turned ? item.label.split(':').reverse().join(':') : item.label,
-                  title: item.hint,
                 }))}
               />
-            </Section>
-          )}
+            )}
+          </Section>
 
           {/* Сборка — тут же, когда ничего не выбрано: колонка пустовала ровно
               тогда, когда пора собирать, а отдельное окно было лишним шагом.
