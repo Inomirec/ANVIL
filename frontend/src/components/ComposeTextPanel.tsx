@@ -283,6 +283,7 @@ export function SliderNumber({
   marks,
   aside,
   readout,
+  entryLimits,
 }: {
   /** Подпись; у подписанного сверху ползунка это может быть и кнопка. */
   label: React.ReactNode
@@ -306,12 +307,15 @@ export function SliderNumber({
    * человеку ничего не говорит (качество сборки).
    */
   readout?: React.ReactNode
+  /** Пределы набранного числа, если они шире шкалы. */
+  entryLimits?: [number, number]
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const apply = () => {
     if (draft === null) return
     const number = Number(draft.replace(',', '.'))
-    if (Number.isFinite(number)) onChange(Math.min(max, Math.max(min, number)))
+    const [low, high] = entryLimits ?? [min, max]
+    if (Number.isFinite(number)) onChange(Math.min(high, Math.max(low, number)))
     setDraft(null)
   }
   const range = (

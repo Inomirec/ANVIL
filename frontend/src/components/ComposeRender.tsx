@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ArrowLeftRight, AudioLines, ChevronDown, Zap } from 'lucide-react'
 import { SliderNumber } from './ComposeTextPanel'
 import { useCompose } from '../composeStore'
@@ -412,28 +412,28 @@ export function ComposeRenderPanel({
   // WebM держит только AV1 и Opus. Собирают один звук — контейнера нет.
   const webm = value.container === 'webm' && !value.audioOnly
   /** Смена кодека видео. */
-  const videoPatch = (codec: string): Partial<RenderSettings> => ({
-    videoCodec: codec,
-    // У AV1 и H.264 скорости называются по-разному: чужое имя кодировщик не
-    // примет. Битрейт — обычный для кодека. Качество тоже своё у каждого —
-    // берём «высокое» его шкалы.
-    ...(codec !== value.videoCodec
-      ? {
-          speedPreset: speedOptions(codec)[2].value,
-          crf: qualityScale(codec).marks[2].crf,
-          ...(byBitrate ? { bitrateKbps: bitrateNormal(codec, frame) } : {}),
-        }
-      : {}),
-  })
-
-  // Битрейт вне шкалы (остался от прежнего кадра или от старой версии)
-  // возвращаем в её пределы: иначе ползунок стоит в упоре, а сборка идёт с
-  // числом, которого не видно и не задать руками.
-  const outside = byBitrate && (value.bitrateKbps < range.min || value.bitrateKbps > range.max)
-  useEffect(() => {
-    if (outside) set({ bitrateKbps: Math.min(range.max, Math.max(range.min, value.bitrateKbps)) })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outside])
+  const videoPatch = (codec: string): Partial<RenderSettings> => {
+    if (codec === value.videoCodec) return { videoCodec: codec }
+    // Стояли на подписи (S/M/L, L/M/H) — у нового кодека встаём на ту же:
+    // одно и то же число у AV1 и H.264 значит разную картинку. Между
+    // подписями — на обычную для кодека.
+    const bitrateLevel = bitrateMarks(value.videoCodec, frame).findIndex(
+      (mark) => Math.abs(mark.value - value.bitrateKbps) <= mark.value * 0.03,
+    )
+    const qualityLevel = qualityScale(value.videoCodec).marks.findIndex((mark) => mark.crf === value.crf)
+    const crf = qualityScale(codec).marks[qualityLevel >= 0 ? qualityLevel : 2].crf
+    const bitrate = bitrateMarks(codec, frame)[bitrateLevel >= 0 ? bitrateLevel : 1].value
+    // Запомненные числа второго способа — тоже нового кодека.
+    setLast({ bitrate, crf })
+    return {
+      videoCodec: codec,
+      // У AV1 и H.264 скорости называются по-разному: чужое имя кодировщик
+      // не примет.
+      speedPreset: speedOptions(codec)[2].value,
+      crf,
+      ...(byBitrate ? { bitrateKbps: bitrate } : {}),
+    }
+  }
 
   // Способ задания веса — маленькой кнопкой на месте названия: отдельная
   // строка ради переключателя занимала место в узкой колонке.
@@ -443,8 +443,8 @@ export function ComposeRenderPanel({
       onClick={() => (byBitrate ? set({ bitrateKbps: 0, crf: last.crf }) : set({ bitrateKbps: last.bitrate }))}
       title={
         byBitrate
-          ? 'Вес задан битрейтом: известен заранее, на сложных сценах картинка просядет. Нажмите — задавать качеством'
-          : 'Вес задан качеством: картинка ровная, вес заранее неизвестен. Нажмите — задавать битрейтом'
+          ? 'Вес задан битрейтом: на каждую секунду видео уходит примерно одинаково данных, и вес файла известен заранее. На простых сценах этого хватает с запасом, а на быстрых и зернистых может не хватить — там картинка станет хуже. Нажмите — задавать качеством'
+          : 'Вес задан качеством: картинка везде одинаково хорошая, а данных на сложные сцены уходит больше, на простые — меньше, поэтому вес заранее неизвестен. Нажмите — задавать битрейтом'
       }
       className="inline-flex items-center gap-1 rounded-md border border-line-soft px-1.5 py-0.5 text-[11.5px] text-ink-dim transition-colors hover:border-line hover:text-ink"
     >
@@ -463,8 +463,19 @@ export function ComposeRenderPanel({
             <button
               key={preset.id}
               type="button"
-              // Видеокарта — своя настройка человека, набор её не трогает.
-              onClick={() => onChange({ ...settingsOf(preset, frame), useGpu: value.useGpu })}
+              // Видеокарта — своя настройка человека, шаблон её не трогает.
+              onClick={() => {
+                const settings = settingsOf(preset, frame)
+                // Шаблон не переключает способ задания веса: задан качеством —
+                // берётся качество шаблона, битрейтом — его битрейт. Второе
+                // запоминается, чтобы переключатель показал число шаблона.
+                setLast({ bitrate: settings.bitrateKbps, crf: settings.crf })
+                onChange({
+                  ...settings,
+                  bitrateKbps: byBitrate ? settings.bitrateKbps : 0,
+                  useGpu: value.useGpu,
+                })
+              }}
               className={`rounded-xl border px-3 py-2 text-left transition-colors ${
                 picked
                   ? 'border-accent/60 bg-accent/10'
@@ -516,6 +527,9 @@ export function ComposeRenderPanel({
             step={250}
             reset={bitrateNormal(value.videoCodec, frame)}
             marks={bitrateMarks(value.videoCodec, frame)}
+            // Набрать число можно и за пределами шкалы: шкала — подсказка,
+            // а не предел. Ограничение только то, что примет сервер.
+            entryLimits={[200, 200000]}
             onChange={(bitrate) => {
               const bitrateKbps = Math.max(200, Math.round(bitrate))
               setLast((was) => ({ ...was, bitrate: bitrateKbps }))

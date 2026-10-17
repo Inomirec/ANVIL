@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { dbToGain, gainToDb, MAX_DB, MIN_DB, volumeLabel } from '../composeStore'
+import { dbToGain, gainToDb, MAX_DB, MIN_DB } from '../composeStore'
 
 /**
  * Шина громкости: уровень звука в децибелах и громкость всего монтажа.
@@ -154,8 +154,6 @@ export function MasterMeter({
         onMaster(1)
       }}
       onDoubleClick={() => onMaster(1)}
-      title={`Громкость монтажа ${volumeLabel(master)} — уходит в готовый файл.
-Двойное нажатие вернёт 0 дБ`}
       className="master-fader over-meter"
     />
   )
@@ -175,7 +173,6 @@ export function MasterMeter({
       {/* Ручка на границе: за неё шину и тянут. */}
       <div
         className="absolute inset-y-0 left-0 z-10 w-[7px] cursor-col-resize hover:bg-accent/30"
-        title="Потяните, чтобы сделать шину шире или убрать её"
         onMouseDown={(event) => {
           event.preventDefault()
           grab.current = { from: event.clientX, width }

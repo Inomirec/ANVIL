@@ -42,6 +42,7 @@ const SLOW_SECONDS = 2.5
  * выбрал и получил.
  */
 export type PreviewQuality = 'auto' | 360 | 480 | 720 | 1080
+export const PREVIEW_QUALITIES = [360, 480, 720, 1080] as const
 const QUALITY_KEY = 'sgh.composeQuality'
 
 interface Chunk {
@@ -108,6 +109,17 @@ function silence(slot: Slot | null) {
     // Уже остановлен.
   }
   slot.source.disconnect()
+}
+
+/**
+ * Высота кадра просмотра. Выше качества проекта не собираем — крупнее он не
+ * станет; у «Своего» размера — сколько выбрали.
+ */
+function previewHeight(asked: number): number {
+  const { custom, quality, width, height } = useCompose.getState()
+  if (custom) return asked
+  // Качество проекта — короткая сторона, а здесь высота кадра.
+  return Math.round((Math.min(asked, quality) * height) / Math.min(width, height))
 }
 
 export function useComposePlayer(videos: [VideoRef, VideoRef]) {
@@ -201,8 +213,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           project: snapshot(),
           at,
           span: CHUNK_SECONDS,
-          // Выше кадра самого проекта не собираем: крупнее он не станет.
-          height: Math.min(asked === 'auto' ? height.current : asked, useCompose.getState().height),
+          height: previewHeight(asked === 'auto' ? height.current : asked),
         })
         let sound: AudioBuffer | null = null
         if (data.audio) {

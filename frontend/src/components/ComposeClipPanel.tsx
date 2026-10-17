@@ -627,7 +627,11 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) 
   )
 }
 
-/** Один эффект в колонке: заголовок с галочкой и крестиком, под ним ползунки. */
+/**
+ * Один эффект в колонке: заголовок с галочкой и крестиком, под ним ползунки.
+ * Подсказок при наведении нет: настройки названы понятно, а всплывающие
+ * описания мешали, пока подбираешь значение.
+ */
 function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) {
   const updateEffect = useCompose((state) => state.updateEffect)
   const removeEffect = useCompose((state) => state.removeEffect)
@@ -663,7 +667,6 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
         <button
           type="button"
           onClick={() => updateEffect(clipId, effect.id, { folded: !folded })}
-          title={kind.hint}
           className={`min-w-0 flex-1 truncate text-left text-[12.5px] font-medium ${
             effect.on ? 'text-ink' : 'text-ink-faint line-through'
           }`}
@@ -689,14 +692,13 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
             const value = effect.params[param.key] ?? param.default
             if (param.kind === 'choice') {
               return (
-                <div key={param.key} className="space-y-1" title={param.hint}>
+                <div key={param.key} className="space-y-1">
                   <span className="block text-[11.5px] text-ink-dim">{param.label}</span>
                   <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-3/40 p-0.5">
                     {(param.options ?? []).map((option) => (
                       <button
                         key={option.value}
                         type="button"
-                        title={option.hint}
                         onClick={() =>
                           updateEffect(clipId, effect.id, { params: { [param.key]: option.value } })
                         }
@@ -717,7 +719,6 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
               return (
                 <label
                   key={param.key}
-                  title={param.hint}
                   className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-dim"
                 >
                   <input
@@ -750,7 +751,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
               // под иглой, правка ложится в ключ, рядом часики.
               const field = `fx.${effect.id}.${param.key}`
               return (
-                <div key={param.key} title={param.hint}>
+                <div key={param.key}>
                   <SliderNumber
                     stacked
                     label={param.label}
@@ -760,7 +761,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                     step={param.step}
                     unit={param.unit ?? ''}
                     reset={Number(param.default)}
-                    marks={param.marks}
+                    marks={param.marks?.map(({ value, label }) => ({ value, label }))}
                     aside={<AnimClock clip={owner} group={field} />}
                     onChange={(next) => applyValues(clipId, { [field]: next })}
                   />
@@ -768,7 +769,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
               )
             }
             return (
-              <div key={param.key} title={param.hint}>
+              <div key={param.key}>
               <SliderNumber
                 stacked
                 label={param.label}
@@ -778,7 +779,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                 step={param.step}
                 unit={param.unit ?? ''}
                 reset={Number(param.default)}
-                marks={param.marks}
+                marks={param.marks?.map(({ value, label }) => ({ value, label }))}
                 onChange={(next) => updateEffect(clipId, effect.id, { params: { [param.key]: next } })}
               />
               </div>

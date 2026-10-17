@@ -50,7 +50,7 @@ import {
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
-import { useComposePlayer, type PreviewQuality } from '../hooks/useComposePlayer'
+import { PREVIEW_QUALITIES, useComposePlayer, type PreviewQuality } from '../hooks/useComposePlayer'
 import { Button, Dropdown, Empty, IconButton, QuietHints, Section, Segmented, Toggle } from './ui'
 
 /** Имя готового файла, если поле оставили пустым. */
@@ -898,18 +898,21 @@ export function ComposeTab() {
                   className="flex h-8 items-center gap-1.5 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim hover:text-ink"
                   options={[
                     { value: 'auto', label: 'Качество просмотра: авто' },
-                    { value: '360', label: 'Качество просмотра: 360p' },
-                    { value: '480', label: 'Качество просмотра: 480p' },
-                    { value: '720', label: 'Качество просмотра: 720p' },
-                    // 1080p — только когда кадр проекта не меньше: выше
-                    // своего кадра просмотр не собирается.
-                    ...(height >= 1080 ? [{ value: '1080', label: 'Качество просмотра: 1080p' }] : []),
+                    // Выше качества самого проекта просмотр не собирается,
+                    // поэтому и выбирать его нечего. У «Своего» размера
+                    // доступно всё: размер там бывает любым.
+                    ...PREVIEW_QUALITIES.filter((value) => custom || value <= quality).map((value) => ({
+                      value: String(value),
+                      label: `Качество просмотра: ${value}p`,
+                    })),
                   ]}
                   onChange={(value) =>
                     player.setQuality(value === 'auto' ? 'auto' : (Number(value) as PreviewQuality))
                   }
                 >
-                  {player.quality === 'auto' ? 'авто' : `${player.quality}p`}
+                  {player.quality === 'auto'
+                    ? 'авто'
+                    : `${custom ? player.quality : Math.min(player.quality, quality)}p`}
                   <ChevronDown size={12} className="text-ink-faint" />
                 </Dropdown>
 

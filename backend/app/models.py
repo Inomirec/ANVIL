@@ -586,7 +586,7 @@ class ComposeDraftRequest(ComposeModel):
     #: Сколько секунд собрать за раз.
     span: float = Field(default=12.0, gt=0, le=60)
     #: Высота кадра черновика. Меньше — быстрее собирается.
-    height: int = Field(default=360, ge=144, le=1080)
+    height: int = Field(default=360, ge=144, le=4320)
 
 
 class ComposeProjectFile(ComposeModel):
