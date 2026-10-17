@@ -421,6 +421,9 @@ export const MIN_CLIP_SECONDS = 0.2
 //: монтажа почти не нужны: кому надо — задаст размер вручную.
 export const FRAME_QUALITY = [480, 720, 1080]
 
+/** Частота кадров проекта. 30 — обычная; 24 — кино, 25 — европейское ТВ, 60 — плавное движение. */
+export const FRAME_RATES = [24, 25, 30, 60]
+
 export const FRAME_SHAPES = [
   { value: '16:9', label: '16:9', hint: 'Обычное широкое видео' },
   { value: '4:3', label: '4:3', hint: 'Старое телевидение' },
@@ -1249,7 +1252,9 @@ export const useCompose = create<State>((set, get) => ({
   },
 
   setFps(fps) {
-    set({ fps })
+    // Игла стоит на кадре — после смены частоты встаёт на кадр новой сетки.
+    const { playhead } = get()
+    set({ fps, playhead: Math.max(0, Math.round(playhead * fps) / fps) })
     save(get())
   },
 

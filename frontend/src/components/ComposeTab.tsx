@@ -19,6 +19,7 @@ import { parentDir, timecode } from '../lib/format'
 import {
   DEFAULT_IMAGE_SECONDS,
   FRAME_QUALITY,
+  FRAME_RATES,
   FRAME_SHAPES,
   hasClipsIn,
   renderSpan,
@@ -180,6 +181,8 @@ export function ComposeTab() {
   const setQuality = useCompose((state) => state.setQuality)
   const setShape = useCompose((state) => state.setShape)
   const setTurned = useCompose((state) => state.setTurned)
+  const fps = useCompose((state) => state.fps)
+  const setFps = useCompose((state) => state.setFps)
   const setCustomSize = useCompose((state) => state.setCustomSize)
   const useCustom = useCompose((state) => state.useCustom)
   const addClip = useCompose((state) => state.addClip)
@@ -408,7 +411,7 @@ export function ComposeTab() {
     }
     // Размер кадра тоже: без него после смены формы окно показывало кадр
     // прежней формы, пока не сдвинешь иглу.
-  }, [playhead, clips, tracks, player.playing, liveTextId, width, height, refresh, cropping])
+  }, [playhead, clips, tracks, player.playing, liveTextId, width, height, fps, refresh, cropping])
 
   // Открыли проект (или программа подняла прошлый монтаж) — сразу чёрный
   // кадр вместо кадра прежнего проекта: иначе ошибку о пропавшем файле
@@ -1087,8 +1090,8 @@ export function ComposeTab() {
             id="compose.frame"
             summary={
               custom
-                ? `${width}×${height}`
-                : `${quality}p · ${turned ? shape.split(':').reverse().join(':') : shape}`
+                ? `${width}×${height} · ${fps} к/с`
+                : `${quality}p · ${turned ? shape.split(':').reverse().join(':') : shape} · ${fps} к/с`
             }
             action={
               !custom && (
@@ -1148,6 +1151,14 @@ export function ComposeTab() {
                 }))}
               />
             )}
+            {/* Частота кадров — тоже свойство кадра проекта: по ней собирается
+                и просмотр, и готовый файл, к ней прилипают игла и клипы. */}
+            <Segmented
+              columns={FRAME_RATES.length}
+              value={String(fps)}
+              onChange={(value) => setFps(Number(value))}
+              options={FRAME_RATES.map((value) => ({ value: String(value), label: `${value} к/с` }))}
+            />
           </Section>
 
           {/* Сборка — тут же, когда ничего не выбрано: колонка пустовала ровно
