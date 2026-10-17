@@ -124,12 +124,25 @@ let ruler: CanvasRenderingContext2D | null = null
  * тем же меркам шрифта, что отдаёт холст (`fontBoundingBox…`).
  */
 export function inkShift(element: HTMLElement, text: string): number {
+  return inkBounds(element, text).shift
+}
+
+/**
+ * Где в поле надписи сами буквы: верх первой строки и низ последней, в
+ * точках от верха строк, плюс сдвиг до их середины (`inkShift`).
+ *
+ * Подложку программа (`drawtext`) рисует вокруг букв, а не вокруг строк
+ * шрифта: у шрифтов, где буквы сидят в строке низко (Pribambas), подложка по
+ * строке выходила с большим выступом сверху.
+ */
+export function inkBounds(element: HTMLElement, text: string): { shift: number; top: number; bottom: number } {
+  const none = { shift: 0, top: 0, bottom: 0 }
   const style = getComputedStyle(element)
   const size = parseFloat(style.fontSize)
   const line = parseFloat(style.lineHeight)
-  if (!size || !line) return 0
+  if (!size || !line) return none
   ruler ??= document.createElement('canvas').getContext('2d')
-  if (!ruler) return 0
+  if (!ruler) return none
   ruler.font = `${style.fontStyle} ${style.fontWeight} ${size}px ${style.fontFamily}`
   const lines = text.split('\n')
   const first = ruler.measureText(lines[0] || ' ')
@@ -141,7 +154,7 @@ export function inkShift(element: HTMLElement, text: string): number {
   const baseline = (line - (ascent + descent)) / 2 + ascent
   const top = baseline - first.actualBoundingBoxAscent
   const bottom = baseline + (lines.length - 1) * line + last.actualBoundingBoxDescent
-  return (line * lines.length) / 2 - (top + bottom) / 2
+  return { shift: (line * lines.length) / 2 - (top + bottom) / 2, top, bottom }
 }
 
 export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: GridKind }) {
@@ -163,11 +176,18 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
 
   // Сдвиг до середины букв — меряем после каждой отрисовки: он зависит от
   // текста, шрифта и размера, а шрифт приходит не сразу.
-  const [lift, setLift] = useState(0)
+  const [ink, setInk] = useState({ shift: 0, top: 0, bottom: 0 })
+  const lift = ink.shift
   useLayoutEffect(() => {
     if (!field.current) return
-    const next = inkShift(field.current, v.text)
-    if (Math.abs(next - lift) > 0.05) setLift(next)
+    const next = inkBounds(field.current, v.text)
+    if (
+      Math.abs(next.shift - ink.shift) > 0.05 ||
+      Math.abs(next.top - ink.top) > 0.05 ||
+      Math.abs(next.bottom - ink.bottom) > 0.05
+    ) {
+      setInk(next)
+    }
   })
 
   // Текст в поле ставим сами и только когда он пришёл снаружи: сменили клип,
@@ -289,12 +309,28 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
         if (event.target === box.current) begin(event)
       }}
     >
+      {/* Подложка — вокруг самих букв, как у программы, а не вокруг строк
+          шрифта. По бокам — по ширине строки, как и у программы. */}
+      {v.box && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute"
+          style={{
+            left: FRAME_PAD,
+            right: FRAME_PAD,
+            top: FRAME_PAD + ink.top,
+            height: `calc(${Math.max(0, ink.bottom - ink.top)}px + 2 * ${share(v.boxPad)})`,
+            background: withAlpha(v.boxColor, v.boxAlpha),
+            borderRadius: v.boxRadius ? share(v.boxRadius) : undefined,
+          }}
+        />
+      )}
       <div
         ref={field}
         contentEditable="plaintext-only"
         suppressContentEditableWarning
         spellCheck={false}
-        className={`min-w-[1ch] select-text whitespace-pre outline-none ${focused ? 'cursor-text' : 'cursor-move'}`}
+        className={`relative min-w-[1ch] select-text whitespace-pre outline-none ${focused ? 'cursor-text' : 'cursor-move'}`}
         style={{
           // Пока файл шрифта не пришёл — по имени, как получится. Пришёл —
           // ровно им. Жирность и наклон тогда уже в самом файле: добавлять их
@@ -319,9 +355,7 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
                   ]
                 : []),
             ].join(', ') || undefined,
-          background: v.box ? withAlpha(v.boxColor, v.boxAlpha) : undefined,
           padding: v.box ? share(v.boxPad) : undefined,
-          borderRadius: v.box && v.boxRadius ? share(v.boxRadius) : undefined,
         }}
         onMouseDown={(event) => {
           // В редактируемой надписи нажатие ставит курсор и выделяет слова,

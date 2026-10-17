@@ -407,16 +407,24 @@ def text_layers(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
         if clip.box_radius > 1e-6:
             # Скругление: размытая прозрачность, обрезанная по половине, даёт
             # скруглённый угол с радиусом около сигма / 0.537. Цвет ставим
-            # ровным по всему слою, чтобы край не темнел от размытия.
+            # ровным по всему слою, чтобы край не темнел от размытия. `lut`
+            # и у gbrap называет компоненты R, G, B, A, а не по порядку
+            # плоскостей: по порядку плоскостей фиолетовая подложка выходила
+            # зелёной.
+            # Подложка облегает сами буквы: высота — от верха заглавных первой
+            # строки (около 0.72 кегля) до низа последней, плюс отступы. По
+            # ней ограничиваем радиус, как это делает окно.
             lines = max(1, clip.text.count("\n") + 1)
-            tall = lines * clip.font_size * height * 1.15 + 2 * clip.box_pad * height
+            where = fonts.path_for(clip.font, clip.bold, clip.italic)
+            step = fonts.line_height(where) if where else 1.15
+            tall = (0.72 + (lines - 1) * step) * clip.font_size * height + 2 * clip.box_pad * height
             radius = min(clip.box_radius * height, tall / 2)
             red, green, blue = _rgb(clip.box_color)
             alpha = round(255 * clip.box_alpha)
             branches.append((
                 "box",
                 f"{text_filter(clip, width, height, skip, role='box')},format=gbrap,"
-                f"lut=c0={green}:c1={blue}:c2={red},"
+                f"lut=c0={red}:c1={green}:c2={blue},"
                 f"gblur=sigma={max(0.5, 0.537 * radius):.2f}:planes=8,"
                 f"lut=c3='if(gt(val,127),{alpha},0)'",
             ))
@@ -428,7 +436,7 @@ def text_layers(clip: ComposeClip, width: int, height: int, skip: float = 0.0) -
             branches.append((
                 "shadow",
                 f"{text_filter(clip, width, height, skip, role='shadow')},format=gbrap,"
-                f"lut=c0={green}:c1={blue}:c2={red},"
+                f"lut=c0={red}:c1={green}:c2={blue},"
                 f"gblur=sigma={max(0.3, clip.shadow_blur * height):.2f}:planes=8,"
                 f"lut=c3='val*{clip.shadow_alpha:.3f}'",
             ))
