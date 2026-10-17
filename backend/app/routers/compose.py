@@ -100,6 +100,9 @@ async def frame(request: ComposeFrameRequest) -> Response:
 #: минут монтажа: всё, что отмечено на линейке как собранное, должно и правда
 #: лежать в запасе.
 _DRAFT_KEEP = 80
+#: Версия сборки черновиков. Меняется, когда меняется то, как собирается
+#: кусок, — иначе просмотр брал бы из запаса куски, собранные по-старому.
+_DRAFT_VERSION = "2"
 #: Пока собирается один кусок, следующий ждёт: иначе десяток ffmpeg разом
 #: положит машину, ради которой всё это и затевалось.
 _draft_lock = asyncio.Lock()
@@ -175,7 +178,9 @@ async def draft(request: ComposeDraftRequest) -> dict:
     if span <= 0:
         raise HTTPException(400, "Дальше конца монтажа смотреть нечего")
 
-    stamp = f"{project.model_dump_json()}|{at:.3f}|{span:.3f}|{request.height}"
+    # Номер версии сборки — в ключе: исправленная сборка не должна брать из
+    # запаса куски, собранные прежней (с пропавшим кадром на стыке).
+    stamp = f"{_DRAFT_VERSION}|{project.model_dump_json()}|{at:.3f}|{span:.3f}|{request.height}"
     key = hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:20]
     target = _draft_dir() / f"{key}.mp4"
 

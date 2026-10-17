@@ -39,9 +39,15 @@ from .probe import moves as probe_moves
 from .probe import probe
 
 #: Черновой кодек: быстрее всего, что есть. Черновик живёт секунды и нужен
-#: только чтобы посмотреть, поэтому вес и качество здесь не важны.
+#: только чтобы посмотреть. crf 23, а не 30: при 30 сплошная заливка от
+#: кадра к кадру дрожала на пару единиц цвета, а время сборки то же самое.
 DRAFT_CODEC = [
-    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
+]
+
+#: Пометка цвета готового видео: все куски и итог — одинаково, bt709.
+COLOUR_TAGS = [
+    "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
 ]
 
 #: Затухание короче этого не пишем в команду. Клипы, поставленные встык,
@@ -179,6 +185,29 @@ def fit_filter(width: int, height: int, fps: int) -> str:
 def _even(value: int) -> int:
     """Кодировщики не берут нечётные размеры кадра."""
     return max(2, value - value % 2)
+
+
+def _place_in_time(offset: float) -> str:
+    """Сдвиг клипа на его место в куске — `setpts` с округлением до кадра.
+
+    Смещение раньше писалось с точностью до тысячной (6.033 вместо 6.0333…),
+    а ffmpeg переводит его в номер кадра, отбрасывая дробную часть: выходило
+    180 вместо 181. Клип вставал на кадр раньше и на последнем кадре куска
+    уже кончался — заливка на стыке кусков пропадала на кадр. Пишем точно и
+    округляем сами.
+    """
+    return f"PTS-STARTPTS+round({offset:.6f}/TB)"
+
+
+def _frames_span(take: float, fps: int) -> str:
+    """`-t` для входа без файла (заливка, надпись, повтор картинки).
+
+    `-t` оставляет только кадры, целиком уложившиеся в срок, и при округлении
+    длины вниз терялся последний кадр. Срок — середина кадра после нужного
+    числа кадров: их выходит ровно столько, сколько длится клип в куске.
+    """
+    frames = max(1, round(take * fps))
+    return f"{(frames + 0.5) / fps:.6f}"
 
 
 def _even_near(value: float) -> int:
@@ -951,7 +980,7 @@ def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> st
                 f":d={min(clip.fade_out, clip.duration):.3f}"
             )
 
-    shift = int(offset * 1000)
+    shift = round(offset * 1000)
     if shift:
         parts.append(f"adelay={shift}|{shift}")
     return ",".join(parts)
@@ -1005,13 +1034,15 @@ def build_segment(
     # Чёрный фон на всю длину отрезка. Он же отвечает за пустые места, где ни
     # один клип не стоит: без него дырка на таймлайне обрывала бы сборку.
     if not audio_only:
-        # Слои сводятся на полной сетке цвета (yuv444p), а не на вдвое
-        # меньшей: на ней ffmpeg ставит наложение только на чётный пиксель,
-        # и клип в кадрах разного размера — окно просмотра, черновик 360p,
-        # готовый файл — оказывался то выше, то ниже на пиксель. В обычный
-        # вид кадр переводится уже в конце.
+        # Слои сводятся в RGB (gbrp): на полной сетке цвета ffmpeg не
+        # сдвигает наложение на чётный пиксель, и каждый слой переводится в
+        # RGB по своей пометке цвета. Прежде слои сводились в YUV: ролики
+        # шли как есть (bt709), заливки и надписи — по старому стандарту
+        # (bt601), а кусок наследовал пометку от первого ролика или не
+        # получал никакой. Соседние куски просмотра браузер читал по-разному,
+        # и заливка на стыке меняла оттенок. В конце — bt709 с явной пометкой.
         chain.append(
-            f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f},format=yuv444p[bg]"
+            f"color=c=black:s={width}x{height}:r={fps}:d={span:.3f},format=gbrp[bg]"
         )
 
     index = 0
@@ -1038,7 +1069,7 @@ def build_segment(
             # готовые буквы нельзя — они замылятся, поэтому рисуем их сразу в
             # том размере, в котором они попадут в файл.
             inputs += [
-                "-f", "lavfi", "-t", f"{take:.3f}",
+                "-f", "lavfi", "-t", _frames_span(take, fps),
                 # Прозрачность задаём прямо во входе: добавленная позже, в
                 # цепочке фильтров, она уже ничего не значит — слой к тому
                 # времени непрозрачный, и надпись закрывает собой весь кадр.
@@ -1047,13 +1078,13 @@ def build_segment(
         elif clip.kind == "color" and clip.fill_image:
             # Заливку со скруглением, рамкой и тенью нарисовали заранее —
             # здесь она обычная картинка, повторяемая весь клип.
-            inputs += ["-loop", "1", "-t", f"{take:.3f}", "-i", clip.fill_image]
+            inputs += ["-loop", "1", "-t", _frames_span(take, fps), "-i", clip.fill_image]
         elif clip.kind == "color":
             # Заливку рисует сам ffmpeg — файла у такого клипа нет. Сразу в
             # нужном размере: масштабировать сплошной цвет незачем.
             box = clip_box(clip, width, height) if is_placed(clip) else (width, height)
             inputs += [
-                "-f", "lavfi", "-t", f"{take:.3f}",
+                "-f", "lavfi", "-t", _frames_span(take, fps),
                 "-i", f"color=c={clip.color}:s={box[0]}x{box[1]}:r={fps}",
             ]
         elif clip.kind == "image":
@@ -1121,7 +1152,7 @@ def build_segment(
                     f"[ffg{index}];"
                     f"[fbg{index}][ffg{index}]overlay=(W-w)/2:(H-h)/2,"
                     f"format=yuva420p,setsar=1,fps={fps}{fades},"
-                    f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
+                    f"setpts={_place_in_time(offset)}[v{index}]"
                 )
             else:
                 # Эффекты — до вписывания в кадр: они работают с самим файлом.
@@ -1133,7 +1164,7 @@ def build_segment(
                 chain.append(
                     f"{pre_label}{pre_chain}{placement}"
                     f"{fades},"
-                    f"setpts=PTS-STARTPTS+{offset:.3f}/TB[v{index}]"
+                    f"setpts={_place_in_time(offset)}[v{index}]"
                 )
             video_labels.append((f"[v{index}]", clip))
 
@@ -1184,7 +1215,7 @@ def build_segment(
             top = f"round(H*{clip.y:.5f}-{box_h / 2:.3f})"
             place = f":x={left}+round(({box_w}-w)/2):y={top}+round(({box_h}-h)/2)"
         chain.append(
-            f"{layer}{label}overlay=eof_action=pass:shortest=0:format=yuv444{place}{nxt}"
+            f"{layer}{label}overlay=eof_action=pass:shortest=0:format=gbrp{place}{nxt}"
         )
         layer = nxt
 
@@ -1224,9 +1255,12 @@ def build_segment(
         return args
     if not still:
         # Сведённый кадр — обратно в обычный вид: его понимают все плееры.
-        chain.append(f"{layer}format=yuv420p[vout]")
+        # Перевод и пометка — bt709, у всех кусков одинаковые.
+        chain.append(f"{layer}scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[vout]")
         layer = "[vout]"
     args += ["-filter_complex", ";".join(chain), "-map", layer]
+    if not still:
+        args += COLOUR_TAGS
 
     if still:
         args += ["-frames:v", "1"]
