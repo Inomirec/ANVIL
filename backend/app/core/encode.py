@@ -95,13 +95,13 @@ def build_video_filters(
 
 #: Перевод HDR в обычное видео (BT.709). Без него цифры кадра остаются
 #: прежними, а значат другое: картинка выходит серой и бледной, а пометка
-#: «HDR» в файле заставляет плееры гадать. ``npl=203`` — яркость белого в
-#: обычном видео по BT.2408, ``mobius`` мягко сжимает только самое яркое.
-#: Подобрано замером против качественного перевода libplacebo: он точнее
-#: всего, но требует видеокарту и в четыре раза медленнее.
+#: «HDR» в файле заставляет плееры гадать. Подобрано по тому, как серию
+#: показывает обычный плеер: ``hable`` с белым на 100 нит. Первый выбор —
+#: ``mobius`` с белым на 203 нит, ближайший к libplacebo, — приподнимал тени,
+#: и картинка выходила выцветшей.
 TONEMAP = (
-    "zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709,"
-    "tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+    "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+    "tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
 )
 
 #: Пометки обычного цвета для файла, переведённого из HDR.
@@ -172,7 +172,17 @@ def build_audio_filters(
             f"afade=t=out:curve=qsin:st={start:.3f}:d={options.fade_out:g}"
         )
 
+    if options.codec == "opus" and not options.mono:
+        # Opus знает только свои раскладки каналов: 5.1 с боковыми
+        # колонками («5.1(side)», так у фильмов с E-AC-3) он не принимает, и
+        # сборка падала. Приводим к ближайшей знакомой — каналов столько же.
+        filters.append("aformat=channel_layouts=" + "|".join(_OPUS_LAYOUTS))
+
     return filters
+
+
+#: Раскладки каналов, которые принимает Opus.
+_OPUS_LAYOUTS = ["mono", "stereo", "3.0", "quad", "5.0", "5.1", "6.1", "7.1"]
 
 
 #: Поправка к CRF в зависимости от итоговой высоты кадра.
@@ -403,6 +413,8 @@ def audio_codec_args(options: AudioOptions) -> list[str]:
         args = [
             "-c:a", "libopus",
             "-b:a", f"{options.bitrate_kbps}k",
+            # Без этого Opus принимает только моно и стерео.
+            "-mapping_family", "1",
             "-vbr", "on",
             "-application", "audio",
         ]
