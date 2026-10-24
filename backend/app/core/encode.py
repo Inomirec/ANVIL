@@ -448,9 +448,32 @@ def container_extension(request: ExportRequest, info: MediaInfo | None) -> str:
     return f".{container}"
 
 
+def _same_track(streams: list, number: int, language: str | None, title: str | None) -> int:
+    """Дорожка с тем же языком и названием, что выбрали в открытом файле.
+
+    Пачка серий обрабатывается с выбором, сделанным в одной из них, а
+    дорожки в разных файлах бывают в разном порядке: по номеру у остальных
+    бралась бы чужая озвучка. Не нашлась такая — остаётся номер.
+    """
+    if not language:
+        return number
+    same = [i for i, s in enumerate(streams) if (s.language or "und") == language]
+    if title:
+        named = [i for i in same if (streams[i].title or "") == title]
+        same = named or same
+    if number in same or not same:
+        return number
+    return same[0]
+
+
 def chosen_audio(request: ExportRequest, info: MediaInfo | None) -> list[int]:
     """Номера звуковых дорожек, которые берём, — среди звуковых, по порядку."""
-    wanted = request.audio.tracks or [request.audio.track]
+    single = request.audio.track
+    if info and not request.audio.tracks:
+        single = _same_track(
+            info.audio_tracks, single, request.audio.track_language, request.audio.track_title
+        )
+    wanted = request.audio.tracks or [single]
     total = len(info.audio_tracks) if info else None
     # -1 — «все, сколько есть»: так пачка файлов просит все дорожки, не зная,
     # сколько их у каждого.
@@ -472,7 +495,10 @@ def chosen_subtitles(request: ExportRequest, info: MediaInfo | None) -> list[int
     total = len(info.subtitle_tracks) if info else 0
     if -1 in request.subtitles.tracks:
         return list(range(total))
-    return sorted({n for n in request.subtitles.tracks if 0 <= n < total})
+    wanted = request.subtitles.tracks
+    if info and len(wanted) == 1:
+        wanted = [_same_track(info.subtitle_tracks, wanted[0], request.subtitles.language, request.subtitles.title)]
+    return sorted({n for n in wanted if 0 <= n < total})
 
 
 #: Чем писать субтитры внутри видео, по контейнеру. ``None`` — как есть.

@@ -243,16 +243,24 @@ export function ExportPanel({
   const webmFits = video.codec.startsWith('av1') && (audio.codec === 'opus' || audio.codec === 'none')
   const shownContainer = container === 'webm' && !webmFits ? 'mp4' : container
 
-  function audioTracks(own: boolean): { track: number; tracks: number[] } {
+  // Выбор дорожек идёт всей пачке: у других серий дорожка ищется по языку
+  // и названию — номер у них может значить другое.
+  function audioTracks() {
     if (tracksChoice.track < 0) return { track: 0, tracks: [-1] }
-    return { track: own ? tracksChoice.track : 0, tracks: [] }
+    const chosen = file.media?.audioTracks?.find((item) => item.index === tracksChoice.track)
+    return {
+      track: tracksChoice.track,
+      tracks: [],
+      track_language: chosen?.language ?? null,
+      track_title: chosen?.title ?? null,
+    }
   }
 
-  function subtitleRequest(own: boolean) {
+  function subtitleRequest() {
     const { embed, extract, subtitle } = tracksChoice
     if (!embed && !extract) return { tracks: [], embed: false, extract: false }
-    if (!own && subtitle >= 0) return { tracks: [], embed: false, extract: false }
-    return { tracks: [subtitle], embed, extract }
+    const chosen = file.media?.subtitleTracks?.find((item) => item.index === subtitle)
+    return { tracks: [subtitle], embed, extract, language: chosen?.language ?? null, title: chosen?.title ?? null }
   }
 
   const buildRequest = (source: string, withTrim: boolean) => ({
@@ -274,13 +282,11 @@ export function ExportPanel({
       ...audio,
       fade_in: withTrim ? fades.audio.in : 0,
       fade_out: withTrim ? fades.audio.out : 0,
-      // Громкость и выбор дорожки — про открытый файл, к пачке их не тащим:
-      // у других файлов своя разметка, и номер оттуда ничего не значит.
-      // «Все дорожки» понятно любому файлу.
+      // Громкость — про открытый файл, к пачке её не тащим.
       volume: withTrim ? trackVolume : 1,
-      ...audioTracks(withTrim),
+      ...audioTracks(),
     },
-    subtitles: subtitleRequest(withTrim),
+    subtitles: subtitleRequest(),
     stream_copy: streamCopy,
     replace_original: deleteOriginal,
     suffix: fixedSuffix || (toWebp ? '_webp' : suffix),

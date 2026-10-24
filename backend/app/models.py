@@ -58,6 +58,10 @@ class AudioOptions(BaseModel):
     #: Какую звуковую дорожку брать, если их несколько. Считается по порядку
     #: среди звуковых, а не среди всех потоков файла.
     track: int = Field(default=0, ge=0, le=31)
+    #: Язык и название выбранной дорожки — по ним она находится и в других
+    #: файлах пачки, где номер может значить другое.
+    track_language: str | None = None
+    track_title: str | None = None
     #: Несколько звуковых дорожек сразу — номера по тому же счёту, -1 — все.
     #: Пусто — берётся одна, ``track``.
     tracks: list[int] = Field(default_factory=list, max_length=32)
@@ -104,6 +108,9 @@ class SubtitleOptions(BaseModel):
     -1 — все."""
 
     tracks: list[int] = Field(default_factory=list, max_length=64)
+    #: Язык и название выбранных субтитров — для других файлов пачки.
+    language: str | None = None
+    title: str | None = None
     #: Положить выбранные субтитры в сам файл, отдельными дорожками.
     embed: bool = False
     #: Сохранить выбранные субтитры рядом отдельными файлами.
