@@ -1002,6 +1002,40 @@ def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> st
     return ",".join(parts)
 
 
+#: Граф фильтров длиннее этого уходит из команды в файл. Командная строка
+#: Windows — не больше 32 767 знаков на всё сразу, а у монтажа с полусотней
+#: надписей и заливок граф весит под пятьдесят тысяч: сборка падала с
+#: «Имя файла или его расширение имеет слишком большую длину» (WinError 206).
+#: Короткий граф — кадр под иглой, кусок просмотра — остаётся в команде:
+#: писать файл на каждое движение иглы незачем.
+GRAPH_INLINE_LIMIT = 8000
+
+#: Сколько хранить файлы графов: сборка, которая их читает, столько не идёт.
+_GRAPH_KEEP = 2 * 24 * 3600
+
+
+def _graph_args(chain: list[str]) -> list[str]:
+    """``-filter_complex`` с графом в команде или, если он длинный, в файле."""
+    graph = ";".join(chain)
+    if len(graph) <= GRAPH_INLINE_LIMIT:
+        return ["-filter_complex", graph]
+    folder = paths.data_dir() / "commands"
+    folder.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for old in folder.glob("graph-*.txt"):
+        with contextlib.suppress(OSError):
+            if now - old.stat().st_mtime > _GRAPH_KEEP:
+                old.unlink()
+    target = folder / f"graph-{hashlib.sha1(graph.encode('utf-8')).hexdigest()[:20]}.txt"
+    if target.exists():
+        os.utime(target)
+    else:
+        target.write_bytes(graph.encode("utf-8"))
+    # «-/имя» — значение параметра читается из файла (ffmpeg 7+); прежний
+    # -filter_complex_script объявлен устаревшим.
+    return ["-/filter_complex", str(target)]
+
+
 def build_segment(
     project: ComposeProject,
     output: Path,
@@ -1266,7 +1300,7 @@ def build_segment(
     if audio_only:
         if not audio_labels:
             raise ValueError("В монтаже нет звука — собирать нечего")
-        args += ["-filter_complex", ";".join(chain), "-map", "[aout]", "-vn"]
+        args += [*_graph_args(chain), "-map", "[aout]", "-vn"]
         args += codec or ["-c:a", "aac", "-b:a", "192k"]
         args += ["-t", f"{span:.3f}"]
         if progress:
@@ -1278,7 +1312,7 @@ def build_segment(
         # Перевод и пометка — bt709, у всех кусков одинаковые.
         chain.append(f"{layer}scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[vout]")
         layer = "[vout]"
-    args += ["-filter_complex", ";".join(chain), "-map", layer]
+    args += [*_graph_args(chain), "-map", layer]
     if not still:
         args += COLOUR_TAGS
 
