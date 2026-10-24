@@ -593,11 +593,6 @@ def build_command(
     # обычно оригинал и озвучка, и первая — не всегда нужная.
     tracks = chosen_audio(request, info)
     has_audio = (info.has_audio if info else True) and not muted and bool(tracks)
-    # Сводить в одну можно только перекодируя: копия потока звук не смешивает.
-    merged = (
-        has_audio and request.audio.merge and len(tracks) > 1
-        and not stream_copy and request.audio.codec not in {"copy", "none"}
-    )
     duration = clip_duration(request.trim, info)
 
     audio_filters: list[str] = []
@@ -615,13 +610,7 @@ def build_command(
         args += ["-map", "0:v:0"]
     else:
         args += ["-vn"]
-    if merged:
-        # normalize=0: каждая дорожка звучит как была, а не тише в число дорожек.
-        inputs = "".join(f"[0:a:{n}]" for n in tracks)
-        chain = [f"amix=inputs={len(tracks)}:duration=longest:normalize=0", *audio_filters]
-        args += ["-filter_complex", f"{inputs}{','.join(chain)}[mix]", "-map", "[mix]"]
-        audio_filters = []
-    elif has_audio:
+    if has_audio:
         for number in tracks:
             args += ["-map", f"0:a:{number}?"]
 

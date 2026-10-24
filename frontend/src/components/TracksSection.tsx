@@ -7,14 +7,8 @@ type SubtitleTrack = NonNullable<MediaInfo['subtitleTracks']>[number]
 
 /** Что человек выбрал в разделе. Номера — по счёту среди звуковых и субтитров. */
 export interface TrackChoice {
-  /** Одна дорожка, когда «несколько» выключено. */
+  /** Какая звуковая дорожка, -1 — все. */
   track: number
-  /** Брать несколько звуковых дорожек. */
-  multi: boolean
-  /** Какие из них — при ``multi``. */
-  picked: number[]
-  /** Свести выбранные в одну. */
-  merge: boolean
   /** Субтитры внутрь файла и отдельными файлами. */
   embed: boolean
   extract: boolean
@@ -28,9 +22,6 @@ export function initialTracks(media: MediaInfo | null | undefined): TrackChoice 
   const subs = media?.subtitleTracks ?? []
   return {
     track: audio.find((item) => item.default)?.index ?? 0,
-    multi: false,
-    picked: audio.map((item) => item.index),
-    merge: false,
     embed: false,
     extract: false,
     subtitle: subs.find((item) => item.default)?.index ?? 0,
@@ -103,21 +94,18 @@ export function subtitleLabel(track: SubtitleTrack): string {
 }
 
 /**
- * Раздел «Дорожки и субтитры»: какие звуковые дорожки взять, свести ли их в
- * одну и что сделать с субтитрами. Виден, только когда выбирать есть из чего.
+ * Раздел «Дорожки и субтитры»: какую звуковую дорожку взять (или все) и что
+ * сделать с субтитрами. Виден, только когда выбирать есть из чего.
  */
 export function TracksSection({
   media,
   value,
   onChange,
-  streamCopy,
   container,
 }: {
   media: MediaInfo | null | undefined
   value: TrackChoice
   onChange: (value: TrackChoice) => void
-  /** «Без сжатия»: звук копируется как есть, свести его нельзя. */
-  streamCopy: boolean
   /** Контейнер результата — от него зависит, какие субтитры в него влезут. */
   container: string
 }) {
@@ -126,12 +114,11 @@ export function TracksSection({
   if (audio.length < 2 && subs.length === 0) return null
 
   const set = (patch: Partial<TrackChoice>) => onChange({ ...value, ...patch })
-  const picked = value.multi ? value.picked : [value.track]
   const chosenSubs = value.subtitle < 0 ? subs : subs.filter((item) => item.index === value.subtitle)
   const lostSubs = value.embed && container !== 'mkv' && chosenSubs.some((item) => item.bitmap)
 
   const summary = [
-    audio.length > 1 && (value.multi ? `звук: ${picked.length}${value.merge ? ' в одну' : ''}` : `звук ${value.track + 1}`),
+    audio.length > 1 && (value.track < 0 ? 'все дорожки' : `звук ${value.track + 1}`),
     value.embed && 'субтитры внутри',
     value.extract && 'субтитры файлом',
   ]
@@ -141,52 +128,17 @@ export function TracksSection({
   return (
     <Section title="Дорожки и субтитры" id="export.tracks" summary={summary}>
       {audio.length > 1 && (
-        <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
-          <Toggle
-            checked={value.multi}
-            onChange={(multi) => set({ multi })}
-            label="Несколько звуковых дорожек"
-            hint="Положить в готовый файл не одну дорожку, а несколько — например, оригинал и озвучку. Какие именно — отметьте ниже."
+        <div className="rounded-xl bg-surface-2 px-3 py-2.5">
+          <Choice
+            label="Звуковая дорожка"
+            hint="Какую дорожку взять в готовый файл, или «Все» — тогда в файл лягут все дорожки оригинала. Сначала стоит та, что отмечена в самом файле как основная."
+            value={String(value.track)}
+            options={[
+              ...audio.map((track) => ({ value: String(track.index), label: audioLabel(track) })),
+              { value: '-1', label: 'Все' },
+            ]}
+            onChange={(track) => set({ track: Number(track) })}
           />
-          {value.multi ? (
-            <>
-              <div className="ml-1 space-y-0.5 border-l border-line-soft pl-2">
-                {audio.map((track) => (
-                  <Toggle
-                    key={track.index}
-                    checked={value.picked.includes(track.index)}
-                    onChange={(on) =>
-                      set({
-                        picked: on
-                          ? [...value.picked, track.index].sort((a, b) => a - b)
-                          : value.picked.filter((item) => item !== track.index),
-                      })
-                    }
-                    label={audioLabel(track)}
-                  />
-                ))}
-              </div>
-              <Toggle
-                checked={value.merge && !streamCopy}
-                onChange={(merge) => set({ merge })}
-                disabled={streamCopy || value.picked.length < 2}
-                label="Свести в одну дорожку"
-                hint={
-                  streamCopy
-                    ? 'В режиме без сжатия звук копируется как есть — свести дорожки можно только с пересжатием.'
-                    : 'Выбранные дорожки смешаются в одну: голос, музыка и шумы, записанные раздельно, станут одним звуком. Монтажные программы тогда кладут одну звуковую дорожку, а не несколько.'
-                }
-              />
-            </>
-          ) : (
-            <Choice
-              label="Звуковая дорожка"
-              hint="Какую дорожку взять в готовый файл. Сначала стоит та, что отмечена в самом файле как основная."
-              value={String(value.track)}
-              options={audio.map((track) => ({ value: String(track.index), label: audioLabel(track) }))}
-              onChange={(track) => set({ track: Number(track) })}
-            />
-          )}
         </div>
       )}
 

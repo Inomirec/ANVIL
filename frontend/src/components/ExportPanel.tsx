@@ -243,14 +243,9 @@ export function ExportPanel({
   const webmFits = video.codec.startsWith('av1') && (audio.codec === 'opus' || audio.codec === 'none')
   const shownContainer = container === 'webm' && !webmFits ? 'mp4' : container
 
-  const audioCount = file.media?.audioTracks?.length ?? 0
-  const allAudio = tracksChoice.multi && tracksChoice.picked.length === audioCount
-
-  function audioTracks(own: boolean): { track: number; tracks: number[]; merge: boolean } {
-    const merge = tracksChoice.multi && tracksChoice.merge && !streamCopy
-    if (!tracksChoice.multi) return { track: own ? tracksChoice.track : 0, tracks: [], merge: false }
-    if (own) return { track: 0, tracks: tracksChoice.picked, merge }
-    return allAudio ? { track: 0, tracks: [-1], merge } : { track: 0, tracks: [], merge: false }
+  function audioTracks(own: boolean): { track: number; tracks: number[] } {
+    if (tracksChoice.track < 0) return { track: 0, tracks: [-1] }
+    return { track: own ? tracksChoice.track : 0, tracks: [] }
   }
 
   function subtitleRequest(own: boolean) {
@@ -521,7 +516,6 @@ export function ExportPanel({
             media={isAudio && file.media ? { ...file.media, subtitleTracks: [] } : file.media}
             value={tracksChoice}
             onChange={setTracksChoice}
-            streamCopy={streamCopy}
             container={streamCopy ? video.container : shownContainer}
           />
         )}

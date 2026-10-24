@@ -152,8 +152,6 @@ export interface AudioOptions {
   track: number
   /** Несколько дорожек сразу, -1 — все. Пусто — одна, ``track``. */
   tracks?: number[]
-  /** Свести выбранные дорожки в одну. */
-  merge?: boolean
   /** Громкость дорожки: 1 — как есть, 0 — совсем без звука. */
   volume: number
 }
