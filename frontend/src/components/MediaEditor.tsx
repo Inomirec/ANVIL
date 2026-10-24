@@ -26,6 +26,11 @@ export interface TrimState {
 
 const VOLUME_KEY = 'sgh.volume'
 
+// О формате судим по тому, открылся ли файл, а не по расширению: MKV и MOV
+// окно обычно показывает, а список «понятных» расширений их отбраковывал.
+const UNPLAYABLE =
+  'Этот файл не открывается в предпросмотре. Обработать его можно и так — или сначала перегнать пресетом «Конвертация в H.264».'
+
 /**
  * Во сколько раз приглушить дорожку в конкретный момент.
  *
@@ -479,12 +484,6 @@ export function MediaEditor({
             {Math.round(zoom.view * 100)}%
           </button>
         )}
-        {!file.playable && (
-          <div className="absolute inset-x-0 top-0 z-10 bg-warn/15 px-4 py-2 text-center text-[12px] text-warn">
-            Формат «.{file.ext}» не показывается в предпросмотре. Обработать файл
-            можно и так — или сначала перегнать его пресетом «Конвертация в H.264».
-          </div>
-        )}
 
         {isVideo ? (
           <video
@@ -503,7 +502,7 @@ export function MediaEditor({
             onTimeUpdate={onTimeUpdate}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
-            onError={() => setError('Не удалось открыть этот файл в предпросмотре')}
+            onError={() => setError(UNPLAYABLE)}
             onClick={togglePlay}
             playsInline
           />
@@ -529,7 +528,7 @@ export function MediaEditor({
               onTimeUpdate={onTimeUpdate}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
-              onError={() => setError('Не удалось открыть этот файл в предпросмотре')}
+              onError={() => setError(UNPLAYABLE)}
             />
           </div>
         )}

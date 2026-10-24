@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import AudioOptions, ExportRequest, Trim, VideoOptions
-from .probe import MediaInfo
+from .probe import BITMAP_SUBTITLES, MediaInfo
 
 #: Расширения контейнеров по кодекам, когда пользователь выбрал «auto».
 _AUDIO_EXT = {
@@ -71,6 +71,10 @@ def build_video_filters(
         # GIF, которые перегоняют в видео, — сплошь и рядом.
         filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
 
+    if info and info.hdr:
+        # Уменьшаем раньше перевода: переводить 4K вчетверо дольше.
+        filters.append(TONEMAP)
+
     if options.max_fps > 0:
         source_fps = info.video.fps if info and info.video else None
         # Темп уже умножает фактический fps, учитываем это при сравнении.
@@ -87,6 +91,24 @@ def build_video_filters(
         filters.append(f"fade=t=out:st={start:.3f}:d={options.fade_out:g}")
 
     return filters
+
+
+#: Перевод HDR в обычное видео (BT.709). Без него цифры кадра остаются
+#: прежними, а значат другое: картинка выходит серой и бледной, а пометка
+#: «HDR» в файле заставляет плееры гадать. ``npl=203`` — яркость белого в
+#: обычном видео по BT.2408, ``mobius`` мягко сжимает только самое яркое.
+#: Подобрано замером против качественного перевода libplacebo: он точнее
+#: всего, но требует видеокарту и в четыре раза медленнее.
+TONEMAP = (
+    "zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709,"
+    "tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+)
+
+#: Пометки обычного цвета для файла, переведённого из HDR.
+SDR_TAGS = [
+    "-colorspace", "bt709", "-color_primaries", "bt709",
+    "-color_trc", "bt709", "-color_range", "tv",
+]
 
 
 def normal_rate(sample_rate: int | None) -> int:
@@ -414,6 +436,101 @@ def container_extension(request: ExportRequest, info: MediaInfo | None) -> str:
     return f".{container}"
 
 
+def chosen_audio(request: ExportRequest, info: MediaInfo | None) -> list[int]:
+    """Номера звуковых дорожек, которые берём, — среди звуковых, по порядку."""
+    wanted = request.audio.tracks or [request.audio.track]
+    total = len(info.audio_tracks) if info else None
+    # -1 — «все, сколько есть»: так пачка файлов просит все дорожки, не зная,
+    # сколько их у каждого.
+    if -1 in wanted and total is not None:
+        wanted = list(range(total))
+    picked: list[int] = []
+    for number in wanted:
+        if number < 0 or (total is not None and number >= total) or number in picked:
+            continue
+        picked.append(number)
+    # Ничего подходящего (файл без звука или номер устарел) — первая, если есть.
+    if not picked and (total is None or total > 0):
+        picked = [0]
+    return picked
+
+
+def chosen_subtitles(request: ExportRequest, info: MediaInfo | None) -> list[int]:
+    """Номера дорожек субтитров, которые попросили, — только существующие."""
+    total = len(info.subtitle_tracks) if info else 0
+    if -1 in request.subtitles.tracks:
+        return list(range(total))
+    return sorted({n for n in request.subtitles.tracks if 0 <= n < total})
+
+
+#: Чем писать субтитры внутри видео, по контейнеру. ``None`` — как есть.
+_SUBTITLE_CODEC = {".mp4": "mov_text", ".mov": "mov_text", ".webm": "webvtt", ".mkv": None}
+
+#: Отдельный файл субтитров: (расширение, кодек), ``None`` — без перекодирования.
+_SUBTITLE_FILE = {
+    "subrip": (".srt", None),
+    "srt": (".srt", None),
+    "mov_text": (".srt", "srt"),
+    "text": (".srt", "srt"),
+    "ass": (".ass", None),
+    "ssa": (".ass", None),
+    "webvtt": (".vtt", None),
+    "hdmv_pgs_subtitle": (".sup", None),
+}
+
+
+def subtitles_only(request: ExportRequest) -> bool:
+    """Нужны одни субтитры: видео осталось бы прежним, и копия его ни к чему.
+
+    Так бывает, когда субтитры достают пресетом «Без сжатия»: без отрезка
+    картинка и звук копируются как есть, и рядом появилась бы вторая такая же
+    серия.
+    """
+    return (
+        request.subtitles.extract
+        and bool(request.subtitles.tracks)
+        and request.stream_copy
+        and not request.trim.is_set
+    )
+
+
+def subtitle_outputs(
+    request: ExportRequest, info: MediaInfo | None, stem: Path
+) -> list[tuple[int, Path, str | None]]:
+    """Отдельные файлы субтитров: номер дорожки, путь и кодек.
+
+    Имя — как у видео плюс язык: «Серия.rus.srt». Так плееры сами находят
+    субтитры рядом с роликом. Язык повторяется — добавляем номер дорожки.
+    """
+    tracks = info.subtitle_tracks if info else []
+    chosen = chosen_subtitles(request, info)
+    languages = [tracks[n].language or "und" for n in chosen]
+    result: list[tuple[int, Path, str | None]] = []
+    for number in chosen:
+        stream = tracks[number]
+        extension, codec = _SUBTITLE_FILE.get(stream.codec or "", (".mks", None))
+        language = stream.language or "und"
+        label = f"{number + 1}.{language}" if languages.count(language) > 1 else language
+        result.append((number, stem.with_name(f"{stem.name}.{label}{extension}"), codec))
+    return result
+
+
+def subtitle_command(
+    request: ExportRequest, info: MediaInfo | None, outputs: list[tuple[int, Path, str | None]]
+) -> list[str]:
+    """Одна команда, которая пишет все отдельные файлы субтитров разом."""
+    from . import binaries
+
+    args = [binaries.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y"]
+    args += input_args(request.trim, request.source, accurate=True)
+    for number, path, codec in outputs:
+        args += ["-map", f"0:s:{number}", "-c:s", codec or "copy"]
+        if path.suffix == ".mks":
+            args += ["-f", "matroska"]
+        args.append(str(path))
+    return args
+
+
 def input_args(trim: Trim, source: str, *, accurate: bool) -> list[str]:
     """Аргументы ввода с учётом обрезки.
 
@@ -472,23 +589,58 @@ def build_command(
     # рабочий звук, который почему-то не слышно.
     muted = not audio_only and request.audio.volume <= 0
 
-    # Дорожку выбирает человек, если их в файле несколько: у аниме это
+    # Дорожки выбирает человек, если их в файле несколько: у аниме это
     # обычно оригинал и озвучка, и первая — не всегда нужная.
-    track = max(0, request.audio.track)
-
-    if audio_only:
-        args += ["-vn", "-map", f"0:a:{track}?"]
-    elif muted:
-        args += ["-map", "0:v:0", "-an"]
-    else:
-        # Берём первую видеодорожку и выбранную звуковую; субтитры и данные
-        # отбрасываем.
-        args += ["-map", "0:v:0", "-map", f"0:a:{track}?"]
-
+    tracks = chosen_audio(request, info)
+    has_audio = (info.has_audio if info else True) and not muted and bool(tracks)
+    # Сводить в одну можно только перекодируя: копия потока звук не смешивает.
+    merged = (
+        has_audio and request.audio.merge and len(tracks) > 1
+        and not stream_copy and request.audio.codec not in {"copy", "none"}
+    )
     duration = clip_duration(request.trim, info)
+
+    audio_filters: list[str] = []
+    if has_audio and not stream_copy and request.audio.codec not in {"copy", "none"}:
+        streams = info.audio_tracks if info else []
+        first = streams[tracks[0]] if tracks and tracks[0] < len(streams) else None
+        audio_filters = build_audio_filters(
+            request.audio,
+            tempo=1.0 if audio_only else request.video.tempo,
+            duration=duration,
+            sample_rate=first.sample_rate if first else None,
+        )
+
+    if not audio_only:
+        args += ["-map", "0:v:0"]
+    else:
+        args += ["-vn"]
+    if merged:
+        # normalize=0: каждая дорожка звучит как была, а не тише в число дорожек.
+        inputs = "".join(f"[0:a:{n}]" for n in tracks)
+        chain = [f"amix=inputs={len(tracks)}:duration=longest:normalize=0", *audio_filters]
+        args += ["-filter_complex", f"{inputs}{','.join(chain)}[mix]", "-map", "[mix]"]
+        audio_filters = []
+    elif has_audio:
+        for number in tracks:
+            args += ["-map", f"0:a:{number}?"]
+
+    # Субтитры внутрь видео. Картинками (PGS) их можно положить только в MKV.
+    extension = output.suffix.lower()
+    subtitle_codec = _SUBTITLE_CODEC.get(extension, "mov_text")
+    embedded: list[int] = []
+    if request.subtitles.embed and not audio_only:
+        streams = info.subtitle_tracks if info else []
+        for number in chosen_subtitles(request, info):
+            if (streams[number].codec or "") in BITMAP_SUBTITLES and subtitle_codec:
+                continue
+            args += ["-map", f"0:s:{number}"]
+            embedded.append(number)
 
     if stream_copy:
         args += ["-c", "copy"]
+        if not has_audio:
+            args += ["-an"]
     else:
         if not audio_only:
             args += video_codec_args(
@@ -500,23 +652,20 @@ def build_command(
             video_filters = build_video_filters(request.video, info, visible)
             if video_filters:
                 args += ["-vf", ",".join(video_filters)]
+            if info and info.hdr and request.video.codec != "copy":
+                args += SDR_TAGS
 
-        has_audio = (info.has_audio if info else True) and not muted
         if has_audio:
             args += audio_codec_args(request.audio)
-            if request.audio.codec not in {"copy", "none"}:
-                tracks = info.audio_tracks if info else []
-                chosen = tracks[request.audio.track] if 0 <= request.audio.track < len(tracks) else None
-                audio_filters = build_audio_filters(
-                    request.audio,
-                    tempo=1.0 if audio_only else request.video.tempo,
-                    duration=duration,
-                    sample_rate=chosen.sample_rate if chosen else None,
-                )
-                if audio_filters:
-                    args += ["-af", ",".join(audio_filters)]
+            if audio_filters:
+                args += ["-af", ",".join(audio_filters)]
         else:
             args += ["-an"]
+
+    if embedded:
+        args += ["-c:s", subtitle_codec or "copy"]
+    else:
+        args += ["-sn"]
 
     suffix = output.suffix.lower()
     if suffix in {".mp4", ".m4a", ".mov"} and request.video.faststart:

@@ -297,7 +297,9 @@ const JobRow = memo(function JobRow({
     }
   }, [job.id, toast])
   const running = job.status === 'running' || job.status === 'queued'
-  const compression = savings(job.meta?.sizeBefore, job.meta?.sizeAfter)
+  // Одни субтитры — не сжатая копия: «−99%» про них ничего не значит.
+  const subtitlesOnly = Boolean(job.meta?.subtitlesOnly)
+  const compression = subtitlesOnly ? null : savings(job.meta?.sizeBefore, job.meta?.sizeAfter)
   // Файл мог и потяжелеть. Зелёным такое показывать нельзя: цвет читается
   // как «всё хорошо», а тут ровно наоборот.
   const grew = Boolean(
@@ -314,6 +316,7 @@ const JobRow = memo(function JobRow({
     // оставалась, а в окне сквозь пустую половину просвечивал сжатый файл,
     // и выходило, будто разницы нет вовсе.
     !job.meta?.sourceRemoved &&
+    !subtitlesOnly &&
     // Снимок кадра — не сжатая копия ролика: сравнивать картинку с видео
     // нечего.
     !job.meta?.frame
@@ -356,8 +359,9 @@ const JobRow = memo(function JobRow({
         {!compression && job.status === 'done' && job.meta?.sizeAfter ? (
           <span
             className="chip shrink-0 bg-surface-3 text-ink-dim"
-            title="Сколько весит готовый файл"
+            title={subtitlesOnly ? 'Сохранены только субтитры: видео не менялось, и копия его не нужна' : 'Сколько весит готовый файл'}
           >
+            {subtitlesOnly ? 'субтитры · ' : ''}
             {humanSize(job.meta.sizeAfter)}
           </span>
         ) : null}

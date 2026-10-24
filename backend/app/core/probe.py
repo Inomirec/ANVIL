@@ -18,6 +18,12 @@ _CACHE_LIMIT = 512
 #: же форматов называются иначе: ``webp``, ``png``.
 _ANIMATED_CODECS = {"webp_anim", "apng"}
 
+#: Способы записи яркости, которые означают HDR.
+HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}
+
+#: Субтитры картинками: в MP4 их не положить, и текстом их не достать.
+BITMAP_SUBTITLES = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "xsub"}
+
 
 @dataclass(slots=True)
 class StreamInfo:
@@ -36,6 +42,10 @@ class StreamInfo:
     frames: int | None = None
     #: Название дорожки, если его записали: «Русский», «Комментарии режиссёра».
     title: str | None = None
+    #: Как записана яркость: ``smpte2084`` и ``arib-std-b67`` — это HDR.
+    color_transfer: str | None = None
+    #: Отмечена ли дорожка «по умолчанию» — у субтитров и звука это видно плееру.
+    default: bool = False
 
 
 @dataclass(slots=True)
@@ -86,6 +96,22 @@ class MediaInfo:
         return (video.codec or "") in _ANIMATED_CODECS
 
     @property
+    def subtitle_tracks(self) -> list[StreamInfo]:
+        """Все дорожки субтитров по порядку."""
+        return [s for s in self.streams if s.kind == "subtitle"]
+
+    @property
+    def hdr(self) -> bool:
+        """Видео в HDR: яркость записана по PQ (HDR10, Dolby Vision) или HLG.
+
+        Такой кадр нельзя просто переложить в обычное 8-битное видео: цифры
+        те же, а значат другое, и без перевода картинка выходит серой и
+        бледной — так её и показывают монтажные программы.
+        """
+        video = self.video
+        return bool(video and video.color_transfer in HDR_TRANSFERS)
+
+    @property
     def has_audio(self) -> bool:
         return self.audio is not None
 
@@ -134,6 +160,7 @@ class MediaInfo:
             "hasAlpha": self.has_alpha,
             "animated": self.animated,
             "pixFmt": video.pix_fmt if video else None,
+            "hdr": self.hdr,
             "tags": self.tags,
             "streams": [
                 {
@@ -160,8 +187,20 @@ class MediaInfo:
                     "channels": s.channels,
                     "language": s.language,
                     "title": s.title,
+                    "default": s.default,
                 }
                 for number, s in enumerate(self.audio_tracks)
+            ],
+            "subtitleTracks": [
+                {
+                    "index": number,
+                    "codec": s.codec,
+                    "language": s.language,
+                    "title": s.title,
+                    "default": s.default,
+                    "bitmap": (s.codec or "") in BITMAP_SUBTITLES,
+                }
+                for number, s in enumerate(self.subtitle_tracks)
             ],
         }
 
@@ -390,6 +429,8 @@ async def probe(path: str | Path, use_cache: bool = True) -> MediaInfo:
                 title=(raw.get("tags") or {}).get("title"),
                 pix_fmt=raw.get("pix_fmt"),
                 frames=_to_int(raw.get("nb_frames")),
+                color_transfer=raw.get("color_transfer"),
+                default=bool((raw.get("disposition") or {}).get("default")),
             )
         )
 

@@ -58,6 +58,12 @@ class AudioOptions(BaseModel):
     #: Какую звуковую дорожку брать, если их несколько. Считается по порядку
     #: среди звуковых, а не среди всех потоков файла.
     track: int = Field(default=0, ge=0, le=31)
+    #: Несколько звуковых дорожек сразу — номера по тому же счёту, -1 — все.
+    #: Пусто — берётся одна, ``track``.
+    tracks: list[int] = Field(default_factory=list, max_length=32)
+    #: Свести выбранные дорожки в одну: голос, музыка и шумы, записанные
+    #: раздельно, станут одним звуком.
+    merge: bool = False
     #: Громкость дорожки: 1.0 — как есть, 0 — совсем без звука. Ноль означает
     #: именно «выбросить дорожку», а не записать тишину: пустая дорожка всё
     #: равно занимает место и сбивает с толку в редакторе пака.
@@ -94,6 +100,17 @@ class VideoOptions(BaseModel):
     fade_out: float = Field(default=0.0, ge=0, le=30)
     #: Убрать видеодорожку целиком (получить только звук).
     strip_video: bool = False
+
+
+class SubtitleOptions(BaseModel):
+    """Что делать с субтитрами исходника. Номера — по счёту среди субтитров,
+    -1 — все."""
+
+    tracks: list[int] = Field(default_factory=list, max_length=64)
+    #: Положить выбранные субтитры в сам файл, отдельными дорожками.
+    embed: bool = False
+    #: Сохранить выбранные субтитры рядом отдельными файлами.
+    extract: bool = False
 
 
 class Rect(BaseModel):
@@ -155,6 +172,7 @@ class ExportRequest(BaseModel):
     video: VideoOptions = Field(default_factory=VideoOptions)
     audio: AudioOptions = Field(default_factory=AudioOptions)
     image: ImageOptions = Field(default_factory=ImageOptions)
+    subtitles: SubtitleOptions = Field(default_factory=SubtitleOptions)
     #: Куда сохранить. ``None`` = подпапка рядом с исходником, её имя берётся
     #: из настроек.
     output_dir: str | None = None
@@ -441,6 +459,8 @@ class ComposeClip(ComposeModel):
     #: Ровная копия ролика после стабилизатора. Ставит сервер перед сборкой,
     #: когда копия готова: тогда монтаж читает её вместо исходника.
     stable_source: str = ""
+    #: Ролик в HDR — его цвет переводится в обычный. Узнаёт сервер.
+    hdr: bool = False
 
     # --- надпись (только у клипов вида ``text``) --------------------------
     #: Что написать. Переводы строк сохраняются: так набирают субтитры в две

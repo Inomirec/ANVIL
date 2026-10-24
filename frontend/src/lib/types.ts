@@ -56,7 +56,19 @@ export interface MediaInfo {
     channels: number | null
     language: string | null
     title: string | null
+    default?: boolean
   }[]
+  /** Субтитры файла по порядку. ``bitmap`` — картинками, в MP4 их не положить. */
+  subtitleTracks?: {
+    index: number
+    codec: string | null
+    language: string | null
+    title: string | null
+    default?: boolean
+    bitmap?: boolean
+  }[]
+  /** Видео в HDR: при обработке цвет переводится в обычный. */
+  hdr?: boolean
   hasAlpha: boolean
   /** Движущаяся картинка: GIF или WebP из нескольких кадров. */
   animated: boolean
@@ -138,6 +150,10 @@ export interface AudioOptions {
   mono: boolean
   /** Какую звуковую дорожку брать, если их несколько. */
   track: number
+  /** Несколько дорожек сразу, -1 — все. Пусто — одна, ``track``. */
+  tracks?: number[]
+  /** Свести выбранные дорожки в одну. */
+  merge?: boolean
   /** Громкость дорожки: 1 — как есть, 0 — совсем без звука. */
   volume: number
 }

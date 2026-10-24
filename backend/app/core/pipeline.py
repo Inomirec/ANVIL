@@ -47,6 +47,26 @@ def resolve_output(request: ExportRequest, extension: str, *, reserve: bool = Fa
     return fsutil.unique_path(candidate, overwrite=request.overwrite, reserve=reserve)
 
 
+async def _write_subtitles(ctx: JobContext, request: ExportRequest, info, stem: Path) -> list[Path]:
+    """Сохраняет выбранные субтитры отдельными файлами рядом с ``stem``."""
+    # Номер при повторе ставим к имени, а не после языка: «Серия (2).rus.srt»
+    # плеер подхватит, а «Серия.rus (2).srt» — уже нет.
+    outputs = encode.subtitle_outputs(request, info, stem)
+    attempt = 2
+    while not request.overwrite and any(path.exists() for _, path, _ in outputs):
+        outputs = encode.subtitle_outputs(request, info, stem.with_name(f"{stem.name} ({attempt})"))
+        attempt += 1
+    if not outputs:
+        return []
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    args = encode.subtitle_command(request, info, outputs)
+    ctx.log("$ " + encode.to_display_string(args))
+    await run_ffmpeg(ctx, args, total_duration=None, label="Субтитры")
+    written = [path for _, path, _ in outputs if path.exists()]
+    ctx.meta(subtitleFiles=[str(path) for path in written])
+    return written
+
+
 def submit_export(request: ExportRequest) -> Job:
     """Ставит один файл в очередь обработки."""
     source = fsutil.safe_path(request.source)
@@ -92,6 +112,19 @@ def submit_export(request: ExportRequest) -> Job:
                     height=result.height,
                     qualityUsed=result.quality_used,
                 )
+            elif encode.subtitles_only(request):
+                # Видео осталось бы прежним — пишем одни субтитры, рядом с
+                # тем местом, куда легла бы копия, и под именем исходника.
+                info = await probe(source)
+                place = resolve_output(request, ".mks")
+                outputs = await _write_subtitles(ctx, request, info, place.with_name(source.stem))
+                if not outputs:
+                    raise RuntimeError("В файле нет выбранных субтитров")
+                ctx.job.output = str(outputs[0])
+                ctx.meta(
+                    subtitlesOnly=True,
+                    sizeAfter=sum(path.stat().st_size for path in outputs if path.exists()),
+                )
             else:
                 info = await probe(source)
                 extension = encode.container_extension(request, info)
@@ -121,11 +154,14 @@ def submit_export(request: ExportRequest) -> Job:
                     label="Кодирование" if not request.stream_copy else "Нарезка",
                 )
                 ctx.meta(sizeAfter=output.stat().st_size if output.exists() else 0)
+                if request.subtitles.extract and request.kind == "video":
+                    await _write_subtitles(ctx, request, info, output.with_suffix(""))
 
             # Исходник убираем только после того, как результат оказался на диске
             # и весит больше нуля: иначе неудачная задача унесла бы оригинал.
             size_after = ctx.job.meta.get("sizeAfter") or 0
-            ready = bool(size_after) and output.exists()
+            # Одни субтитры исходник не заменяют: видео в них нет.
+            ready = bool(size_after) and output is not None and output.exists()
             # Результат не всегда легче исходника: у картинок с малым числом
             # цветов AVIF порой проигрывает обычному PNG. Удалять оригинал в
             # таком случае нельзя — человек остался бы с файлом потяжелее и без
@@ -151,7 +187,7 @@ def submit_export(request: ExportRequest) -> Job:
                     # занятого исходника всю задачу незачем.
                     ctx.log(f"Исходник не удалось убрать в корзину: {exc}")
 
-            if size_before and size_after:
+            if size_before and size_after and not ctx.job.meta.get("subtitlesOnly"):
                 ctx.meta(
                     ratio=round(size_after / size_before, 4),
                     saved=size_before - size_after,

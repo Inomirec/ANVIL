@@ -9,7 +9,8 @@ import { useStore } from '../store'
 import type { TrimState } from './MediaEditor'
 import type { Fades } from './Timeline'
 import { SliderNumber } from './ComposeTextPanel'
-import { Button, MarkIcons, QuietHints, Section, Segmented, Select, Toggle } from './ui'
+import { initialTracks, TracksSection, type TrackChoice } from './TracksSection'
+import { Button, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
 
 const DEFAULT_VIDEO: VideoOptions = {
   codec: 'av1_svt',
@@ -45,29 +46,6 @@ const DEFAULT_AUDIO: AudioOptions = {
  * Наружу вынесено только то, что человек может осмысленно решить сам — что
  * сделать со звуком и как назвать файл.
  */
-/** Понятная подпись дорожки: язык, название, число каналов. */
-function trackLabel(
-  track: { index: number; codec: string | null; channels: number | null; language: string | null; title: string | null },
-  total: number,
-): string {
-  const parts: string[] = [`${track.index + 1} из ${total}`]
-  const language = track.language && track.language !== 'und' ? LANGUAGES[track.language] ?? track.language : null
-  if (language) parts.push(language)
-  if (track.title) parts.push(track.title)
-  if (track.channels === 1) parts.push('моно')
-  else if (track.channels === 2) parts.push('стерео')
-  else if (track.channels) parts.push(`${track.channels} кан.`)
-  return parts.join(' · ')
-}
-
-/** Языки, которые реально встречаются в паках. Остальные показываем как есть. */
-const LANGUAGES: Record<string, string> = {
-  rus: 'русский', ru: 'русский',
-  eng: 'английский', en: 'английский',
-  jpn: 'японский', ja: 'японский',
-  ukr: 'украинский', uk: 'украинский',
-}
-
 /**
  * Звук: кодек и битрейт под готовыми наборами. Подписи шкалы — у каждого
  * кодека свои: 96 кбит/с у Opus — обычный выбор, а у MP3 — уже слышно.
@@ -192,6 +170,14 @@ export function ExportPanel({
     () => loadPrefs().subfolder ?? localStorage.getItem('sgh.outputSubfolder') !== 'off',
   )
   const [deleteOriginal, setDeleteOriginal] = useState(() => loadPrefs().mediaReplace ?? false)
+  // Дорожки и субтитры — свои у каждого файла, поэтому не запоминаются и
+  // пресет их не трогает.
+  const [tracksChoice, setTracksChoice] = useState<TrackChoice>(() => initialTracks(file.media))
+  const trackCount = (file.media?.audioTracks?.length ?? 0) + (file.media?.subtitleTracks?.length ?? 0)
+  useEffect(() => {
+    setTracksChoice(initialTracks(file.media))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackCount])
 
   // При первом показе (и при смене типа файла) берём пресет по умолчанию.
   useEffect(() => {
@@ -252,14 +238,27 @@ export function ExportPanel({
   const activePreset = kindPresets.find((preset) => preset.id === presetId)
   const toWebp = gif && presetId === GIF_WEBP.id
 
-  // Дорожки есть только у открытого файла: к отмеченным в пачке выбор не
-  // применяется — у них своя разметка, и номер оттуда ничего не значит.
-  const tracks = file.media?.audioTracks ?? []
-
   // WebM держит только AV1 и Opus: у пресетов на H.264 или с AAC он
   // недоступен, и тогда собираем в MP4.
   const webmFits = video.codec.startsWith('av1') && (audio.codec === 'opus' || audio.codec === 'none')
   const shownContainer = container === 'webm' && !webmFits ? 'mp4' : container
+
+  const audioCount = file.media?.audioTracks?.length ?? 0
+  const allAudio = tracksChoice.multi && tracksChoice.picked.length === audioCount
+
+  function audioTracks(own: boolean): { track: number; tracks: number[]; merge: boolean } {
+    const merge = tracksChoice.multi && tracksChoice.merge && !streamCopy
+    if (!tracksChoice.multi) return { track: own ? tracksChoice.track : 0, tracks: [], merge: false }
+    if (own) return { track: 0, tracks: tracksChoice.picked, merge }
+    return allAudio ? { track: 0, tracks: [-1], merge } : { track: 0, tracks: [], merge: false }
+  }
+
+  function subtitleRequest(own: boolean) {
+    const { embed, extract, subtitle } = tracksChoice
+    if (!embed && !extract) return { tracks: [], embed: false, extract: false }
+    if (!own && subtitle >= 0) return { tracks: [], embed: false, extract: false }
+    return { tracks: [subtitle], embed, extract }
+  }
 
   const buildRequest = (source: string, withTrim: boolean) => ({
     source,
@@ -280,10 +279,13 @@ export function ExportPanel({
       ...audio,
       fade_in: withTrim ? fades.audio.in : 0,
       fade_out: withTrim ? fades.audio.out : 0,
-      // Громкость и выбор дорожки — про открытый файл, к пачке их не тащим.
+      // Громкость и выбор дорожки — про открытый файл, к пачке их не тащим:
+      // у других файлов своя разметка, и номер оттуда ничего не значит.
+      // «Все дорожки» понятно любому файлу.
       volume: withTrim ? trackVolume : 1,
-      track: withTrim ? audio.track ?? 0 : 0,
+      ...audioTracks(withTrim),
     },
+    subtitles: subtitleRequest(withTrim),
     stream_copy: streamCopy,
     replace_original: deleteOriginal,
     suffix: fixedSuffix || (toWebp ? '_webp' : suffix),
@@ -363,7 +365,7 @@ export function ExportPanel({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [presetId, video, audio, streamCopy, trim.in, trim.out, intoSubfolder])
+  }, [presetId, video, audio, streamCopy, trim.in, trim.out, intoSubfolder, tracksChoice])
 
   /** Запускает команду в том виде, в каком её оставил пользователь. */
   async function runRaw() {
@@ -514,6 +516,16 @@ export function ExportPanel({
           />
         )}
 
+        {!gif && (
+          <TracksSection
+            media={isAudio && file.media ? { ...file.media, subtitleTracks: [] } : file.media}
+            value={tracksChoice}
+            onChange={setTracksChoice}
+            streamCopy={streamCopy}
+            container={streamCopy ? video.container : shownContainer}
+          />
+        )}
+
         <Section
           title="Доп настройки"
           id="export.other"
@@ -544,19 +556,6 @@ export function ExportPanel({
                 }}
                 label="Кодировать на видеокарте"
                 hint="Высокая скорость, но в теории могут появиться незначительные артефакты. Полезно для больших видео, когда важно время."
-              />
-            )}
-            {tracks.length > 1 && !gif && (
-              <Select
-                label="Звуковая дорожка"
-                value={String(audio.track ?? 0)}
-                options={tracks.map((track) => ({
-                  value: String(track.index),
-                  label: trackLabel(track, tracks.length),
-                }))}
-                onChange={(value) => setAudio({ ...audio, track: Number(value) })}
-                disabled={streamCopy}
-                hint="В файле несколько дорожек — например, оригинал и озвучка. Программа берёт первую, если не выбрать другую."
               />
             )}
             {!gif && (

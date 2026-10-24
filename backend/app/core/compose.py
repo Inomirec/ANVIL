@@ -34,7 +34,7 @@ from pathlib import Path
 
 from .. import paths
 from ..models import ComposeClip, ComposeProject
-from . import anim, binaries, effects, fonts, fsutil, stabilize
+from . import anim, binaries, effects, encode, fonts, fsutil, stabilize
 from .probe import moves as probe_moves
 from .probe import probe
 
@@ -1135,6 +1135,10 @@ def build_segment(
                     # Размер — числами, теми же, что у копии клипа: по ним
                     # считается маска, и разойтись им нельзя ни на пиксель.
                     shrink = f"scale={clip.source_width}:{clip.source_height}:flags=bilinear,"
+            if clip.kind == "video" and clip.hdr:
+                # HDR без перевода лёг бы в кадр серым и бледным — переводим
+                # сразу, до масок и эффектов: они рассчитаны на обычный цвет.
+                shrink += encode.TONEMAP + ","
             timing = effects.Timing(
                 skip=max(0.0, at - clip.start), take=take, fps=fps, tag=f"k{index}"
             )
@@ -1392,10 +1396,12 @@ async def prepare(
                         clip.source_width, clip.source_height = stream.width, stream.height
                 except (RuntimeError, OSError):
                     pass
-            if clip.kind == "video" and not clip.source_fps:
+            if clip.kind == "video":
                 try:
-                    stream = (await probe(path)).video
-                    clip.source_fps = (stream.fps or 0.0) if stream else 0.0
+                    info = await probe(path)
+                    if not clip.source_fps:
+                        clip.source_fps = (info.video.fps or 0.0) if info.video else 0.0
+                    clip.hdr = info.hdr
                 except (RuntimeError, OSError):
                     pass
             if clip.kind == "image":
