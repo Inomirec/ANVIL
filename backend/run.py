@@ -179,6 +179,8 @@ def run_server(host: str, port: int, *, log_level: str = "info"):
     """Поднимает uvicorn в фоновом потоке и возвращает объект сервера."""
     import uvicorn
 
+    # Сервер пускает только запросы на свой адрес (см. app.main.foreign_request).
+    os.environ["SGH_HOST"] = host
     from app.main import app
 
     config = uvicorn.Config(

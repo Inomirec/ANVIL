@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +24,60 @@ from .paths import ensure_dirs, static_dir
 from .routers import compose, downloads, jobs, library, media, settings, stream, system
 
 logger = logging.getLogger("sigame-helper")
+
+# Режим разработки: страница живёт на Vite, а запросы к /api он пересылает сюда.
+DEV_ORIGINS = {
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:4173", "http://127.0.0.1:4173",
+}
+LOCAL_NAMES = {"127.0.0.1", "localhost", "::1"}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _host_name(value: str) -> str:
+    """Имя из заголовка Host без порта: «127.0.0.1:8756» -> «127.0.0.1»."""
+    return (urlsplit("//" + value.strip()).hostname or "").lower()
+
+
+def _allowed_names() -> set[str]:
+    # Сервер могли поднять и не на 127.0.0.1 (`run.py --host`) — тогда его
+    # собственный адрес тоже свой.
+    extra = os.environ.get("SGH_HOST", "").strip().lower()
+    return LOCAL_NAMES | ({extra} if extra and extra != "0.0.0.0" else set())
+
+
+def foreign_request(method: str, path: str, headers) -> str | None:
+    """Почему запрос пришёл не от самой программы, или None, если от неё.
+
+    Сервер слушает только этот компьютер, но браузер человека тоже на нём.
+    Любая открытая в браузере страница может слать запросы на 127.0.0.1, а
+    подменив адрес своего сайта на 127.0.0.1 (DNS rebinding), ещё и читать
+    ответы — и тогда ей доступно всё: файлы рабочих папок и ручная команда
+    ffmpeg, которая пишет куда угодно. Поэтому:
+
+    - имя в Host обязано быть адресом этого компьютера: при подмене адреса
+      там остаётся имя чужого сайта;
+    - запросы, которые что-то меняют, принимаются только со своей страницы
+      (Origin совпадает с Host) или без Origin вовсе — так ходят сама
+      программа, установщик и вторая копия;
+    - к /api не пускаем ничего, что браузер пометил как пришедшее с другого
+      сайта (Sec-Fetch-Site), даже чтение: картинка или видео на чужой
+      странице могли бы подтянуть файл человека.
+    """
+    host = headers.get("host", "")
+    if _host_name(host) not in _allowed_names():
+        return f"чужой адрес {host!r}"
+
+    origin = headers.get("origin")
+    if method not in SAFE_METHODS and origin is not None:
+        own = origin.lower() in {f"http://{host}".lower(), f"https://{host}".lower()}
+        if not own and origin not in DEV_ORIGINS:
+            return f"запрос со страницы {origin!r}"
+
+    if path.startswith("/api") and headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
+        if origin not in DEV_ORIGINS:
+            return "запрос с другого сайта"
+    return None
 
 
 @asynccontextmanager
@@ -80,10 +136,7 @@ def create_app() -> FastAPI:
     # Нужно только для режима разработки, когда фронтенд крутится на Vite (5173).
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173", "http://127.0.0.1:5173",
-            "http://localhost:4173", "http://127.0.0.1:4173",
-        ],
+        allow_origins=sorted(DEV_ORIGINS),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -108,6 +161,19 @@ def create_app() -> FastAPI:
         if path.startswith("/api") and "cache-control" not in response.headers:
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    # Добавлен последним — значит, срабатывает первым, раньше CORS и всего
+    # остального: чужой запрос не должен дойти ни до одного обработчика.
+    @app.middleware("http")
+    async def only_own_pages(request, call_next):
+        reason = foreign_request(request.method, request.url.path, request.headers)
+        if reason:
+            logger.warning("отклонён %s %s: %s", request.method, request.url.path, reason)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Запрос пришёл не из окна программы и отклонён."},
+            )
+        return await call_next(request)
 
     app.include_router(system.router)
     app.include_router(settings.router)
