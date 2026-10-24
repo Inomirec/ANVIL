@@ -148,6 +148,7 @@ export interface AudioOptions {
   fade_in: number
   fade_out: number
   mono: boolean
+  stereo?: boolean
   /** Какую звуковую дорожку брать, если их несколько. */
   track: number
   /** Несколько дорожек сразу, -1 — все. Пусто — одна, ``track``. */

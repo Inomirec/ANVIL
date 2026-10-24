@@ -13,6 +13,7 @@ export interface Prefs {
   max_height?: number
   loudnorm?: boolean
   mono?: boolean
+  stereo?: boolean
   videoPreset?: string
   /** Размер картинки один раз переведён с прежнего умолчания на «как есть». */
   imageSizeAsIs?: boolean

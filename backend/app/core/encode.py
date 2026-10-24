@@ -172,7 +172,7 @@ def build_audio_filters(
             f"afade=t=out:curve=qsin:st={start:.3f}:d={options.fade_out:g}"
         )
 
-    if options.codec == "opus" and not options.mono:
+    if options.codec == "opus" and not options.mono and not options.stereo:
         # Opus знает только свои раскладки каналов: 5.1 с боковыми
         # колонками («5.1(side)», так у фильмов с E-AC-3) он не принимает, и
         # сборка падала. Приводим к ближайшей знакомой — каналов столько же.
@@ -429,6 +429,8 @@ def audio_codec_args(options: AudioOptions) -> list[str]:
 
     if options.mono:
         args += ["-ac", "1"]
+    elif options.stereo:
+        args += ["-ac", "2"]
     return args
 
 

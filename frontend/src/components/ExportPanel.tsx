@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AudioLines, FileX2, FolderInput, Headphones, Play, Terminal, Zap } from 'lucide-react'
+import { AudioLines, FileX2, FolderInput, Headphones, Play, Speaker, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
@@ -37,6 +37,7 @@ const DEFAULT_AUDIO: AudioOptions = {
   fade_in: 0,
   fade_out: 0,
   mono: false,
+  stereo: false,
 }
 
 /**
@@ -144,6 +145,7 @@ export function ExportPanel({
       ...DEFAULT_AUDIO,
       loudnorm: prefs.loudnorm ?? DEFAULT_AUDIO.loudnorm,
       mono: prefs.mono ?? DEFAULT_AUDIO.mono,
+      stereo: prefs.stereo ?? DEFAULT_AUDIO.stereo,
     }
   })
   const [streamCopy, setStreamCopy] = useState(false)
@@ -224,6 +226,7 @@ export function ExportPanel({
         ...preset.options.audio,
         loudnorm: current.loudnorm,
         mono: current.mono,
+        stereo: current.stereo,
       } as AudioOptions))
     }
     setStreamCopy(Boolean(preset.options.stream_copy))
@@ -540,6 +543,7 @@ export function ExportPanel({
                   : []),
                 ...(!streamCopy && !gif && audio.loudnorm ? [{ icon: AudioLines, label: 'Выравнивание звука' }] : []),
                 ...(!streamCopy && !gif && audio.mono ? [{ icon: Headphones, label: 'Звук в моно' }] : []),
+                ...(!streamCopy && !gif && !audio.mono && audio.stereo ? [{ icon: Speaker, label: 'Звук в стерео' }] : []),
                 ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
                 ...(command !== null ? [{ icon: Terminal, label: 'Своя команда ffmpeg' }] : []),
               ]}
@@ -579,6 +583,16 @@ export function ExportPanel({
               disabled={streamCopy}
               label="Перевести звук в моно"
               hint="Делает звук более плоским, но и понижает вес файла примерно на треть."
+            />
+            <Toggle
+              checked={audio.stereo ?? false}
+              onChange={(value) => {
+                setAudio({ ...audio, stereo: value })
+                savePrefs({ stereo: value })
+              }}
+              disabled={streamCopy || audio.mono}
+              label="Звук в стерео"
+              hint="Объёмный звук 5.1 и 7.1 сводится в обычные два канала. Монтажные программы кладут 5.1 несколькими дорожками, а стерео — одной. На обычный стереозвук не влияет."
             />
               </>
             )}
