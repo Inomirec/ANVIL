@@ -802,24 +802,38 @@ export function ComposeTab() {
                 const toX = event.clientX - (box.left + box.width / 2)
                 const toY = event.clientY - (box.top + box.height / 2)
                 const keep = next / view
+                const x = toX - (toX - pan.x) * keep
+                const y = toY - (toY - pan.y) * keep
+                // Отдалённый кадр уходит от середины не дальше 20% своего
+                // размера — как и при перетаскивании, иначе первое же
+                // движение мыши прыжком вернуло бы его к краю запаса.
+                const edgeX = next < 1 ? box.width * 0.2 : Infinity
+                const edgeY = next < 1 ? box.height * 0.2 : Infinity
                 setPan({
-                  x: toX - (toX - pan.x) * keep,
-                  y: toY - (toY - pan.y) * keep,
+                  x: Math.max(-edgeX, Math.min(edgeX, x)),
+                  y: Math.max(-edgeY, Math.min(edgeY, y)),
                 })
               }
               setView(next)
             }}
             // Зажатое колесо таскает кадр: при большом увеличении иначе не
-            // добраться до нужного угла.
+            // добраться до нужного угла. Отдалённый тоже таскается, но не
+            // дальше 20% размера кадра: немного подвинуть, чтобы ухватить
+            // клип у края, а не потерять кадр за пределами окна.
             onMouseDown={(event) => {
-              if (event.button !== 1 || view <= 1) return
+              if (event.button !== 1 || view === 1) return
               event.preventDefault()
               const from = { x: event.clientX, y: event.clientY }
               const was = { ...pan }
+              const box = frameBox.current
+              const reach =
+                view < 1 && box ? { x: box.offsetWidth * 0.2, y: box.offsetHeight * 0.2 } : null
+              const limit = (value: number, edge: number | undefined) =>
+                edge === undefined ? value : Math.max(-edge, Math.min(edge, value))
               const move = (moved: MouseEvent) => {
                 setPan({
-                  x: was.x + (moved.clientX - from.x),
-                  y: was.y + (moved.clientY - from.y),
+                  x: limit(was.x + (moved.clientX - from.x), reach?.x),
+                  y: limit(was.y + (moved.clientY - from.y), reach?.y),
                 })
               }
               const drop = () => {
