@@ -1191,20 +1191,28 @@ def build_segment(
                 pre_chain = shrink + effects.video_chain(clip, preview=preview, timing=timing)
             fill = effects.blurred_fill(clip) if clip.kind in {"video", "image"} else None
             if fill:
-                # Размытый фон: под клипом он сам же, растянутый на всё своё
-                # место и размытый, — вместо чёрных полос по бокам. Место — весь
-                # кадр или прямоугольник переставленного клипа; клип ложится
-                # посередине, и результат ровно размером с место.
+                # Размытый фон: под клипом он сам же, растянутый на весь кадр
+                # и размытый, — вместо чёрных полей вокруг. Фон всегда во весь
+                # кадр, а клип ложится поверх на своё место: уменьшенный клип
+                # стоит на размытой копии себя, а не на чёрном. Прежде фон
+                # занимал только место клипа, и у отдалённого клипа вокруг
+                # оставалось чёрное.
                 sigma, dim = fill
-                box_w, box_h = clip_box(clip, width, height) if is_placed(clip) else (width, height)
+                if is_placed(clip):
+                    box_w, box_h = clip_box(clip, width, height)
+                    left = f"round({width}*{clip.x:.5f}-{box_w / 2:.3f})"
+                    top = f"round({height}*{clip.y:.5f}-{box_h / 2:.3f})"
+                    spot = f"{left}+round(({box_w}-w)/2):{top}+round(({box_h}-h)/2)"
+                else:
+                    spot = "(W-w)/2:(H-h)/2"
                 chain.append(
                     f"{pre_label}{pre_chain}split=2[fa{index}][fb{index}];"
-                    f"[fa{index}]scale={box_w}:{box_h}:force_original_aspect_ratio=increase,"
-                    f"crop={box_w}:{box_h},gblur=sigma={sigma:.1f},"
-                    f"eq=brightness={-dim * 0.5:.3f}[fbg{index}];"
-                    f"[fb{index}]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease:flags=lanczos"
+                    f"[fa{index}]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                    f"crop={width}:{height},gblur=sigma={sigma:.1f},"
+                    f"eq=brightness={-dim * 0.5:.3f},format=yuva420p[fbg{index}];"
+                    f"[fb{index}]{place_filter(clip, width, height, fps, max(0.0, at - clip.start))}"
                     f"[ffg{index}];"
-                    f"[fbg{index}][ffg{index}]overlay=(W-w)/2:(H-h)/2,"
+                    f"[fbg{index}][ffg{index}]overlay={spot}:format=auto,"
                     f"format=yuva420p,setsar=1,fps={rate(fps)}{fades},"
                     f"setpts={_place_in_time(offset)}[v{index}]"
                 )
@@ -1263,7 +1271,8 @@ def build_segment(
                 f":x='round(W*({anim.expression(clip, 'x', moment)})-w/2)'"
                 f":y='round(H*({anim.expression(clip, 'y', moment)})-h/2)':eval=frame"
             )
-        elif is_placed(clip):
+        elif is_placed(clip) and not effects.blurred_fill(clip):
+            # С размытым фоном слой уже во весь кадр, клип в нём на месте.
             box_w, box_h = clip_box(clip, width, height)
             left = f"round(W*{clip.x:.5f}-{box_w / 2:.3f})"
             top = f"round(H*{clip.y:.5f}-{box_h / 2:.3f})"

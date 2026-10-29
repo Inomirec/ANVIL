@@ -690,6 +690,38 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
         <div className={`space-y-2.5 border-t border-line-soft px-3 py-2.5 ${effect.on ? '' : 'opacity-50'}`}>
           {kind.params.map((param) => {
             const value = effect.params[param.key] ?? param.default
+            if (param.showIf) {
+              const other = kind.params.find((item) => item.key === param.showIf!.key)
+              const shown = effect.params[param.showIf.key] ?? other?.default
+              if (String(shown) !== param.showIf.value) return null
+            }
+            if (param.kind === 'file') {
+              const path = String(value || '')
+              return (
+                <div key={param.key} className="flex items-center gap-2" title={param.hint}>
+                  <span className="shrink-0 text-[11.5px] text-ink-dim">{param.label}</span>
+                  <span
+                    className={`min-w-0 flex-1 truncate text-right font-mono text-[11px] ${path ? 'text-ink' : 'text-ink-faint'}`}
+                    title={path || undefined}
+                  >
+                    {path ? path.split(/[\\/]/).pop() : 'не выбран'}
+                  </span>
+                  <Button
+                    className="shrink-0 px-2 py-1 text-[11px]"
+                    onClick={async () => {
+                      const folder = path ? path.replace(/[\\/][^\\/]*$/, '') : null
+                      const picked = await api.pickFile(folder, param.fileTypes)
+                      if (picked.path) {
+                        mark()
+                        updateEffect(clipId, effect.id, { params: { [param.key]: picked.path } })
+                      }
+                    }}
+                  >
+                    Выбрать…
+                  </Button>
+                </div>
+              )
+            }
             if (param.kind === 'choice') {
               return (
                 <div key={param.key} className="space-y-1">
@@ -699,6 +731,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                       <button
                         key={option.value}
                         type="button"
+                        title={option.hint}
                         onClick={() =>
                           updateEffect(clipId, effect.id, { params: { [param.key]: option.value } })
                         }

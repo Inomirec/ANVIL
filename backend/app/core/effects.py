@@ -242,6 +242,22 @@ def _video_effect(
         blend = _number(effect, "blend", 5, 0, 40) / 100
         # Прозрачность нужна до вырезания, иначе вырезанное станет чёрным.
         return f"format=yuva420p,chromakey=color={colour}:similarity={similar:.3f}:blend={blend:.3f}"
+    if kind == "lut":
+        # Готовый образ или свой файл .cube; сила уже «запечена» в таблицу
+        # (`luts.prepared`): у lut3d своей силы нет.
+        from . import luts
+
+        try:
+            table = luts.prepared(
+                str(effect.params.get("look", "warm")),
+                str(effect.params.get("file", "")),
+                _number(effect, "strength", 100, 0, 100) / 100,
+            )
+        except (ValueError, OSError) as exc:
+            raise RuntimeError(f"LUT: {exc}") from exc
+        if table is None:
+            return ""
+        return f"lut3d=file={_escaped(str(table))}:interp=tetrahedral"
     return ""
 
 

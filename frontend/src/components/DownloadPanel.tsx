@@ -26,6 +26,16 @@ import { FolderPicker } from './FolderPicker'
 import { LinkPreview } from './LinkPreview'
 import { Button, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
 
+/**
+ * Обработка пресетом сразу после скачивания — выключена. Качество и кодек
+ * теперь выбираются при самой загрузке, и сжимать уже сжатое незачем.
+ * Раздел целиком на месте и собирается вместе с программой: чтобы вернуть
+ * его, достаточно поставить здесь true. Список пресетов сам подстраивается
+ * под «Что скачать», после обработки можно убрать оригинал и выбрать, куда
+ * положить результат (`_chain_processing` на сервере).
+ */
+const PRESETS_AFTER_DOWNLOAD = false
+
 type Container = 'mp4' | 'mkv' | 'webm' | 'auto'
 type Codec = 'any' | 'h264' | 'av1'
 
@@ -377,10 +387,6 @@ export function DownloadPanel() {
           Так же устроена медиатека, и кнопка «Скачать» перестаёт
           ездить по экрану при прокрутке. */}
       <div className="min-w-0 flex-1 space-y-5 overflow-y-auto px-6 py-6">
-      <header>
-        <h1 className="text-[20px] font-semibold">Загрузка</h1>
-      </header>
-
       {/* Список ссылок */}
       <div className="space-y-2">
         {rows.map((row, index) => (
@@ -583,6 +589,7 @@ export function DownloadPanel() {
             </Section>
           ) : null}
 
+          {PRESETS_AFTER_DOWNLOAD && (
           <Section
             title="После скачивания"
             id="download.process"
@@ -632,6 +639,7 @@ export function DownloadPanel() {
               </div>
             )}
           </Section>
+          )}
 
           <Section title="Куда скачивать">
             {/* Папку меняют часто — значит она должна быть на виду,

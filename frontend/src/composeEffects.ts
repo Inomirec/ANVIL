@@ -14,8 +14,15 @@ export type EffectTarget = 'video' | 'audio'
 export interface EffectParam {
   key: string
   label: string
-  /** Ползунок, выбор цвета, галочка (1 — включено, 0 — нет) или выбор из нескольких. */
-  kind?: 'slider' | 'color' | 'check' | 'choice'
+  /**
+   * Ползунок, выбор цвета, галочка (1 — включено, 0 — нет), выбор из
+   * нескольких или файл на диске (путь строкой).
+   */
+  kind?: 'slider' | 'color' | 'check' | 'choice' | 'file'
+  /** Видна, только когда у другой настройки такое значение. */
+  showIf?: { key: string; value: string }
+  /** Какие файлы предлагать в окне выбора: «LUT (*.cube)». */
+  fileTypes?: string[]
   /** Варианты для выбора из нескольких. */
   options?: { value: string; label: string; hint?: string }[]
   /** Пояснение при наведении. */
@@ -53,6 +60,39 @@ export const EFFECTS: EffectKind[] = [
       { animatable: true, key: 'contrast', label: 'Контраст', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'мягче' }, { value: 0, label: '0' }, { value: 30, label: 'сочнее' }] },
       { animatable: true, key: 'saturation', label: 'Насыщенность', min: -100, max: 100, default: 0, marks: [{ value: -60, label: 'бледнее' }, { value: 0, label: '0' }, { value: 40, label: 'ярче' }] },
       { animatable: true, key: 'temperature', label: 'Теплее / холоднее', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'холоднее' }, { value: 0, label: '0' }, { value: 40, label: 'теплее' }] },
+    ],
+  },
+  {
+    type: 'lut',
+    name: 'LUT (цветовой образ)',
+    target: 'video',
+    hint: 'Готовый цветокор одним махом: тёплый, холодный, «кино» — или свой файл .cube',
+    params: [
+      {
+        key: 'look',
+        label: 'Образ',
+        kind: 'choice',
+        default: 'warm',
+        options: [
+          { value: 'warm', label: 'Тёплый', hint: 'Чуть желтее и уютнее' },
+          { value: 'cold', label: 'Холодный', hint: 'Синеватый, строгий' },
+          { value: 'cinema', label: 'Кино', hint: 'Тени в бирюзу, света в оранжевый' },
+          { value: 'faded', label: 'Плёнка', hint: 'Приподнятые тени, приглушённый цвет' },
+          { value: 'vivid', label: 'Сочный', hint: 'Ярче цвет и чуть больше контраста' },
+          { value: 'noir', label: 'Нуар', hint: 'Контрастное чёрно-белое' },
+          { value: 'file', label: 'Свой файл', hint: 'LUT в формате .cube — их выкладывают для цветокора' },
+        ],
+      },
+      {
+        key: 'file',
+        label: 'Файл LUT',
+        kind: 'file',
+        default: '',
+        showIf: { key: 'look', value: 'file' },
+        fileTypes: ['LUT (*.cube)'],
+        hint: 'Трёхмерный LUT в формате .cube',
+      },
+      { key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'наполовину' }, { value: 100, label: 'полностью' }] },
     ],
   },
   {

@@ -155,8 +155,9 @@ async def pick_file(payload: PickFileRequest) -> dict[str, Any]:
         return {"supported": False, "path": None}
 
     start = payload.directory if payload.directory and Path(payload.directory).is_dir() else ""
+    extra = {"file_types": tuple(payload.file_types) + ("Все файлы (*.*)",)} if payload.file_types else {}
     result = await asyncio.to_thread(
-        windows[0].create_file_dialog, webview.OPEN_DIALOG, directory=start
+        windows[0].create_file_dialog, webview.OPEN_DIALOG, directory=start, **extra
     )
     if not result:
         return {"supported": True, "path": None}

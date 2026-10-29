@@ -339,6 +339,9 @@ class PickFileRequest(BaseModel):
     """В какой папке открыть окно выбора файла."""
 
     directory: str | None = None
+    #: Какие файлы показывать, как их понимает окно Windows: «LUT (*.cube)».
+    #: Пусто — все.
+    file_types: list[str] = Field(default_factory=list, max_length=8)
 
 
 class PathsRequest(BaseModel):

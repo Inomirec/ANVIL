@@ -108,8 +108,11 @@ export const api = {
     request<BrowseResponse>(`/api/settings/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   pickFolder: () => post<{ supported: boolean; path: string | null }>('/api/settings/pick-folder'),
   /** Окно Windows для выбора файла — открывается в папке ``directory``. */
-  pickFile: (directory?: string | null) =>
-    post<{ supported: boolean; path: string | null }>('/api/settings/pick-file', { directory }),
+  pickFile: (directory?: string | null, fileTypes?: string[]) =>
+    post<{ supported: boolean; path: string | null }>('/api/settings/pick-file', {
+      directory,
+      file_types: fileTypes ?? [],
+    }),
   /** Готова ли ровная копия ролика после стабилизатора. */
   stabilizeStatus: (source: string, params: Record<string, number | string>) =>
     post<{ state: 'ready' | 'working' | 'error' | 'idle' | 'missing'; progress?: number; error?: string }>(

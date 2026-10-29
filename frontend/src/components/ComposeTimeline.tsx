@@ -1991,10 +1991,6 @@ function ClipMenu({
         <>
           <div className="my-1 h-px bg-line-soft" />
           <EffectsSubmenu clipId={clipId} onClose={onClose} />
-          {item('Копировать эффекты', '', () => {
-            const taken = state.copyEffects(clipId)
-            if (!taken) useStore.getState().toast('У клипа нет эффектов', 'info')
-          }, !(clip.effects?.length || state.partnerOf(clipId)?.effects?.length))}
           {item(
             many ? `Вставить эффекты (${state.selected.length})` : 'Вставить эффекты',
             '',

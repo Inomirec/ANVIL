@@ -1960,6 +1960,12 @@ export const useCompose = create<State>((set, get) => ({
       const track = get().tracks.find((item) => item.clips.some((one) => one.id === clip.id))
       return { clip: { ...clip, start: clip.start - edge }, trackId: track?.id ?? '' }
     })
+    // Скопированный клип несёт и свои эффекты: «Вставить эффекты» на другом
+    // клипе работает сразу, без отдельного «Копировать эффекты». Берём их у
+    // первого клипа, у которого они есть; нет ни у кого — вставлять нечего.
+    const donor = taken.find((clip) => clip.effects?.length || get().partnerOf(clip.id)?.effects?.length)
+    if (donor) get().copyEffects(donor.id)
+    else effectClipboard = null
     return clipboard.length
   },
 
