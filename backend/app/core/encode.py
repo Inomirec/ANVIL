@@ -392,21 +392,6 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
             "-pix_fmt", "yuv420p",
         ]
 
-    if codec == "h266":
-        # H.266 (VVC) — libvvenc. Шкала качества у него — qp от 0 до 63, как
-        # у AV1; скорости называются по-своему, переводим из обычных имён.
-        speed = {
-            "veryslow": "slower", "slow": "slow", "medium": "medium",
-            "fast": "fast", "veryfast": "faster",
-        }.get(str(options.speed_preset), "medium")
-        return [
-            "-c:v", "libvvenc",
-            *(["-qp", str(min(63, quality))] if rate <= 0 else ["-b:v", f"{rate}k"]),
-            "-preset", speed,
-            # Другого формата кадра кодировщик не принимает.
-            "-pix_fmt", "yuv420p10le",
-        ]
-
     raise ValueError(f"Неизвестный видеокодек: {codec}")
 
 

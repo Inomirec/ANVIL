@@ -9,7 +9,7 @@ from pydantic.alias_generators import to_camel
 
 MediaKind = Literal["video", "audio", "image", "other"]
 VideoCodec = Literal[
-    "av1_svt", "av1_nvenc", "av1_qsv", "h264", "h264_nvenc", "h265", "h266", "copy"
+    "av1_svt", "av1_nvenc", "av1_qsv", "h264", "h264_nvenc", "h265", "copy"
 ]
 AudioCodec = Literal["opus", "aac", "mp3", "flac", "copy", "none"]
 ImageFormat = Literal["avif", "webp", "jpg", "png", "ico"]
@@ -90,7 +90,7 @@ class VideoOptions(BaseModel):
     #: Ограничение по высоте кадра (0 = не менять).
     max_height: int = Field(default=720, ge=0, le=4320)
     #: Ограничение по кадровой частоте (0 = не менять).
-    max_fps: int = Field(default=30, ge=0, le=240)
+    max_fps: int = Field(default=0, ge=0, le=240)
     #: Ускорение воспроизведения: 1.0 = как в оригинале, 1.06 = +6%.
     tempo: float = Field(default=1.0, ge=0.5, le=2.0)
     #: Кодировать на видеокарте вместо процессора. Подходящий аппаратный

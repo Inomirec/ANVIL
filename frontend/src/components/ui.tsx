@@ -444,12 +444,18 @@ export function Modal({
   title,
   children,
   wide,
+  steady,
 }: {
   open: boolean
   onClose: () => void
   title: string
   children: ReactNode
   wide?: boolean
+  /**
+   * Постоянная высота: окно не растёт, когда внутри раскрывают подсказку, а
+   * прокручивается внутри. Иначе окно с длинным списком прыгало по экрану.
+   */
+  steady?: boolean
 }) {
   useEffect(() => {
     if (!open) return
@@ -469,7 +475,7 @@ export function Modal({
       <div
         className={`animate-in-up flex max-h-[86vh] w-full flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl ${
           wide ? 'max-w-4xl' : 'max-w-lg'
-        }`}
+        } ${steady ? 'h-[86vh]' : ''}`}
       >
         <header className="flex items-center justify-between border-b border-line-soft px-5 py-3.5">
           <h2 className="text-[15px] font-semibold">{title}</h2>

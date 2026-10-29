@@ -28,7 +28,7 @@ const DEFAULT_VIDEO: VideoOptions = {
   crf: 43,
   speed_preset: '6',
   max_height: 720,
-  max_fps: 30,
+  max_fps: 0,
   tempo: 1,
   container: 'mp4',
   use_gpu: false,
@@ -408,26 +408,34 @@ export function ExportPanel({
   }
 
   const sourceHeight = file.media?.height ?? 0
-  // Программа никогда не растягивает видео вверх, поэтому итог — минимум из двух.
-  const outputHeight = video.max_height
-    ? sourceHeight
-      ? Math.min(video.max_height, sourceHeight)
-      : video.max_height
-    : sourceHeight
-
   const total = file.media?.duration ?? 0
   const cutting =
     (trim.in !== null && trim.in > 0.05) ||
     (trim.out !== null && total > 0 && trim.out < total - 0.05)
 
+  // Подсказка у каждого варианта своя: сравнивает исходник именно с ним.
+  // Общая подсказка раздела описывала выбранный вариант, и над 720p при
+  // выбранном «Оригинале» писала, что видео останется как есть.
+  const resolutionHint = (height: number) =>
+    !height
+      ? sourceHeight
+        ? `Оставить разрешение исходника — ${sourceHeight}p`
+        : 'Оставить разрешение исходника'
+      : !sourceHeight
+        ? `Уменьшит до ${height}p, если видео больше. Мелкое растянуто не будет`
+        : height < sourceHeight
+          ? `Исходник ${sourceHeight}p уменьшится до ${height}p — это сильнее всего режет вес`
+          : height === sourceHeight
+            ? `Исходник и так ${sourceHeight}p — разрешение останется прежним`
+            : `Исходник ${sourceHeight}p — увеличивать его до ${height}p программа не станет, останется ${sourceHeight}p`
   const resolutions = [
-    { value: '0', label: 'Оригинал', title: 'Оставить разрешение исходника' },
+    { value: '0', label: 'Оригинал' },
     { value: '2160', label: '4K' },
     { value: '1440', label: '1440p' },
     { value: '1080', label: '1080p' },
     { value: '720', label: '720p' },
     { value: '480', label: '480p' },
-  ]
+  ].map((item) => ({ ...item, title: resolutionHint(Number(item.value)) }))
 
   return (
     <QuietHints>
@@ -438,13 +446,6 @@ export function ExportPanel({
             title="Разрешение"
             id="export.resolution"
             summary={resolutions.find((item) => item.value === String(video.max_height))?.label}
-            hint={
-              sourceHeight
-                ? outputHeight && outputHeight < sourceHeight
-                  ? `Исходник ${sourceHeight}p уменьшится до ${outputHeight}p — это сильнее всего режет вес.`
-                  : `Исходник ${sourceHeight}p — увеличивать его программа не станет, останется как есть.`
-                : 'Мелкое видео растянуто вверх не будет — только уменьшение.'
-            }
           >
             <Segmented
               columns={3}
@@ -484,7 +485,7 @@ export function ExportPanel({
                 }
                 className={`rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                   presetId === preset.id
-                    ? 'border-accent/60 bg-accent/10 shadow-[0_0_16px_rgba(22,156,145,0.22)]'
+                    ? 'border-accent/60 bg-accent/10 shadow-[0_0_8px_rgba(22,156,145,0.1)]'
                     : 'border-line-soft bg-surface-2 hover:border-line hover:bg-surface-3'
                 }`}
               >
@@ -729,17 +730,13 @@ export function ExportPanel({
 }
 
 /**
- * Видеокодеки ручных настроек — те же, что в монтаже, плюс H.266. У каждого
- * своя шкала качества и битрейта (`qualityScale`, `bitrateMarks`).
+ * Видеокодеки ручных настроек — те же, что в монтаже. У каждого своя шкала
+ * качества и битрейта (`qualityScale`, `bitrateMarks`).
  */
 const VIDEO_CODECS = [
   {
     value: 'av1_svt', label: 'AV1',
     title: 'Лучшее качество при меньшем весе. Кодируется дольше H.264 и H.265, совсем старые телефоны и телевизоры могут его не открыть. Играет в SIGame',
-  },
-  {
-    value: 'h266', label: 'H.266',
-    title: 'Новейший кодек: при той же картинке файл ещё легче, чем у AV1, но кодируется в разы дольше. Почти ничем пока не открывается — ни Windows, ни браузеры, ни SIGame, ни предпросмотр программы. Для архива на будущее',
   },
   {
     value: 'h265', label: 'H.265',
@@ -823,7 +820,7 @@ function ManualSection({
     >
       <span className="label">Видео</span>
       <Segmented
-        columns={4}
+        columns={3}
         value={codec}
         options={VIDEO_CODECS.map((item) => ({
           ...item,

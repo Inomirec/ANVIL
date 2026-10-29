@@ -215,7 +215,7 @@ export const CONTAINERS = [
  * «экономно», «обычно», «с запасом»; края шкалы — от половины экономного до
  * полутора «с запасом», чтобы подписи не жались в один угол.
  */
-const NORMAL_1080: Record<string, number> = { av1_svt: 4500, h266: 3500, h265: 6000, h264: 8000 }
+const NORMAL_1080: Record<string, number> = { av1_svt: 4500, h265: 6000, h264: 8000 }
 
 /**
  * Подсказки описывают сам готовый файл, а не сравнение с исходником: на
@@ -296,8 +296,6 @@ const qualityMarks = (low: number, mid: number, high: number) => [
 const QUALITY_SCALE: Record<string, { best: number; worst: number; marks: { crf: number; label: string; hint: string }[] }> = {
   av1_svt: { best: 16, worst: 52, marks: qualityMarks(46, 35, 24) },
   h265: { best: 14, worst: 40, marks: qualityMarks(34, 27, 20) },
-  // У H.266 шкала — qp кодировщика, от 0 до 63, как у AV1.
-  h266: { best: 16, worst: 48, marks: qualityMarks(40, 33, 26) },
   h264: { best: 12, worst: 38, marks: qualityMarks(32, 25, 18) },
 }
 
@@ -482,7 +480,7 @@ export function ComposeRenderPanel({
               }}
               className={`rounded-xl border px-3 py-2 text-left transition-colors ${
                 picked
-                  ? 'border-accent/60 bg-accent/10 shadow-[0_0_16px_rgba(22,156,145,0.22)]'
+                  ? 'border-accent/60 bg-accent/10 shadow-[0_0_8px_rgba(22,156,145,0.1)]'
                   : 'border-line-soft bg-surface-2 hover:border-line hover:bg-surface-3'
               }`}
             >

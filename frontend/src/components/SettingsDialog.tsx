@@ -193,7 +193,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
   return (
     <>
-      <Modal open={open} onClose={onClose} title="Настройки" wide>
+      <Modal open={open} onClose={onClose} title="Настройки" wide steady>
         <div className="grid gap-7 md:grid-cols-2">
           <div className="space-y-7">
             <Section title="Инструменты">
@@ -720,8 +720,8 @@ function TimelineFrames() {
             savePrefs({ timelineQuality: value })
           }}
           options={[
-            { value: 'normal', label: 'Обычные кадры', title: 'Мелкие кадры: быстрее готовятся и меньше весят' },
-            { value: 'high', label: 'Чёткие кадры', title: 'Кадры крупнее и чётче. По склейкам их выйдет меньше, а готовятся они дольше' },
+            { value: 'normal', label: 'Плохое качество', title: 'Мелкие кадры: быстрее готовятся и меньше весят' },
+            { value: 'high', label: 'Хорошее качество', title: 'Кадры крупнее и чётче. По склейкам их выйдет меньше, а готовятся они дольше' },
           ]}
         />
       )}

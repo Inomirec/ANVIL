@@ -552,12 +552,21 @@ export function ComposeTab() {
       useCompose.getState().setPlayhead(clip.start + Math.min(0.2, clip.duration / 2))
 
       const source = { width: info.media?.width ?? 0, height: info.media?.height ?? 0 }
+      // Частота кадров ролика — ближайшая из списка монтажа. У картинки её нет.
+      const rate =
+        clip.kind === 'video' && info.media?.fps
+          ? FRAME_RATES.find((item) => Math.abs(item.value - info.media!.fps!) < 0.05)?.value
+          : undefined
       if (firstPicture && source.width && source.height) {
         const state = useCompose.getState()
         const wanted = sourceFrame(source.width, source.height)
-        // Кадр уже такой же — спрашивать не о чем.
-        if (wanted.width !== state.width || wanted.height !== state.height) {
-          setFrameQuestion({ name: info.name, ...source })
+        // Кадр и частота уже такие же — спрашивать не о чем.
+        if (
+          wanted.width !== state.width ||
+          wanted.height !== state.height ||
+          (rate !== undefined && Math.abs(rate - state.fps) > 1e-3)
+        ) {
+          setFrameQuestion({ name: info.name, ...source, fps: rate })
           // Вопрос висит — отметку снимет ответ на него.
           claimed = false
         }
@@ -1261,9 +1270,10 @@ export function ComposeTab() {
 
       <ComposeFrameAsk
         question={frameQuestion}
-        current={{ width, height }}
+        current={{ width, height, fps }}
         onSource={() => {
           if (frameQuestion) useCompose.getState().fitToSource(frameQuestion.width, frameQuestion.height)
+          if (frameQuestion?.fps) setFps(frameQuestion.fps)
           setFrameQuestion(null)
           framePending.current = false
         }}

@@ -526,7 +526,7 @@ function FileRow({
     <li>
       <div
         className={`group flex cursor-pointer items-center ${dense ? 'gap-1.5 px-1.5 py-[3px]' : 'gap-2.5 rounded-lg px-2 py-1.5'} transition-colors ${
-          active ? 'bg-accent/12 ring-1 ring-accent/60 shadow-[0_0_14px_rgba(22,156,145,0.18)]' : 'hover:bg-surface-2'
+          active ? 'bg-accent/12 ring-1 ring-accent/60 shadow-[0_0_8px_rgba(22,156,145,0.08)]' : 'hover:bg-surface-2'
         }`}
         onClick={onOpen}
         {...dragToTimeline(file.path)}

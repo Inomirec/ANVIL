@@ -66,7 +66,7 @@ def _video(
     adapt_crf: bool = True,
     speed_preset: str = "6",
     max_height: int = 720,
-    max_fps: int = 30,
+    max_fps: int = 0,
     audio_codec: str = "opus",
     audio_bitrate: int = 96,
     loudnorm: bool = True,
@@ -171,7 +171,7 @@ VIDEO_PRESETS: list[dict[str, Any]] = [
     _video(
         "pack_quality",
         "Качество",
-        "На глаз почти неотличимо от исходника, частота кадров не меняется. "
+        "На глаз почти неотличимо от исходника. "
         "Сжимает слабее остальных, но обычный ролик всё равно уменьшится в "
         "разы. Годится и для архива.",
         # Бывший «Архив»: прежнее «Качество» (38) почти не отличалось от
@@ -179,7 +179,6 @@ VIDEO_PRESETS: list[dict[str, Any]] = [
         # разрешение нужна пакам, а здесь молча ухудшала бы 1080p и 4K.
         crf=30,
         adapt_crf=False,
-        max_fps=0,
         audio_bitrate=128,
         accent="amber",
     ),
@@ -228,7 +227,6 @@ VIDEO_PRESETS: list[dict[str, Any]] = [
         adapt_crf=False,
         speed_preset="medium",
         max_height=0,
-        max_fps=0,
         audio_codec="aac",
         audio_bitrate=320,
         accent="emerald",
