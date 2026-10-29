@@ -773,7 +773,7 @@ export function ComposeTab() {
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div
-            className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-2/60 p-4 ${noStraySelection.className}`}
+            className={`flex min-h-0 min-w-0 flex-1 stage flex-col overflow-hidden p-4 ${noStraySelection.className}`}
             onMouseDownCapture={noStraySelection.onMouseDownCapture}
             onDragStart={noStraySelection.onDragStart}
             onWheel={(event) => {

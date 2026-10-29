@@ -478,7 +478,7 @@ export function ComposeRenderPanel({
               }}
               className={`rounded-xl border px-3 py-2 text-left transition-colors ${
                 picked
-                  ? 'border-accent/60 bg-accent/10'
+                  ? 'border-accent/60 bg-accent/10 shadow-[0_0_16px_rgba(22,156,145,0.22)]'
                   : 'border-line-soft bg-surface-2 hover:border-line hover:bg-surface-3'
               }`}
             >

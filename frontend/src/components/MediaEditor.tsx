@@ -377,9 +377,13 @@ export function MediaEditor({
       ? (trim.out ?? duration) - (trim.in ?? 0)
       : null
 
-  const details = [
+  // Сведения о файле делятся на два угла над кадром: слева сам файл, справа
+  // его дорожки.
+  const fileDetails = [
     humanSize(file.size),
     media?.width ? `${media.width}×${media.height}${media.fps ? ` · ${media.fps.toFixed(media.fps % 1 ? 2 : 0)} кадров/с` : ''}` : '',
+  ].filter(Boolean)
+  const streamDetails = [
     media?.videoCodec ? `Видео ${codecName(media.videoCodec)}${media.videoBitRate ? ` · ${kbps(media.videoBitRate)}` : ''}` : '',
     media?.audioCodec
       ? `Звук ${codecName(media.audioCodec)}${media.audioChannels ? ` · ${channelsName(media.audioChannels)}` : ''}${media.audioBitRate ? ` · ${kbps(media.audioBitRate)}` : ''}`
@@ -470,16 +474,17 @@ export function MediaEditor({
       <div
         ref={zoom.shell}
         onMouseDown={zoom.onMouseDown}
-        // Вокруг кадра — цвет окна, у самого кадра — чёрный фон и рамка: иначе
-        // у вертикального ролика не понять, где кончается видео, а где поле.
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-surface-2/60 p-4"
+        // Вокруг кадра — сцена с сеткой, у самого кадра — чёрный фон и рамка:
+        // иначе у вертикального ролика не понять, где кончается видео, а где
+        // поле. Сверху отступ под сведения о файле: они стоят над кадром.
+        className="stage relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 pt-9"
       >
         {zoom.view !== 1 && (
           <button
             type="button"
             onClick={zoom.reset}
             title="Масштаб просмотра — на готовый файл не влияет. Нажмите, чтобы вернуть обычный размер."
-            className="absolute right-3 top-3 z-10 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
+            className="absolute bottom-3 right-3 z-10 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             {Math.round(zoom.view * 100)}%
           </button>
@@ -533,10 +538,18 @@ export function MediaEditor({
           </div>
         )}
 
-        {/* Сведения о файле — полупрозрачно в углу, как у картинок: отдельная
-            строка под плеером съедала место у кадра. */}
-        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex max-w-[calc(100%-24px)] items-center gap-2.5 overflow-hidden whitespace-nowrap bg-surface/70 px-2.5 py-1 text-[11px] text-ink-faint opacity-80 ring-1 ring-line-soft backdrop-blur">
-          {details.map((item) => (
+        {/* Сведения о файле — мелко по углам над кадром, как у картинок:
+            отдельная строка под плеером съедала место, а на самом кадре они
+            мешали смотреть. */}
+        <div className="pointer-events-none absolute left-3 top-2.5 z-10 flex max-w-[calc(40%-24px)] items-center gap-2.5 overflow-hidden whitespace-nowrap text-[11px] text-ink-faint">
+          {fileDetails.map((item) => (
+            <span key={item} className="truncate">
+              {item}
+            </span>
+          ))}
+        </div>
+        <div className="pointer-events-none absolute right-3 top-2.5 z-10 flex max-w-[calc(60%-24px)] items-center gap-2.5 overflow-hidden whitespace-nowrap text-[11px] text-ink-faint">
+          {streamDetails.map((item) => (
             <span key={item} className="truncate">
               {item}
             </span>

@@ -390,7 +390,7 @@ def launch_window(url: str, port: int) -> bool:
         # масштабу монитора, где окно стоит. Форма считала его один раз и на
         # другом мониторе путалась; ей оставляем только страховку.
         min_size=(400, 300),
-        background_color="#0b0d12",
+        background_color="#1b1b1b",
         text_select=True,
     )
 

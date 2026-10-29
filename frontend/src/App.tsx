@@ -355,10 +355,14 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
-        active ? 'bg-surface-3 text-ink' : 'text-ink-faint hover:bg-surface-2 hover:text-ink-dim'
+      className={`relative isolate flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
+        active ? 'text-white' : 'text-ink-faint hover:bg-surface-2 hover:text-ink-dim'
       }`}
     >
+      {/* Открытая вкладка выделена маркером, как слово в роликах. */}
+      {active && (
+        <span className="absolute inset-x-[-1px] top-px bottom-0 -z-10 rotate-[-1.6deg] skew-x-[-4deg] rounded-[5px] bg-accent-strong" />
+      )}
       {icon}
       {label}
     </button>

@@ -60,7 +60,7 @@ export function Button({
 }) {
   const tones: Record<ButtonTone, string> = {
     primary:
-      'bg-accent text-white hover:bg-accent-soft shadow-[0_2px_14px_-4px_rgba(124,92,255,0.8)]',
+      'bg-accent-strong text-white hover:bg-accent shadow-[0_0_22px_rgba(22,156,145,0.35),inset_0_1px_0_rgba(255,255,255,0.12)]',
     subtle: 'bg-surface-3 text-ink hover:bg-line',
     ghost: 'bg-transparent text-ink-dim hover:bg-surface-3 hover:text-ink',
     danger: 'bg-danger/15 text-danger hover:bg-danger/25',
@@ -150,7 +150,7 @@ export function Toggle({
         />
       </button>
       <span className="min-w-0">
-        <span className="block text-[13px] leading-tight text-ink">{label}</span>
+        <span className="block text-[13px] font-medium leading-tight text-ink">{label}</span>
         {hint && !quiet && (
           <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint">{hint}</span>
         )}
@@ -413,7 +413,7 @@ export function Section({
           >
             <ChevronDown
               size={12}
-              className={`shrink-0 text-ink-faint transition-transform group-hover:text-ink-dim ${
+              className={`shrink-0 text-accent-soft transition-transform group-hover:text-ink ${
                 folded ? '-rotate-90' : ''
               }`}
             />

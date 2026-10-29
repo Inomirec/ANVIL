@@ -176,7 +176,7 @@ export function RectCanvas({
     if (chosen.length) {
       ctx.save()
       ctx.globalAlpha = 0.55
-      drawStrokes(ctx, chosen.map((stroke) => ({ ...stroke, color: undefined })), '#7c5cff')
+      drawStrokes(ctx, chosen.map((stroke) => ({ ...stroke, color: undefined })), '#169c91')
       ctx.restore()
     }
   }, [strokes, liveStroke, width, height, paintColor, marked])

@@ -16,7 +16,7 @@ export function GifView({ file }: { file: FileInfo }) {
       <div
         ref={zoom.shell}
         onMouseDown={zoom.onMouseDown}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-surface-2/60 p-4"
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 stage"
       >
         {zoom.view !== 1 && (
           <button

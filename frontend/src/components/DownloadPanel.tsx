@@ -348,7 +348,7 @@ export function DownloadPanel() {
           <button
             type="button"
             onClick={() => void pasteFromClipboard()}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-dashed border-accent/40 py-2 text-[12px] text-accent-soft transition-colors hover:border-accent hover:bg-accent/10"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-dashed border-line py-2 text-[12px] text-ink-dim transition-colors hover:border-ink-faint hover:text-ink"
           >
             <ClipboardPaste size={13} />
             Вставить из буфера

@@ -462,7 +462,7 @@ export function ExportPanel({
                 }
                 className={`rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                   presetId === preset.id
-                    ? 'border-accent/60 bg-accent/10'
+                    ? 'border-accent/60 bg-accent/10 shadow-[0_0_16px_rgba(22,156,145,0.22)]'
                     : 'border-line-soft bg-surface-2 hover:border-line hover:bg-surface-3'
                 }`}
               >
@@ -624,7 +624,7 @@ export function ExportPanel({
           {command !== null && (
           <div className="space-y-2">
             <textarea
-              className="field h-40 resize-y font-mono text-[10.5px] leading-relaxed"
+              className="field h-40 resize-y font-code text-[10.5px] leading-relaxed"
               spellCheck={false}
               value={command}
               onChange={(event) => setCommand(event.target.value)}

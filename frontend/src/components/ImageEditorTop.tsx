@@ -496,10 +496,12 @@ export function ImageEditor({
   const hasEdits = Boolean(edit.crop) || edit.boxes.length > 0 || texts.length > 0
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
+      {/* Сверху отступ под «До / После» и сведения о файле: они стоят над
+          картинкой, а не на ней. */}
       <div
         ref={viewportRef}
-        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#0e1016] p-4 ${noStraySelection.className} ${
+        className={`stage relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 pt-9 ${noStraySelection.className} ${
           panning ? 'cursor-grabbing' : spaceHeld ? 'cursor-grab' : ''
         }`}
         onMouseDownCapture={noStraySelection.onMouseDownCapture}
@@ -511,17 +513,6 @@ export function ImageEditor({
           if (tool === 'view' || spaceRef.current) resetView()
         }}
       >
-        {/* Шахматка под прозрачными картинками */}
-        <div
-          className="pointer-events-none absolute inset-0 opacity-[0.035]"
-          style={{
-            backgroundImage:
-              'linear-gradient(45deg, #fff 25%, transparent 25%), linear-gradient(-45deg, #fff 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #fff 75%), linear-gradient(-45deg, transparent 75%, #fff 75%)',
-            backgroundSize: '20px 20px',
-            backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0',
-          }}
-        />
-
         {/* Обёртка обтягивает картинку, поэтому наложения совпадают с ней точно.
             Масштаб задан ей целиком — разметка правок едет вместе с картинкой,
             и пересчитывать координаты не нужно. Переменная --z отдана вниз:
@@ -622,9 +613,9 @@ export function ImageEditor({
           )}
         </div>
 
-        {/* Сведения о картинке — на ней самой, справа внизу и полупрозрачно:
-            на панели инструментов им не хватало места. */}
-        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 bg-surface/70 px-2.5 py-1 text-[11px] text-ink-faint opacity-80 ring-1 ring-line-soft backdrop-blur">
+        {/* Сведения о картинке — мелко в правом верхнем углу, над ней: во
+            время правки они не нужны и не должны закрывать картинку. */}
+        <div className="pointer-events-none absolute right-3 top-2.5 z-10 flex items-center gap-2.5 text-[11px] text-ink-faint">
           {edit.boxes.length > 0 && <span className="text-accent-soft">масок: {edit.boxes.length}</span>}
           {edit.crop && (
             <span className="text-accent-soft">
@@ -641,14 +632,14 @@ export function ImageEditor({
           {media?.hasAlpha && <span className="text-accent-soft">прозрачность</span>}
         </div>
 
-        {/* Масштаб — в углу картинки, как у видео: на панели инструментов
-            ему не хватало места. Нажатие возвращает картинку на место. */}
+        {/* Масштаб — в правом нижнем углу: верхний занят сведениями о файле.
+            Нажатие возвращает картинку на место. */}
         {(zoom !== 1 || pan.x !== 0 || pan.y !== 0) && (
           <button
             type="button"
             onClick={resetView}
             title="Вписать — вернуть картинку в исходное положение. Колесо — приблизить, средняя кнопка или пробел — двигать"
-            className="absolute right-3 top-3 z-10 flex items-center gap-1 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
+            className="absolute bottom-3 right-3 z-10 flex items-center gap-1 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             <Maximize2 size={11} />
             {Math.round(zoom * 100)}%
@@ -656,7 +647,7 @@ export function ImageEditor({
         )}
 
         {preview && (
-          <div className="absolute bottom-3 left-3 flex overflow-hidden ring-1 ring-line-soft">
+          <div className="absolute left-3 top-1.5 z-10 flex overflow-hidden ring-1 ring-line-soft">
             {[
               { value: false, label: 'До', size: file.size },
               { value: true, label: 'После', size: preview.size },
@@ -667,24 +658,24 @@ export function ImageEditor({
                 onClick={() => setShowAfter(item.value)}
                 className={`px-2.5 py-1 text-[11px] transition-colors ${
                   showAfter === item.value
-                    ? 'bg-accent text-white'
+                    ? 'bg-accent-strong text-white'
                     : 'bg-surface/90 text-ink-faint hover:text-ink-dim'
                 }`}
               >
+                {/* Подпись и вес — одним шрифтом, размером и цветом. */}
                 {item.label}
-                <span className="ml-1.5 font-mono tabular-nums opacity-70">
-                  {humanSize(item.size)}
-                </span>
+                <span className="ml-1.5 font-mono tabular-nums">{humanSize(item.size)}</span>
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Инструменты */}
-      {/* Одна строка: сведения о файле справа сжимаются, а не переносят
-          панель на вторую строку. */}
-      <div className="flex h-11 shrink-0 items-center gap-x-2 border-t border-line-soft bg-surface px-3 text-[11px] text-ink-faint">
+      {/* Инструменты — плашкой внизу по центру сцены. С настройками
+          инструмента она раздаётся в обе стороны. Центрируется полями, а не
+          transform: под transform всплывающие окошки выбора цвета и шрифта
+          считали бы место от плашки, а не от окна. */}
+      <div className="absolute inset-x-0 bottom-4 z-20 mx-auto flex h-11 w-fit max-w-[calc(100%-32px)] items-center gap-x-2 rounded-xl bg-surface px-3 text-[11px] text-ink-faint shadow-[0_12px_30px_rgba(0,0,0,0.45)] ring-1 ring-line-soft">
         <span className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line-soft">
           {TOOLS.map((item) => (
             <button
@@ -698,7 +689,7 @@ export function ImageEditor({
               aria-label={item.label}
               className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
                 tool === item.value
-                  ? 'bg-accent text-white'
+                  ? 'bg-accent-strong text-white'
                   : 'text-ink-faint hover:bg-surface-3 hover:text-ink-dim'
               }`}
             >
