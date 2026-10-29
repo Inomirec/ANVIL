@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Download, Pause, Play, Scissors, Volume2, VolumeX } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Download, Pause, Play, Scissors, SkipBack } from 'lucide-react'
 import { api } from '../lib/api'
 import { humanDuration, timecode } from '../lib/format'
-import type { ResolvedLink } from '../lib/types'
+import { loadPrefs, savePrefs } from '../lib/prefs'
+import type { FilmstripInfo, ResolvedLink } from '../lib/types'
 import { useStore } from '../store'
 import { Timeline } from './Timeline'
-import { Button, IconButton, Modal, Spinner } from './ui'
+import { VolumeControl } from './VolumeControl'
+import { Button, Dropdown, IconButton, Modal, Spinner } from './ui'
 
 /** Ключ громкости общий с плеером медиатеки: настраивают её один раз. */
 const VOLUME_KEY = 'sgh.volume'
@@ -22,11 +24,14 @@ export function LinkPreview({
   open,
   onClose,
   onApply,
+  options = {},
 }: {
   url: string
   open: boolean
   onClose: () => void
   onApply: (start: number | null, end: number | null) => void
+  /** Настройки скачивания из колонки справа: качество, формат, кодек, пресет. */
+  options?: Record<string, unknown>
 }) {
   const toast = useStore((state) => state.toast)
   const revealQueue = useStore((state) => state.revealQueue)
@@ -48,11 +53,22 @@ export function LinkPreview({
     out: null,
   })
   const [busy, setBusy] = useState(false)
+  // Качество предпросмотра: какой из потоков ссылки играть.
+  const [token, setToken] = useState<string | null>(null)
+  // Куда вернуться после смены качества — новый поток начинается с нуля.
+  const resume = useRef<{ at: number; play: boolean } | null>(null)
+  const [strip, setStrip] = useState<FilmstripInfo | null>(null)
+  const [stripLoading, setStripLoading] = useState(false)
+  const [peaks, setPeaks] = useState<number[] | null>(null)
+  const [peaksLoading, setPeaksLoading] = useState(false)
 
   useEffect(() => {
     if (!open || !url) return
     let cancelled = false
     setInfo(null)
+    setToken(null)
+    setStrip(null)
+    setPeaks(null)
     setError(null)
     setTrim({ in: null, out: null })
     setTime(0)
@@ -65,6 +81,10 @@ export function LinkPreview({
         if (cancelled) return
         setInfo(data)
         if (data.duration) setDuration(data.duration)
+        // Запомненное качество предпросмотра, если у ссылки такое есть.
+        const wanted = loadPrefs().previewHeight
+        const same = data.previewOptions?.find((item) => item.height === wanted)
+        setToken(same?.token ?? data.previewToken)
       })
       .catch((err) => !cancelled && setError((err as Error).message))
       .finally(() => !cancelled && setLoading(false))
@@ -73,6 +93,35 @@ export function LinkPreview({
       cancelled = true
     }
   }, [open, url])
+
+  // Кадры и волна на дорожках — их программа строит по ссылке, не скачивая
+  // ролик: кадры — отдельными переходами по потоку, волну — по потоку одного
+  // звука. Пока готовятся, на дорожках заглушка.
+  useEffect(() => {
+    if (!info?.previewToken) return
+    let alive = true
+    setStripLoading(true)
+    api
+      .streamStrip(info.previewToken)
+      .then((data) => alive && setStrip(data))
+      .catch(() => alive && setStrip(null))
+      .finally(() => alive && setStripLoading(false))
+    // Отдельного потока звука нет — волну строим по самому ролику, но только
+    // у коротких: иначе ради неё пришлось бы тянуть весь файл.
+    const sound = info.audioToken ?? ((info.duration ?? 0) <= 600 ? info.previewToken : null)
+    if (!sound) return () => {
+      alive = false
+    }
+    setPeaksLoading(true)
+    api
+      .streamWaveform(sound)
+      .then((data) => alive && setPeaks(data.peaks))
+      .catch(() => alive && setPeaks(null))
+      .finally(() => alive && setPeaksLoading(false))
+    return () => {
+      alive = false
+    }
+  }, [info])
 
   const seek = useCallback((value: number) => {
     const video = videoRef.current
@@ -173,9 +222,10 @@ export function LinkPreview({
     setBusy(true)
     try {
       await api.download({
+        max_height: 0,
+        ...options,
         items: [{ url, start: trim.in, end: trim.out }],
         mode: 'video',
-        max_height: 0,
       })
       toast('Отрезок добавлен в очередь скачивания', 'ok')
       revealQueue()
@@ -190,6 +240,109 @@ export function LinkPreview({
   const canPreview = Boolean(info?.previewToken)
   const selection =
     trim.in !== null && trim.out !== null ? Math.max(trim.out - trim.in, 0) : null
+  const cutting =
+    (trim.in !== null && trim.in > 0.05) || (trim.out !== null && duration > 0 && trim.out < duration - 0.05)
+  const qualities = info?.previewOptions ?? []
+  const shownHeight = qualities.find((item) => item.token === token)?.height ?? info?.previewHeight ?? 0
+
+  const changeVolume = (value: number) => {
+    setVolume(value)
+    setMuted(value === 0)
+    localStorage.setItem(VOLUME_KEY, String(value))
+  }
+
+  // Панель над таймлайном — как в медиатеке: слева время и метки,
+  // посередине просмотр, справа качество предпросмотра.
+  const left = (
+    <>
+      <span className="shrink-0 cursor-text select-text font-mono text-[11px] tabular-nums text-ink-dim">
+        {timecode(time, true)}
+        <span className="text-ink-faint"> / {timecode(duration)}</span>
+      </span>
+      <span className="mx-0.5 h-4 w-px shrink-0 bg-line-soft" />
+      <IconButton
+        className="h-7 w-7"
+        onClick={() => setTrim({ ...trim, in: Math.min(time, trim.out ?? duration) })}
+        title={`Метка начала (I)${trim.in !== null ? ` — сейчас ${timecode(trim.in, true)}` : ''}`}
+      >
+        <span className="text-[12px] font-bold text-accent-soft">I</span>
+      </IconButton>
+      <IconButton
+        className="h-7 w-7"
+        onClick={() => setTrim({ ...trim, out: Math.max(time, trim.in ?? 0) })}
+        title={`Метка конца (O)${trim.out !== null ? ` — сейчас ${timecode(trim.out, true)}` : ''}`}
+      >
+        <span className="text-[12px] font-bold text-accent-soft">O</span>
+      </IconButton>
+      {selection !== null && (
+        <button
+          type="button"
+          onClick={() => setTrim({ in: 0, out: duration })}
+          title="Длина отрезка. Нажмите, чтобы вернуть метки на края ролика"
+          className={`flex h-7 shrink-0 items-center gap-1 px-2 font-mono text-[11px] tabular-nums ${
+            cutting ? 'bg-accent/15 text-accent-soft hover:bg-accent/25' : 'text-ink-faint hover:bg-surface-3 hover:text-ink-dim'
+          }`}
+        >
+          <Scissors size={11} />
+          {timecode(selection, true)}
+        </button>
+      )}
+    </>
+  )
+  const center = (
+    <>
+      <IconButton className="h-7 w-7" onClick={() => seek(trim.in ?? 0)} title="К началу отрезка">
+        <SkipBack size={14} />
+      </IconButton>
+      <IconButton className="h-7 w-7" onClick={togglePlay} active={playing} title="Воспроизведение / пауза (Пробел)">
+        {playing ? <Pause size={14} /> : <Play size={14} />}
+      </IconButton>
+      <VolumeControl
+        small
+        volume={volume}
+        muted={muted}
+        popupClassName="@[700px]:hidden"
+        onMute={() => setMuted((value) => !value)}
+        onChange={changeVolume}
+      />
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={Math.round((muted ? 0 : volume) * 100)}
+        onChange={(event) => changeVolume(Number(event.target.value) / 100)}
+        title="Громкость просмотра"
+        className="ml-0.5 hidden w-[72px] @[700px]:block"
+      />
+    </>
+  )
+  const right = shownHeight ? (
+    <Dropdown
+      value={token ?? ''}
+      align="right"
+      options={qualities.map((item) => ({ value: item.token, label: `${item.height}p` }))}
+      onChange={(next) => {
+        const video = videoRef.current
+        resume.current = { at: video?.currentTime ?? time, play: Boolean(video && !video.paused) }
+        setToken(next)
+        const picked = qualities.find((item) => item.token === next)
+        if (picked) savePrefs({ previewHeight: picked.height })
+      }}
+      className="flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] text-ink-dim hover:bg-surface-3 hover:text-ink"
+    >
+      <span
+        title={
+          qualities.length > 1
+            ? 'Качество предпросмотра. Скачается всё равно то качество, что выбрано справа'
+            : 'Других качеств предпросмотра сайт не даёт: браузер играет только потоки, где картинка и звук вместе'
+        }
+        className="font-mono tabular-nums"
+      >
+        {shownHeight}p
+      </span>
+      {qualities.length > 1 && <ChevronDown size={12} className="text-ink-faint" />}
+    </Dropdown>
+  ) : null
 
   return (
     <Modal open={open} onClose={onClose} title="Разметка до скачивания" wide>
@@ -223,12 +376,19 @@ export function LinkPreview({
               <div className="relative flex min-h-[220px] items-center justify-center overflow-hidden rounded-xl bg-black">
                 <video
                   ref={videoRef}
-                  src={`/api/stream/${info.previewToken}`}
+                  src={`/api/stream/${token ?? info.previewToken}`}
                   className="max-h-[46vh] max-w-full"
                   onLoadedMetadata={(event) => {
                     const total = event.currentTarget.duration || info.duration || 0
                     setDuration(total)
                     ensureTrim(total)
+                    // Сменили качество — продолжаем с того же места.
+                    const back = resume.current
+                    if (back) {
+                      resume.current = null
+                      event.currentTarget.currentTime = back.at
+                      if (back.play) void event.currentTarget.play().catch(() => undefined)
+                    }
                   }}
                   onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
                   onPlay={() => setPlaying(true)}
@@ -241,8 +401,9 @@ export function LinkPreview({
                 />
               </div>
 
-              <div className="px-1 pb-1">
+              <div className="-mx-5 border-b border-line-soft">
                 <Timeline
+                  toolbar={{ left, center, right }}
                   duration={duration}
                   currentTime={time}
                   inPoint={trim.in}
@@ -250,79 +411,15 @@ export function LinkPreview({
                   onSeek={seek}
                   onChangeIn={(value) => setTrim({ ...trim, in: value })}
                   onChangeOut={(value) => setTrim({ ...trim, out: value })}
-                  hasVideo={false}
+                  strip={strip}
+                  stripLoading={stripLoading}
+                  peaks={peaks}
+                  peaksLoading={peaksLoading}
+                  hasVideo
                   hasAudio
                   playing={playing}
                 />
               </div>
-
-              <div className="flex flex-wrap items-center gap-2 rounded-xl bg-surface-2 px-3 py-2">
-                <button
-                  type="button"
-                  onClick={togglePlay}
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-soft"
-                >
-                  {playing ? <Pause size={15} /> : <Play size={15} className="ml-0.5" />}
-                </button>
-                <span className="font-mono text-[12px] tabular-nums text-ink-dim">
-                  {timecode(time, true)}{' '}
-                  <span className="text-ink-faint">/ {timecode(duration)}</span>
-                </span>
-                <IconButton onClick={() => setMuted((value) => !value)} title="Звук (M)">
-                  {muted || volume === 0 ? <VolumeX size={15} /> : <Volume2 size={15} />}
-                </IconButton>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={muted ? 0 : volume}
-                  onChange={(event) => {
-                    const value = Number(event.target.value)
-                    setVolume(value)
-                    setMuted(value === 0)
-                    localStorage.setItem(VOLUME_KEY, String(value))
-                  }}
-                  className="w-20"
-                  title="Громкость"
-                />
-
-                <div className="mx-1 h-5 w-px bg-line" />
-
-                <button
-                  type="button"
-                  onClick={() => setTrim({ ...trim, in: time })}
-                  className="w-[92px] rounded-lg bg-surface-3 px-2.5 py-1.5 text-[12px] font-medium hover:bg-line"
-                >
-                  <span className="text-accent-soft">In</span>{' '}
-                  <span className="tabular-nums text-ink-faint">
-                    {trim.in !== null ? timecode(trim.in, true) : '—'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTrim({ ...trim, out: time })}
-                  className="w-[104px] rounded-lg bg-surface-3 px-2.5 py-1.5 text-[12px] font-medium hover:bg-line"
-                >
-                  <span className="text-accent-soft">Out</span>{' '}
-                  <span className="tabular-nums text-ink-faint">
-                    {trim.out !== null ? timecode(trim.out, true) : '—'}
-                  </span>
-                </button>
-
-                {selection !== null && (
-                  <span className="chip bg-accent/15 text-accent-soft">
-                    <Scissors size={11} />
-                    {timecode(selection, true)}
-                  </span>
-                )}
-              </div>
-
-              <p className="text-[11px] leading-snug text-ink-faint">
-                Предпросмотр идёт в облегчённом качестве
-                {info.previewHeight ? ` (${info.previewHeight}p)` : ''} — скачается всё равно
-                максимальное. Скачивается только выбранный отрезок, а не весь ролик.
-              </p>
 
               <div className="flex gap-2">
                 <Button

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from ..core import streamproxy
 
@@ -20,6 +20,37 @@ _PASS_THROUGH = {
     "last-modified",
     "etag",
 }
+
+
+def _local(request: Request, token: str) -> str:
+    """Адрес потока через наш же прокси — его читает ffmpeg."""
+    return f"{str(request.base_url).rstrip('/')}/api/stream/{token}"
+
+
+@router.get("/{token}/strip")
+async def strip(token: str, request: Request) -> dict:
+    """Лента кадров для таймлайна окна разметки."""
+    try:
+        return await streamproxy.filmstrip(token, _local(request, token))
+    except (RuntimeError, ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/{token}/strip.jpg")
+async def strip_image(token: str) -> FileResponse:
+    sprite = streamproxy.strip_file(token)
+    if not sprite:
+        raise HTTPException(404, "Ленты кадров ещё нет")
+    return FileResponse(sprite, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/{token}/waveform")
+async def waveform(token: str, request: Request) -> dict:
+    """Волна звука для таймлайна окна разметки."""
+    try:
+        return await streamproxy.waveform(token, _local(request, token))
+    except (RuntimeError, ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/{token}")

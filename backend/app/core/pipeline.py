@@ -557,9 +557,20 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
         mode = request.mode
         if mode == "auto":
             mode = "images" if download.looks_like_gallery(url) else "video"
+        # «Картинки» по ссылке на видео — это его превью: галерей на
+        # видеохостинге не бывает, и gallery-dl ответил бы ошибкой.
+        if mode == "images" and download.looks_like_video(url):
+            mode = "thumbnail"
+        extra = {
+            "container": request.container,
+            "video_codec": request.video_codec,
+            "thumbnail": request.thumbnail,
+        }
 
         files: list[Path] = []
-        if mode == "images":
+        if mode == "thumbnail":
+            files = await download.run_ytdlp(ctx, url, target, mode="thumbnail")
+        elif mode == "images":
             try:
                 files = await download.run_gallery_dl(
                     ctx, url, target, selection=request.selection
@@ -573,7 +584,7 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
                     files = await download.run_ytdlp(
                         ctx, url, target,
                         mode="video", max_height=request.max_height,
-                        audio_format=request.audio_format, section=section,
+                        audio_format=request.audio_format, section=section, **extra,
                     )
                 except RuntimeError:
                     # Для таких ссылок главный загрузчик — gallery-dl, и
@@ -586,7 +597,7 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
                 files = await download.run_ytdlp(
                     ctx, url, target,
                     mode=mode, max_height=request.max_height,
-                    audio_format=request.audio_format, section=section,
+                    audio_format=request.audio_format, section=section, **extra,
                 )
             except RuntimeError as exc:
                 if (
@@ -623,7 +634,10 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
         bus.publish("library.changed", {"path": str(target)})
 
         if request.auto_process_preset:
-            _chain_processing(files, request.auto_process_preset)
+            _chain_processing(
+                files, request.auto_process_preset,
+                keep_original=request.keep_original, subfolder=request.process_subfolder,
+            )
 
     title = url
     if section:
@@ -645,8 +659,16 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
     )
 
 
-def _chain_processing(files: list[Path], preset_id: str) -> None:
-    """Автоматически ставит скачанные файлы в очередь сжатия."""
+def _chain_processing(
+    files: list[Path], preset_id: str, *, keep_original: bool = True, subfolder: bool = True
+) -> None:
+    """Автоматически ставит скачанные файлы в очередь сжатия.
+
+    Оригинал после сжатия уходит в корзину, если человек его не оставляет, —
+    так же, как галочка «Удалить оригинал» в медиатеке: только когда
+    результат готов и не тяжелее исходника. Без подпапки результат ложится
+    рядом со скачанным.
+    """
     preset = presets.get(preset_id)
     if not preset:
         return
@@ -656,7 +678,14 @@ def _chain_processing(files: list[Path], preset_id: str) -> None:
             continue
         if preset["kind"] != kind:
             continue
-        payload = {"source": str(file), "kind": kind, "preset_label": preset["label"]}
+        payload: dict[str, object] = {
+            "source": str(file),
+            "kind": kind,
+            "preset_label": preset["label"],
+            "replace_original": not keep_original,
+        }
+        if not subfolder:
+            payload["output_dir"] = str(file.parent)
         options = preset.get("options", {})
         for section in ("video", "audio", "image"):
             if section in options:

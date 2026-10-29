@@ -227,9 +227,17 @@ def build_ytdlp_args(
     audio_format: str,
     print_file: Path,
     section: tuple[float | None, float | None] | None = None,
+    container: str | None = None,
+    video_codec: str = "any",
+    thumbnail: bool = False,
 ) -> list[str]:
-    """Аргументы yt-dlp для одной ссылки."""
+    """Аргументы yt-dlp для одной ссылки.
+
+    ``mode`` ``thumbnail`` — только превью ролика, без самого ролика.
+    """
     settings = config.load().download
+    if container is None:
+        container = "mp4" if settings.force_mp4 else "auto"
     args = [
         binaries.require("yt-dlp"),
         "--newline",
@@ -284,7 +292,10 @@ def build_ytdlp_args(
     else:
         args += ["--no-playlist"]
 
-    if mode == "audio":
+    if mode == "thumbnail":
+        # Превью ролика вместо ролика: «Картинки» по ссылке на видео.
+        args += ["--skip-download", "--write-thumbnail"]
+    elif mode == "audio":
         args += ["-f", "bestaudio/best", "-x"]
         if audio_format != "best":
             args += ["--audio-format", audio_format]
@@ -293,7 +304,13 @@ def build_ytdlp_args(
             args += ["--embed-metadata", "--embed-thumbnail"]
     else:
         height_filter = f"[height<={max_height}]" if max_height else ""
-        if settings.force_mp4:
+        if video_codec != "any":
+            # Кодек — предпочтение, а не требование: если у ролика его нет,
+            # скачается лучшее, что есть. Важнее разрешения: «H.264» значит
+            # H.264, даже если в AV1 у сайта есть кадр крупнее (у YouTube
+            # H.264 бывает только до 1080p).
+            args += ["-S", f"vcodec:{'h264' if video_codec == 'h264' else 'av01'},res"]
+        if container == "mp4":
             # Дорожки, которые штатно живут в MP4 (H.264/AV1 + AAC), — гарантия
             # того, что файл откроется во встроенном плеере со звуком.
             selector = (
@@ -304,11 +321,24 @@ def build_ytdlp_args(
             # Если исходник всё же оказался в другом контейнере — переупакуем
             # без перекодирования.
             args += ["--remux-video", "mp4"]
+        elif container == "mkv":
+            selector = f"bv*{height_filter}+ba/b{height_filter}/b"
+            args += ["-f", selector, "--merge-output-format", "mkv", "--remux-video", "mkv"]
+        elif container == "webm":
+            # В WebM кладутся только VP9/AV1 с Opus. Нет таких дорожек —
+            # файл соберётся в MKV, чем падать.
+            selector = (
+                f"bv*[ext=webm]{height_filter}+ba[ext=webm]/"
+                f"bv*{height_filter}+ba/b{height_filter}/b"
+            )
+            args += ["-f", selector, "--merge-output-format", "webm/mkv"]
         else:
             selector = f"bv*{height_filter}+ba/b{height_filter}/b"
             args += ["-f", selector]
         if settings.embed_metadata:
             args += ["--embed-metadata"]
+        if thumbnail:
+            args += ["--write-thumbnail"]
 
     args.append(url)
     return args
@@ -348,9 +378,17 @@ async def run_ytdlp(
     max_height: int = 0,
     audio_format: str = "opus",
     section: tuple[float | None, float | None] | None = None,
+    container: str | None = None,
+    video_codec: str = "any",
+    thumbnail: bool = False,
 ) -> list[Path]:
     """Скачивает ссылку через yt-dlp, отдавая прогресс в задачу."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Превью yt-dlp в список готовых файлов не пишет — находим их по папке.
+    # Только верхний уровень: превью ложится рядом с роликом, а обходить всё
+    # «Скачанное» ради него незачем.
+    pictures = thumbnail or mode == "thumbnail"
+    before = await asyncio.to_thread(_pictures_in, output_dir) if pictures else set()
     handle, tmp_name = tempfile.mkstemp(suffix=".txt", prefix="sgh-dl-")
     os.close(handle)
     print_file = Path(tmp_name)
@@ -359,7 +397,8 @@ async def run_ytdlp(
         url, output_dir,
         mode=mode, max_height=max_height,
         audio_format=audio_format, print_file=print_file,
-        section=section,
+        section=section, container=container,
+        video_codec=video_codec, thumbnail=thumbnail,
     )
     # Пишем команду целиком, а не только ссылку: когда что-то не качается,
     # первый вопрос — с какими флагами запустился загрузчик. Без этой строки
@@ -412,6 +451,9 @@ async def run_ytdlp(
         pass
     finally:
         print_file.unlink(missing_ok=True)
+    if pictures:
+        fresh = await asyncio.to_thread(_pictures_in, output_dir)
+        files += sorted(fresh - before - set(files))
 
     if code != 0 and not files:
         tail = "\n".join(errors[-4:]) or f"yt-dlp завершился с кодом {code}"
@@ -781,6 +823,18 @@ def _gallery_common_args() -> list[str]:
         args += ["--proxy", settings.proxy]
     args += _cookie_args(settings)
     return args
+
+
+#: Чем бывает превью ролика.
+_PICTURE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
+
+
+def _pictures_in(folder: Path) -> set[Path]:
+    """Картинки прямо в папке, без подпапок. Зовётся только из потока."""
+    try:
+        return {p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _PICTURE_EXT}
+    except OSError:
+        return set()
 
 
 def _files_in(folder: Path) -> set[Path]:

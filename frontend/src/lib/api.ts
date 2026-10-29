@@ -258,6 +258,8 @@ export const api = {
     post<{ jobs: Job[]; errors: { url: string; error: string }[] }>('/api/download', payload),
   probeLink: (url: string) => post<Record<string, any>>('/api/download/probe', { url }),
   resolveLink: (url: string) => post<ResolvedLink>('/api/download/resolve', { url }),
+  streamStrip: (token: string) => request<FilmstripInfo>(`/api/stream/${token}/strip`),
+  streamWaveform: (token: string) => request<{ peaks: number[] }>(`/api/stream/${token}/waveform`),
   probeGallery: (url: string) =>
     post<{ url: string; host: string; items: GalleryItem[]; count: number }>('/api/download/gallery', {
       url,

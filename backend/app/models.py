@@ -282,6 +282,17 @@ class DownloadRequest(BaseModel):
     audio_format: Literal["mp3", "opus", "m4a", "best"] = "opus"
     #: Сразу поставить скачанный файл в очередь сжатия с этим пресетом.
     auto_process_preset: str | None = None
+    #: Контейнер видео. ``None`` — по прежней настройке «Всегда MP4».
+    container: Literal["mp4", "mkv", "webm", "auto"] | None = None
+    #: Какой кодек видео брать, если у сайта их несколько. ``any`` — лучший.
+    video_codec: Literal["any", "h264", "av1"] = "any"
+    #: Сохранить рядом с роликом его превью (обложку).
+    thumbnail: bool = False
+    #: После обработки пресетом: оставить ли скачанный оригинал. Нет — он
+    #: уходит в корзину, когда сжатый файл готов.
+    keep_original: bool = True
+    #: Класть обработанное в подпапку, а не рядом со скачанным.
+    process_subfolder: bool = True
 
 
 class ProbeGalleryRequest(BaseModel):

@@ -3,22 +3,60 @@ import {
   ClipboardPaste,
   Download,
   Film,
+  FileX2,
+  FolderInput,
   FolderOpen,
+  Image as ImageIcon,
   Images,
+  ListVideo,
   Loader2,
   Plus,
   Eraser,
   Scissors,
+  Tags,
   Trash2,
   X,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
+import { loadPrefs, savePrefs } from '../lib/prefs'
 import type { GalleryItem, Preset } from '../lib/types'
 import { useStore } from '../store'
+import { Choice } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
 import { LinkPreview } from './LinkPreview'
-import { Button, QuietHints, Section, Segmented, Select, Toggle } from './ui'
+import { Button, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
+
+type Container = 'mp4' | 'mkv' | 'webm' | 'auto'
+type Codec = 'any' | 'h264' | 'av1'
+
+/** Предел качества при скачивании. Больше исходника сайт всё равно не даст. */
+const HEIGHTS = [
+  { value: '0', label: 'Максимальное', short: 'Макс.', title: 'Лучшее, что есть у сайта' },
+  { value: '2160', label: '4K' },
+  { value: '1440', label: '1440p' },
+  { value: '1080', label: '1080p' },
+  { value: '720', label: '720p' },
+  { value: '480', label: '480p' },
+  { value: '360', label: '360p' },
+]
+
+const CONTAINERS: { value: Container; label: string; title: string }[] = [
+  { value: 'mp4', label: 'MP4', title: 'Открывается везде, в том числе во встроенном плеере программы' },
+  { value: 'mkv', label: 'MKV', title: 'Берёт любые дорожки сайта без переупаковки. Телефоны и монтажные программы открывают его хуже' },
+  { value: 'webm', label: 'WebM', title: 'Для сайтов: внутри только VP9 или AV1 с Opus. Если у ролика таких дорожек нет, файл соберётся в MKV' },
+  { value: 'auto', label: 'Как у сайта', title: 'Без приведения: файл в том виде, в каком его отдаёт сайт' },
+]
+
+const CODECS: { value: Codec; label: string; title: string }[] = [
+  { value: 'any', label: 'Лучший', title: 'Лучшее качество, какое есть у сайта. У YouTube это обычно AV1' },
+  {
+    value: 'h264',
+    label: 'H.264',
+    title: 'Для монтажных программ и старых устройств — не придётся перегонять. У YouTube H.264 есть только до 1080p и при том же размере выглядит хуже AV1. Если у ролика H.264 нет, скачается лучшее, что есть',
+  },
+  { value: 'av1', label: 'AV1', title: 'Лучшее сжатие: файл легче при той же картинке. Если у ролика AV1 нет, скачается лучшее, что есть' },
+]
 
 type Mode = 'auto' | 'video' | 'audio' | 'images'
 
@@ -51,7 +89,18 @@ export function DownloadPanel() {
 
   const [rows, setRows] = useState<Row[]>([emptyRow()])
   const [mode, setMode] = useState<Mode>('auto')
-  const [maxHeight, setMaxHeight] = useState(0)
+  // Настройки загрузки запоминаются: их выбирают под свою привычку, а не под
+  // конкретную ссылку.
+  const [maxHeight, setMaxHeight] = useState(() => loadPrefs().downloadHeight ?? 0)
+  const [container, setContainer] = useState<Container>(
+    () => loadPrefs().downloadContainer ?? (settings?.download.force_mp4 === false ? 'auto' : 'mp4'),
+  )
+  const [codec, setCodec] = useState<Codec>(() => loadPrefs().downloadCodec ?? 'any')
+  const [thumbnail, setThumbnail] = useState(() => loadPrefs().downloadThumbnail ?? false)
+  const [keepOriginal, setKeepOriginal] = useState(() => loadPrefs().downloadKeepOriginal ?? true)
+  const [processSubfolder, setProcessSubfolder] = useState(() => loadPrefs().downloadSubfolder ?? true)
+  // H.264 в WebM не кладётся — тогда собираем в MP4.
+  const shownContainer: Container = container === 'webm' && codec === 'h264' ? 'mp4' : container
   const [audioFormat, setAudioFormat] = useState<'opus' | 'mp3' | 'm4a' | 'best'>('opus')
   const [autoPreset, setAutoPreset] = useState('')
   const [busy, setBusy] = useState(false)
@@ -221,6 +270,16 @@ export function DownloadPanel() {
     }
   }
 
+  // Общие для любой загрузки: кодек, формат файла, превью и что делать с
+  // оригиналом после пресета.
+  const downloadOptions = {
+    container: shownContainer,
+    video_codec: codec,
+    thumbnail,
+    keep_original: keepOriginal,
+    process_subfolder: processSubfolder,
+  }
+
   async function start() {
     if (!filled.length) {
       toast('Вставьте хотя бы одну ссылку', 'error')
@@ -254,6 +313,7 @@ export function DownloadPanel() {
         max_height: maxHeight,
         audio_format: audioFormat,
         auto_process_preset: autoPreset || null,
+        ...downloadOptions,
       })
       if (result.errors.length) toast(result.errors[0].error, 'error')
       toast(
@@ -301,6 +361,7 @@ export function DownloadPanel() {
         mode: 'images',
         selection: picked,
         auto_process_preset: autoPreset || null,
+        ...downloadOptions,
       })
       toast('Выбранные картинки добавлены в очередь', 'ok')
       revealQueue()
@@ -447,15 +508,20 @@ export function DownloadPanel() {
       <QuietHints>
       <aside className="flex w-[clamp(260px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5">
-          <Section title="Формат">
+          <Section title="Что скачать">
             <Segmented<Mode>
               value={mode}
               onChange={setMode}
               options={[
-                { value: 'auto', label: 'Авто', title: 'Определить по ссылке' },
+                { value: 'auto', label: 'Авто', title: 'Определить по ссылке: пост с картинками — картинки, остальное — видео' },
                 { value: 'video', label: 'Видео' },
                 { value: 'audio', label: 'Звук' },
-                { value: 'images', label: 'Картинки' },
+                {
+                  // «Кадры» — как в фильтре медиатеки: «Картинки» не влезали.
+                  value: 'images',
+                  label: 'Кадры',
+                  title: 'Картинки: по ссылке на пост — его картинки, по ссылке на видео — превью ролика',
+                },
               ]}
             />
           </Section>
@@ -473,41 +539,101 @@ export function DownloadPanel() {
                 ]}
               />
             </Section>
-          ) : (
-            <Section title="Качество">
-              <Segmented
-                value={String(maxHeight)}
-                onChange={(value) => setMaxHeight(Number(value))}
-                options={[
-                  { value: '0', label: 'Макс.', title: 'Максимально доступное' },
-                  { value: '1080', label: '1080p' },
-                  { value: '720', label: '720p' },
-                  { value: '480', label: '480p' },
-                ]}
-              />
+          ) : mode !== 'images' ? (
+            <Section
+              title="Видео"
+              id="download.video"
+              summary={`${HEIGHTS.find((item) => item.value === String(maxHeight))?.label ?? ''} · ${
+                CONTAINERS.find((item) => item.value === shownContainer)?.label
+              }${codec !== 'any' ? ` · ${codec === 'h264' ? 'H.264' : 'AV1'}` : ''}`}
+            >
+              <div className="flex gap-2">
+                <Choice
+                  label="Качество"
+                  hint="Предел качества. Если у ролика меньше, скачается то, что есть"
+                  value={String(maxHeight)}
+                  options={HEIGHTS}
+                  onChange={(value) => {
+                    setMaxHeight(Number(value))
+                    savePrefs({ downloadHeight: Number(value) })
+                  }}
+                />
+                <Choice
+                  label="Формат файла"
+                  hint="«Коробка», в которую сложатся видео и звук. Если не знаете, что выбрать, — MP4"
+                  value={shownContainer}
+                  options={CONTAINERS.map((item) => ({
+                    ...item,
+                    disabled: item.value === 'webm' && codec === 'h264',
+                  }))}
+                  onChange={(value) => {
+                    setContainer(value as Container)
+                    savePrefs({ downloadContainer: value as Container })
+                  }}
+                />
+              </div>
+              <div>
+                <span className="label">Кодек</span>
+                <Segmented<Codec>
+                  value={codec}
+                  onChange={(value) => {
+                    setCodec(value)
+                    savePrefs({ downloadCodec: value })
+                  }}
+                  options={CODECS}
+                />
+              </div>
             </Section>
-          )}
+          ) : null}
 
-          <Section title="Пресеты">
-            <Select
+          <Section
+            title="После скачивания"
+            id="download.process"
+            summary={autoPresets.find((preset) => preset.id === autoPreset)?.label ?? 'просто скачать'}
+          >
+            <Choice
+              label="Пресет"
+              hint="Скачанный файл сразу уйдёт в обработку с этим пресетом"
               value={autoPreset}
               onChange={setAutoPreset}
               options={[
                 { value: '', label: 'Просто скачать' },
                 // Виды разделены строками, которые нельзя выбрать. Одного вида —
-                // разделитель не нужен. К названию приписываем, чем именно
-                // жмём: в выпадающем списке подсказки не покажешь.
+                // разделитель не нужен. Чем жмёт пресет — в подсказке пункта.
                 ...groups.flatMap((group) => [
                   ...(groups.length > 1
                     ? [{ value: `--${group.title}`, label: `──── ${group.title} ────`, disabled: true }]
                     : []),
                   ...group.items.map((preset) => ({
                     value: preset.id,
-                    label: preset.tech ? `${preset.label} — ${preset.tech}` : preset.label,
+                    label: preset.label,
+                    title: preset.tech ? `${preset.tech}. ${preset.hint}` : preset.hint,
                   })),
                 ]),
               ]}
             />
+            {autoPreset && (
+              <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
+                <Toggle
+                  checked={keepOriginal}
+                  onChange={(value) => {
+                    setKeepOriginal(value)
+                    savePrefs({ downloadKeepOriginal: value })
+                  }}
+                  label="Оставить скачанный оригинал"
+                  hint="Если выключить, после обработки скачанный файл уйдёт в корзину Windows и останется только обработанный. Если обработка не удалась или результат вышел тяжелее, оригинал останется."
+                />
+                <Toggle
+                  checked={processSubfolder}
+                  onChange={(value) => {
+                    setProcessSubfolder(value)
+                    savePrefs({ downloadSubfolder: value })
+                  }}
+                  label="Положить результат в подпапку"
+                  hint="Обработанный файл ляжет в подпапку рядом со скачанным. Имя подпапки задаётся в настройках. Если выключить — рядом со скачанным."
+                />
+              </div>
+            )}
           </Section>
 
           <Section title="Куда скачивать">
@@ -525,16 +651,35 @@ export function DownloadPanel() {
             </button>
           </Section>
 
-          <Section title="Настройки загрузки">
+          <Section
+            title="Доп настройки"
+            id="download.extra"
+            summary={
+              <MarkIcons
+                marks={[
+                  ...(thumbnail ? [{ icon: ImageIcon, label: 'Превью ролика рядом' }] : []),
+                  ...((settings?.download.embed_metadata ?? true) ? [{ icon: Tags, label: 'Метаданные и обложка' }] : []),
+                  ...(settings?.download.download_playlists ? [{ icon: ListVideo, label: 'Плейлисты целиком' }] : []),
+                  ...(autoPreset && !keepOriginal ? [{ icon: FileX2, label: 'Оригинал уйдёт в корзину', danger: true }] : []),
+                  ...(autoPreset && processSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
+                ]}
+              />
+            }
+          >
             {/* Живут здесь, а не в общих настройках: их трогают ради
                 конкретной ссылки, и бегать в другое окно неудобно. */}
             <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
-              <Toggle
-                checked={settings?.download.force_mp4 ?? true}
-                onChange={(value) => void patchDownload({ force_mp4: value })}
-                label="Всегда приводить видео к MP4"
-                hint="Гарантирует, что файл откроется во встроенном плеере со звуком."
-              />
+              {mode !== 'audio' && mode !== 'images' && (
+                <Toggle
+                  checked={thumbnail}
+                  onChange={(value) => {
+                    setThumbnail(value)
+                    savePrefs({ downloadThumbnail: value })
+                  }}
+                  label="Сохранить превью ролика"
+                  hint="Рядом с видео ляжет его превью — картинка, которую сайт показывает до запуска. Только превью, без видео, — «Картинки» сверху."
+                />
+              )}
               <Toggle
                 checked={settings?.download.embed_metadata ?? true}
                 onChange={(value) => void patchDownload({ embed_metadata: value })}
@@ -593,6 +738,8 @@ export function DownloadPanel() {
         onApply={(start, end) => {
           if (previewRow !== null) patchRow(previewRow, { start, end })
         }}
+        // Отрезок качается с теми же настройками, что выбраны справа.
+        options={{ max_height: maxHeight, auto_process_preset: autoPreset || null, ...downloadOptions }}
       />
     </div>
   )

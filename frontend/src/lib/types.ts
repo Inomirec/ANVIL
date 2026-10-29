@@ -332,6 +332,10 @@ export interface ResolvedLink {
   previewToken: string | null
   previewHeight: number | null
   previewNote: string | null
+  /** Все качества предпросмотра, какие есть у ссылки. */
+  previewOptions?: { height: number; token: string }[]
+  /** Поток одного звука — по нему строится волна. */
+  audioToken?: string | null
 }
 
 export interface DownloadItemInput {

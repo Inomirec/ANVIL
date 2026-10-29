@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterator
 
 from . import binaries, download
@@ -51,6 +52,9 @@ class Stream:
     created: float = field(default_factory=time.time)
     title: str = ""
     duration: float | None = None
+    #: Что это за поток: «audio» — один звук (для волны), иначе высота кадра.
+    #: По ней протухшая ссылка добывается заново ровно та же.
+    pick: str = ""
 
 
 _registry: dict[str, Stream] = {}
@@ -74,8 +78,8 @@ def get(token: str) -> Stream | None:
     return _registry.get(token)
 
 
-def _pick_progressive(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Ищет дорожку, где видео и звук уже вместе.
+def _progressive(formats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Дорожки, где видео и звук уже вместе, — все, что откроет браузер.
 
     Раздельные потоки (как у YouTube) один тег <video> не проиграет, а HLS
     браузер без сторонней библиотеки тоже не понимает. Поэтому для
@@ -104,7 +108,12 @@ def _pick_progressive(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
                 continue
 
         candidates.append(item)
+    return candidates
 
+
+def _pick_progressive(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Поток для предпросмотра по умолчанию — не выше потолка, самый крупный."""
+    candidates = _progressive(formats)
     if not candidates:
         return None
 
@@ -116,6 +125,25 @@ def _pick_progressive(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
 
     candidates.sort(key=rank)
     return candidates[0]
+
+
+def _pick_audio(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Самый лёгкий поток одного звука — по нему строится волна.
+
+    Волне нужен весь звук ролика, а слитный поток с картинкой весит в разы
+    больше: за звуком 24-минутной серии пришлось бы тянуть сотню мегабайт.
+    """
+    audio = [
+        item for item in formats
+        if item.get("vcodec") == "none"
+        and item.get("acodec") not in (None, "none")
+        and str(item.get("protocol") or "").startswith("http")
+        and "m3u8" not in str(item.get("protocol") or "")
+        and "dash" not in str(item.get("protocol") or "")
+        and item.get("url")
+    ]
+    audio.sort(key=lambda item: item.get("abr") or item.get("tbr") or 1e9)
+    return audio[0] if audio else None
 
 
 async def resolve(url: str) -> dict[str, Any]:
@@ -144,6 +172,7 @@ async def resolve(url: str) -> dict[str, Any]:
     data = json.loads(out.decode("utf-8", "replace") or "{}")
     formats = data.get("formats") or []
     chosen = _pick_progressive(formats)
+    sound = _pick_audio(formats)
 
     result: dict[str, Any] = {
         "url": url,
@@ -155,6 +184,10 @@ async def resolve(url: str) -> dict[str, Any]:
         "previewToken": None,
         "previewHeight": None,
         "previewNote": None,
+        #: Все качества предпросмотра, какие есть у ссылки: [{height, token}].
+        "previewOptions": [],
+        #: Поток одного звука для волны; нет — волна строится по предпросмотру.
+        "audioToken": None,
     }
 
     if not chosen:
@@ -166,25 +199,43 @@ async def resolve(url: str) -> dict[str, Any]:
         )
         return result
 
-    headers = {
-        str(key): str(value)
-        for key, value in (chosen.get("http_headers") or data.get("http_headers") or {}).items()
-    }
-    # Прокси ходит за файлом сам, поэтому Referer нужен и ему.
     referer = download.referer_for(url)
-    if referer:
-        headers.setdefault("Referer", referer)
-    token = register(
-        Stream(
-            url=str(chosen["url"]),
-            source=url,
-            headers=headers,
-            title=str(result["title"]),
-            duration=data.get("duration"),
+
+    def enlist(item: dict[str, Any], pick: str) -> str:
+        headers = {
+            str(key): str(value)
+            for key, value in (item.get("http_headers") or data.get("http_headers") or {}).items()
+        }
+        # Прокси ходит за файлом сам, поэтому Referer нужен и ему.
+        if referer:
+            headers.setdefault("Referer", referer)
+        return register(
+            Stream(
+                url=str(item["url"]),
+                source=url,
+                headers=headers,
+                title=str(result["title"]),
+                duration=data.get("duration"),
+                pick=pick,
+            )
         )
-    )
-    result["previewToken"] = token
+
+    # Каждая высота — свой токен: человек выбирает качество предпросмотра в
+    # окне разметки. Одинаковые высоты не повторяем — берём первую.
+    options: dict[int, str] = {}
+    for item in _progressive(formats):
+        height = int(item.get("height") or 0)
+        if height in options:
+            continue
+        options[height] = enlist(item, f"h{height}")
+    height = int(chosen.get("height") or 0)
+    result["previewToken"] = options.get(height) or enlist(chosen, f"h{height}")
     result["previewHeight"] = chosen.get("height")
+    result["previewOptions"] = [
+        {"height": key, "token": value} for key, value in sorted(options.items(), reverse=True)
+    ]
+    if sound:
+        result["audioToken"] = enlist(sound, "audio")
     return result
 
 
@@ -225,9 +276,24 @@ async def refresh(stream: Stream) -> bool:
     except Exception:
         return False
 
-    token = str(data.get("previewToken") or "")
-    # resolve заводит свой токен — он нам не нужен, забираем только ссылку.
-    fresh = _registry.pop(token, None) if token else None
+    # resolve заводит свои токены — они нам не нужны, забираем только ссылку
+    # того же потока: звук — у звука, предпросмотр — той же высоты.
+    tokens = [str(item["token"]) for item in data.get("previewOptions") or []]
+    tokens += [str(data.get(key) or "") for key in ("previewToken", "audioToken")]
+    if stream.pick == "audio":
+        wanted = str(data.get("audioToken") or "")
+    else:
+        wanted = next(
+            (
+                str(item["token"])
+                for item in data.get("previewOptions") or []
+                if f"h{item['height']}" == stream.pick
+            ),
+            str(data.get("previewToken") or ""),
+        )
+    fresh = _registry.get(wanted) if wanted else None
+    for token in tokens:
+        _registry.pop(token, None)
     if not fresh:
         return False
 
@@ -301,3 +367,162 @@ def iter_response(stream: Stream, response: Any, headers: dict[str, str]) -> Ite
     finally:
         with contextlib.suppress(Exception):
             response.close()
+
+
+# --- кадры и волна для окна разметки ---------------------------------------
+
+#: Сколько кадров брать для ленты на таймлайне окна разметки.
+STRIP_FRAMES = 24
+STRIP_HEIGHT = 72
+
+_strip_locks: dict[str, asyncio.Lock] = {}
+
+
+def _work_dir() -> Path:
+    from ..paths import data_dir
+
+    folder = data_dir() / "stream-strips"
+    folder.mkdir(parents=True, exist_ok=True)
+    # Чужие ленты и волны живут, пока жив токен: дальше их никто не спросит.
+    edge = time.time() - TOKEN_TTL
+    for stale in folder.iterdir():
+        with contextlib.suppress(OSError):
+            if stale.stat().st_mtime < edge:
+                stale.unlink()
+    return folder
+
+
+async def _ffmpeg(args: list[str]) -> bytes:
+    process = await asyncio.create_subprocess_exec(
+        binaries.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=binaries.CREATE_NO_WINDOW,
+        env=binaries.subprocess_env(),
+    )
+    out, err = await process.communicate()
+    if process.returncode != 0:
+        detail = err.decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError(detail[-1] if detail else "ffmpeg не смог прочитать поток")
+    return out
+
+
+async def filmstrip(token: str, local: str) -> dict[str, Any]:
+    """Лента кадров по ссылке — без скачивания ролика целиком.
+
+    ffmpeg читает поток через наш же прокси (``local`` — его адрес): там
+    подставлены заголовки и протухшая ссылка добывается заново. Каждый кадр
+    — отдельный переход (``-ss`` до входа), то есть несколько небольших
+    запросов с Range, а не весь файл.
+    """
+    stream = get(token)
+    if not stream:
+        raise ValueError("Ссылка на поток устарела — разберите её заново")
+    duration = stream.duration or 0
+    if duration <= 0:
+        # У прямой ссылки на файл сайт длину не сообщает — спрашиваем сам
+        # поток: ffprobe читает только заголовок.
+        process = await asyncio.create_subprocess_exec(
+            binaries.ffprobe(), "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", local,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=binaries.CREATE_NO_WINDOW,
+            env=binaries.subprocess_env(),
+        )
+        out, _ = await process.communicate()
+        with contextlib.suppress(ValueError):
+            duration = float(out.decode("utf-8", "replace").strip() or 0)
+        stream.duration = duration or None
+    if duration <= 0:
+        raise ValueError("Длина ролика неизвестна — ленту кадров не построить")
+
+    folder = _work_dir()
+    sprite = folder / f"{token}.jpg"
+    meta = folder / f"{token}.json"
+    lock = _strip_locks.setdefault(token, asyncio.Lock())
+    async with lock:
+        if sprite.exists() and meta.exists():
+            return json.loads(meta.read_text("utf-8"))
+
+        frames = STRIP_FRAMES
+        gate = asyncio.Semaphore(6)
+        parts = [folder / f"{token}-{index:03d}.jpg" for index in range(frames)]
+
+        async def grab(index: int) -> None:
+            moment = duration * (index + 0.5) / frames
+            async with gate:
+                await _ffmpeg([
+                    "-y", "-ss", f"{moment:.3f}", "-i", local,
+                    "-frames:v", "1", "-an",
+                    "-vf", f"scale=-2:{STRIP_HEIGHT}:flags=fast_bilinear",
+                    "-q:v", "5", str(parts[index]),
+                ])
+
+        try:
+            await asyncio.gather(*(grab(index) for index in range(frames)))
+            await _ffmpeg([
+                "-y", "-framerate", "1",
+                "-i", str(folder / f"{token}-%03d.jpg"),
+                "-vf", f"tile={frames}x1:padding=0:margin=0",
+                "-frames:v", "1", "-q:v", "5", str(sprite),
+            ])
+        finally:
+            for part in parts[1:]:
+                part.unlink(missing_ok=True)
+
+        # Ширину кадра узнаём по первому: форма у ролика одна.
+        width = await asyncio.to_thread(_jpeg_width, parts[0])
+        parts[0].unlink(missing_ok=True)
+        result = {
+            "url": f"/api/stream/{token}/strip.jpg",
+            "frames": frames,
+            "tileWidth": width or round(STRIP_HEIGHT * 16 / 9),
+            "tileHeight": STRIP_HEIGHT,
+        }
+        meta.write_text(json.dumps(result), encoding="utf-8")
+        return result
+
+
+def _jpeg_width(path: Path) -> int:
+    """Ширина JPEG по заголовку — без сторонних библиотек."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return 0
+    index = 2
+    while index + 9 < len(data):
+        if data[index] != 0xFF:
+            index += 1
+            continue
+        marker = data[index + 1]
+        length = int.from_bytes(data[index + 2:index + 4], "big")
+        if marker in (0xC0, 0xC1, 0xC2):
+            return int.from_bytes(data[index + 7:index + 9], "big")
+        index += 2 + length
+    return 0
+
+
+def strip_file(token: str) -> Path | None:
+    from ..paths import data_dir
+
+    sprite = data_dir() / "stream-strips" / f"{token}.jpg"
+    return sprite if sprite.exists() else None
+
+
+async def waveform(token: str, local: str) -> dict[str, Any]:
+    """Волна звука по ссылке — читается поток одного звука, если он есть."""
+    from . import waveform as wave
+
+    if not get(token):
+        raise ValueError("Ссылка на поток устарела — разберите её заново")
+    folder = _work_dir()
+    stored = folder / f"{token}.wave.json"
+    lock = _strip_locks.setdefault(f"wave-{token}", asyncio.Lock())
+    async with lock:
+        if stored.exists():
+            return json.loads(stored.read_text("utf-8"))
+        peaks = await wave._decode(local, 2000, wave.DEFAULT_BUCKETS)  # type: ignore[arg-type]
+        result = {"peaks": peaks}
+        stored.write_text(json.dumps(result), encoding="utf-8")
+        return result
