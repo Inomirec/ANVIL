@@ -286,8 +286,6 @@ class DownloadRequest(BaseModel):
     container: Literal["mp4", "mkv", "webm", "auto"] | None = None
     #: Какой кодек видео брать, если у сайта их несколько. ``any`` — лучший.
     video_codec: Literal["any", "h264", "av1"] = "any"
-    #: Сохранить рядом с роликом его превью (обложку).
-    thumbnail: bool = False
     #: После обработки пресетом: оставить ли скачанный оригинал. Нет — он
     #: уходит в корзину, когда сжатый файл готов.
     keep_original: bool = True

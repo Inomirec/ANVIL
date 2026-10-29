@@ -6,7 +6,6 @@ import {
   FileX2,
   FolderInput,
   FolderOpen,
-  Image as ImageIcon,
   Images,
   ListVideo,
   Loader2,
@@ -96,7 +95,6 @@ export function DownloadPanel() {
     () => loadPrefs().downloadContainer ?? (settings?.download.force_mp4 === false ? 'auto' : 'mp4'),
   )
   const [codec, setCodec] = useState<Codec>(() => loadPrefs().downloadCodec ?? 'any')
-  const [thumbnail, setThumbnail] = useState(() => loadPrefs().downloadThumbnail ?? false)
   const [keepOriginal, setKeepOriginal] = useState(() => loadPrefs().downloadKeepOriginal ?? true)
   const [processSubfolder, setProcessSubfolder] = useState(() => loadPrefs().downloadSubfolder ?? true)
   // H.264 в WebM не кладётся — тогда собираем в MP4.
@@ -270,12 +268,11 @@ export function DownloadPanel() {
     }
   }
 
-  // Общие для любой загрузки: кодек, формат файла, превью и что делать с
-  // оригиналом после пресета.
+  // Общие для любой загрузки: кодек, формат файла и что делать с оригиналом
+  // после пресета.
   const downloadOptions = {
     container: shownContainer,
     video_codec: codec,
-    thumbnail,
     keep_original: keepOriginal,
     process_subfolder: processSubfolder,
   }
@@ -657,7 +654,6 @@ export function DownloadPanel() {
             summary={
               <MarkIcons
                 marks={[
-                  ...(thumbnail ? [{ icon: ImageIcon, label: 'Превью ролика рядом' }] : []),
                   ...((settings?.download.embed_metadata ?? true) ? [{ icon: Tags, label: 'Метаданные и обложка' }] : []),
                   ...(settings?.download.download_playlists ? [{ icon: ListVideo, label: 'Плейлисты целиком' }] : []),
                   ...(autoPreset && !keepOriginal ? [{ icon: FileX2, label: 'Оригинал уйдёт в корзину', danger: true }] : []),
@@ -669,17 +665,6 @@ export function DownloadPanel() {
             {/* Живут здесь, а не в общих настройках: их трогают ради
                 конкретной ссылки, и бегать в другое окно неудобно. */}
             <div className="space-y-1 rounded-xl bg-surface-2 px-3 py-2.5">
-              {mode !== 'audio' && mode !== 'images' && (
-                <Toggle
-                  checked={thumbnail}
-                  onChange={(value) => {
-                    setThumbnail(value)
-                    savePrefs({ downloadThumbnail: value })
-                  }}
-                  label="Сохранить превью ролика"
-                  hint="Рядом с видео ляжет его превью — картинка, которую сайт показывает до запуска. Только превью, без видео, — «Картинки» сверху."
-                />
-              )}
               <Toggle
                 checked={settings?.download.embed_metadata ?? true}
                 onChange={(value) => void patchDownload({ embed_metadata: value })}

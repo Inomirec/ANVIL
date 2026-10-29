@@ -561,11 +561,7 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
         # видеохостинге не бывает, и gallery-dl ответил бы ошибкой.
         if mode == "images" and download.looks_like_video(url):
             mode = "thumbnail"
-        extra = {
-            "container": request.container,
-            "video_codec": request.video_codec,
-            "thumbnail": request.thumbnail,
-        }
+        extra = {"container": request.container, "video_codec": request.video_codec}
 
         files: list[Path] = []
         if mode == "thumbnail":

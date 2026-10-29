@@ -229,7 +229,6 @@ def build_ytdlp_args(
     section: tuple[float | None, float | None] | None = None,
     container: str | None = None,
     video_codec: str = "any",
-    thumbnail: bool = False,
 ) -> list[str]:
     """Аргументы yt-dlp для одной ссылки.
 
@@ -337,8 +336,6 @@ def build_ytdlp_args(
             args += ["-f", selector]
         if settings.embed_metadata:
             args += ["--embed-metadata"]
-        if thumbnail:
-            args += ["--write-thumbnail"]
 
     args.append(url)
     return args
@@ -380,14 +377,13 @@ async def run_ytdlp(
     section: tuple[float | None, float | None] | None = None,
     container: str | None = None,
     video_codec: str = "any",
-    thumbnail: bool = False,
 ) -> list[Path]:
     """Скачивает ссылку через yt-dlp, отдавая прогресс в задачу."""
     output_dir.mkdir(parents=True, exist_ok=True)
     # Превью yt-dlp в список готовых файлов не пишет — находим их по папке.
     # Только верхний уровень: превью ложится рядом с роликом, а обходить всё
     # «Скачанное» ради него незачем.
-    pictures = thumbnail or mode == "thumbnail"
+    pictures = mode == "thumbnail"
     before = await asyncio.to_thread(_pictures_in, output_dir) if pictures else set()
     handle, tmp_name = tempfile.mkstemp(suffix=".txt", prefix="sgh-dl-")
     os.close(handle)
@@ -397,8 +393,7 @@ async def run_ytdlp(
         url, output_dir,
         mode=mode, max_height=max_height,
         audio_format=audio_format, print_file=print_file,
-        section=section, container=container,
-        video_codec=video_codec, thumbnail=thumbnail,
+        section=section, container=container, video_codec=video_codec,
     )
     # Пишем команду целиком, а не только ссылку: когда что-то не качается,
     # первый вопрос — с какими флагами запустился загрузчик. Без этой строки

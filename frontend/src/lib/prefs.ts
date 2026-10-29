@@ -49,7 +49,6 @@ export interface Prefs {
   downloadHeight?: number
   downloadContainer?: 'mp4' | 'mkv' | 'webm' | 'auto'
   downloadCodec?: 'any' | 'h264' | 'av1'
-  downloadThumbnail?: boolean
   downloadKeepOriginal?: boolean
   downloadSubfolder?: boolean
   /** Качество предпросмотра в окне разметки — высота кадра. */
