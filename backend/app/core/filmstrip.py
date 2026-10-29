@@ -81,9 +81,15 @@ async def build(source: Path, frames: int = DEFAULT_FRAMES) -> Filmstrip | None:
         rate = frames / info.duration
         sprite.parent.mkdir(parents=True, exist_ok=True)
 
+        # У длинного ролика читаем только опорные кадры: декодировать час
+        # фильма ради сорока картинок — минуты работы процессора, а опорных
+        # кадров на такую ленту хватает с запасом. У короткого их может не
+        # набраться, и плитки повторялись бы — там читаем всё.
+        quick = ["-skip_frame", "nokey"] if info.duration > 120 else []
         args = [
             binaries.ffmpeg(),
             "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            *quick,
             "-i", str(source),
             "-an", "-sn",
             "-vf",

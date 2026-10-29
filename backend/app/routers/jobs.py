@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ..core import encode, fsutil, pipeline, presets
+from ..core import encode, fsutil, images, pipeline, presets
 from ..core.jobs import manager
 from ..models import (
     BatchExportRequest,
@@ -100,15 +100,19 @@ async def preview(request: ExportRequest) -> dict[str, Any]:
         raise HTTPException(400, str(exc)) from exc
 
     request.source = str(source)
+    info = await probe(source)
     if request.kind == "image":
+        # Команда сжатия картинки. Нарисованное поверх (заливки, кисть,
+        # надписи) программа кладёт отдельным проходом до неё — в команде его
+        # нет, об этом пишет панель.
+        output = pipeline.resolve_output(request, images.EXTENSIONS[request.image.format])
+        args = images.build_args(source, output, request.image, info, request.image.quality)
         return {
-            "summary": (
-                f"{request.image.format.upper()} · качество {request.image.quality}"
-            ),
-            "command": None,
+            "summary": encode.describe(request)["summary"],
+            "command": encode.to_display_string(args),
+            "output": str(output),
         }
 
-    info = await probe(source)
     extension = encode.container_extension(request, info)
     # Тот же путь, что и у настоящего экспорта: команду теперь можно запускать,
     # и она должна писать результат туда же, куда обычная кнопка.

@@ -457,7 +457,18 @@ export function EffectSection({
 }
 
 /** Размер букв: число и выпадающий список готовых. */
-function SizeField({ pixels, onChange }: { pixels: number; onChange: (value: number) => void }) {
+export function SizeField({
+  pixels,
+  onChange,
+  max = SIZE_MAX,
+  unitTitle = 'в пикселях кадра',
+}: {
+  pixels: number
+  onChange: (value: number) => void
+  /** Верхний предел: у картинки в тысячи точек буквы бывают крупнее кадра. */
+  max?: number
+  unitTitle?: string
+}) {
   const [draft, setDraft] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const holder = useRef<HTMLDivElement>(null)
@@ -465,7 +476,7 @@ function SizeField({ pixels, onChange }: { pixels: number; onChange: (value: num
   const apply = () => {
     if (draft === null) return
     const number = Number(draft.replace(',', '.'))
-    if (Number.isFinite(number) && number > 0) onChange(Math.min(SIZE_MAX, Math.max(SIZE_MIN, number)))
+    if (Number.isFinite(number) && number > 0) onChange(Math.min(max, Math.max(SIZE_MIN, number)))
     setDraft(null)
   }
   return (
@@ -477,7 +488,7 @@ function SizeField({ pixels, onChange }: { pixels: number; onChange: (value: num
         onKeyDown={(event) => {
           if (event.key === 'Enter') apply()
         }}
-        title={`Размер букв, в пикселях кадра: от ${SIZE_MIN} до ${SIZE_MAX}`}
+        title={`Размер букв, ${unitTitle}: от ${SIZE_MIN} до ${max}`}
         className="h-8 w-full min-w-0 bg-transparent pl-2 font-mono text-[12.5px] tabular-nums outline-none"
       />
       <button

@@ -273,6 +273,10 @@ def hardware_codec(codec: str) -> str | None:
 
     Возвращает None, если на этом компьютере ускорять нечем.
     """
+    # Замена есть только у AV1 и H.264. Прежде всё, что не AV1, считалось
+    # H.264 — и H.265 с галочкой «на видеокарте» молча становился H.264.
+    if not codec.startswith(("av1", "h264")):
+        return None
     family = "av1" if codec.startswith("av1") else "h264"
     available = probe_hardware()
     # NVIDIA первой: у неё качество на единицу настройки заметно лучше,

@@ -10,7 +10,16 @@ import { FolderPicker } from './components/FolderPicker'
 import { setTooltipsEnabled } from './lib/tooltips'
 import { GifView } from './components/GifView'
 import { TopResizeEdge, WindowButtons, useWindowChrome } from './components/WindowBar'
-import { ImageEditor, ImagePanel, emptyImageEdit, type ImageEdit } from './components/ImageEditor'
+import {
+  ImageEditor,
+  ImageFillPanel,
+  ImagePanel,
+  ImageTextPanel,
+  emptyImageEdit,
+  type ImageEdit,
+  type ImageFocus,
+} from './components/ImageEditor'
+import { COLOR_KEY } from './components/ImageEditorTop'
 import type { FileInfo, ImagePreview } from './lib/types'
 import { JobQueue } from './components/JobQueue'
 import { MediaEditor, type TrimState } from './components/MediaEditor'
@@ -54,6 +63,10 @@ export default function App() {
   const [imageEdit, setImageEdit] = useState<ImageEdit>(emptyImageEdit)
   // Превью считает панель справа, а показывает холст слева — состояние общее.
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null)
+  // Выбранная на картинке надпись или заливка: колонка справа показывает её
+  // настройки, как в монтаже. «Запомнить для Ctrl+Z» даёт сам редактор.
+  const [imageFocus, setImageFocus] = useState<ImageFocus>(null)
+  const imageCommit = useRef<(() => void) | null>(null)
   const [fades, setFades] = useState<Fades>(emptyFades)
   // Громкость дорожки: 1 — как есть, 0 — совсем без звука.
   const [trackVolume, setTrackVolume] = useState(1)
@@ -244,6 +257,8 @@ export default function App() {
                   edit={imageEdit}
                   preview={imagePreview}
                   onEditChange={setImageEdit}
+                  onFocusChange={setImageFocus}
+                  commitRef={imageCommit}
                 />
               ) : (
                 <MediaEditor
@@ -270,12 +285,25 @@ export default function App() {
         {tab === 'library' && activeInfo && (
           <aside className="flex w-[clamp(260px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
             {activeInfo.kind === 'image' && !isGif(activeInfo) ? (
-              <ImagePanel
-                key={activeInfo.path}
-                file={activeInfo}
-                edit={imageEdit}
-                onPreview={setImagePreview}
-              />
+              <>
+                <ImageObjectColumn
+                  file={activeInfo}
+                  edit={imageEdit}
+                  focus={imageFocus}
+                  onEditChange={setImageEdit}
+                  commit={() => imageCommit.current?.()}
+                />
+                {/* Панель сжатия не убираем, пока выбран объект, а прячем: она
+                    держит просчитанное превью и выбор человека. */}
+                <div className={imageFocus ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>
+                  <ImagePanel
+                    key={activeInfo.path}
+                    file={activeInfo}
+                    edit={imageEdit}
+                    onPreview={setImagePreview}
+                  />
+                </div>
+              </>
             ) : (
               <ExportPanel
                 key={activeInfo.path}
@@ -372,4 +400,56 @@ function TabButton({
 /** GIF перегоняют в видео — у него своя панель, а не панель картинок. */
 function isGif(file: FileInfo): boolean {
   return file.kind === 'image' && file.ext.toLowerCase() === 'gif'
+}
+
+/** Настройки выбранной на картинке надписи или заливки. */
+function ImageObjectColumn({
+  file,
+  edit,
+  focus,
+  onEditChange,
+  commit,
+}: {
+  file: FileInfo
+  edit: ImageEdit
+  focus: ImageFocus
+  onEditChange: (edit: ImageEdit) => void
+  commit: () => void
+}) {
+  const natural = { width: file.media?.width ?? 0, height: file.media?.height ?? 0 }
+  const mark = focus?.type === 'text' ? edit.texts[focus.index] : undefined
+  const box = focus?.type === 'box' ? edit.boxes[focus.index] : undefined
+  if (!mark && !box) return null
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      {mark && focus && (
+        <ImageTextPanel
+          mark={mark}
+          natural={natural}
+          onCommit={commit}
+          onChange={(patch) =>
+            onEditChange({
+              ...edit,
+              texts: edit.texts.map((item, index) => (index === focus.index ? { ...item, ...patch } : item)),
+            })
+          }
+        />
+      )}
+      {box && focus && (
+        <ImageFillPanel
+          box={box}
+          natural={natural}
+          onCommit={commit}
+          onChange={(patch) => {
+            // Цвет заливки запоминается: следующая встанет того же цвета.
+            if (patch.color) localStorage.setItem(COLOR_KEY, patch.color)
+            onEditChange({
+              ...edit,
+              boxes: edit.boxes.map((item, index) => (index === focus.index ? { ...item, ...patch } : item)),
+            })
+          }}
+        />
+      )}
+    </div>
+  )
 }

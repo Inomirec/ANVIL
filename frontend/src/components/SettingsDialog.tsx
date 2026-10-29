@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, CheckCircle2, Gauge, RefreshCw, XCircle } from 'lucide-react'
 import { api } from '../lib/api'
 import { plural } from '../lib/format'
+import { loadPrefs, savePrefs } from '../lib/prefs'
 import type { ToolInfo } from '../lib/types'
 import { useStore } from '../store'
 import { Button, Modal, NumberField, QuietHints, Section, Segmented, Select, Spinner, Toggle } from './ui'
@@ -374,6 +375,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               />
             </Section>
 
+            <Section title="Кадры на таймлайне">
+              <TimelineFrames />
+            </Section>
+
             <Section title="Доп настройки">
               <Toggle
                 checked={settings.hints ?? true}
@@ -672,6 +677,54 @@ function CookiesField() {
           <li>Скачанный файл скормите программе через кнопку «Файл».</li>
         </ol>
       </details>
+    </div>
+  )
+}
+
+/**
+ * Кадры на дорожке видео в медиатеке. По склейкам программа читает ролик
+ * целиком — на часовом фильме это минуты работы процессора (кадров не
+ * больше полутора тысяч, так что памяти это не съест). «Редко» берёт только
+ * опорные кадры и готово почти сразу.
+ */
+function TimelineFrames() {
+  const [mode, setMode] = useState(() => loadPrefs().timelineFrames ?? 'scenes')
+  const [quality, setQuality] = useState(() => loadPrefs().timelineQuality ?? 'normal')
+  return (
+    <div className="space-y-2">
+      <Segmented<'scenes' | 'sparse' | 'off'>
+        value={mode}
+        onChange={(value) => {
+          setMode(value)
+          savePrefs({ timelineFrames: value })
+        }}
+        options={[
+          {
+            value: 'scenes',
+            label: 'По склейкам',
+            title: 'Каждая сцена начинается своим кадром — видно, где склейки. Программа читает ролик целиком: на длинном фильме это несколько минут работы процессора',
+          },
+          {
+            value: 'sparse',
+            label: 'Редко',
+            title: 'Несколько десятков кадров через равные промежутки. Готово почти сразу даже у часового фильма, но склеек не видно',
+          },
+          { value: 'off', label: 'Без кадров', title: 'Дорожка видео пустая. Ролик не читается вовсе' },
+        ]}
+      />
+      {mode !== 'off' && (
+        <Segmented<'normal' | 'high'>
+          value={quality}
+          onChange={(value) => {
+            setQuality(value)
+            savePrefs({ timelineQuality: value })
+          }}
+          options={[
+            { value: 'normal', label: 'Обычные кадры', title: 'Мелкие кадры: быстрее готовятся и меньше весят' },
+            { value: 'high', label: 'Чёткие кадры', title: 'Кадры крупнее и чётче. По склейкам их выйдет меньше, а готовятся они дольше' },
+          ]}
+        />
+      )}
     </div>
   )
 }

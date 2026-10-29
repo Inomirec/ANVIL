@@ -9,10 +9,10 @@ from pydantic.alias_generators import to_camel
 
 MediaKind = Literal["video", "audio", "image", "other"]
 VideoCodec = Literal[
-    "av1_svt", "av1_nvenc", "av1_qsv", "h264", "h264_nvenc", "h265", "copy"
+    "av1_svt", "av1_nvenc", "av1_qsv", "h264", "h264_nvenc", "h265", "h266", "copy"
 ]
 AudioCodec = Literal["opus", "aac", "mp3", "flac", "copy", "none"]
-ImageFormat = Literal["avif", "webp", "jpg", "png"]
+ImageFormat = Literal["avif", "webp", "jpg", "png", "ico"]
 Container = Literal["mp4", "webm", "mkv", "auto"]
 
 
@@ -121,7 +121,13 @@ class SubtitleOptions(BaseModel):
 
 
 class Rect(BaseModel):
-    """Прямоугольник в пикселях исходного изображения."""
+    """Прямоугольник в пикселях исходного изображения.
+
+    У заливки на картинке те же украшения, что у заливки в монтаже, — только
+    в пикселях оригинала, а не в долях кадра. У рамки обрезки они не нужны.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -129,22 +135,57 @@ class Rect(BaseModel):
     height: int = Field(gt=0)
     #: Цвет заливки. ``None`` — общий цвет из ``box_color``.
     color: str | None = None
+    radius: float = Field(default=0.0, ge=0.0, le=10000.0)
+    #: Рамка снаружи заливки. Включатель отдельно от толщины, как в монтаже.
+    stroke_on: bool = False
+    stroke: float = Field(default=0.0, ge=0.0, le=1000.0)
+    stroke_color: str = "#ffffff"
+    #: Скругление внешних углов рамки. Ноль — как у заливки плюс толщина.
+    stroke_round: float = Field(default=0.0, ge=0.0, le=10000.0)
+    shadow_on: bool = False
+    shadow_x: float = Field(default=0.0, ge=-2000.0, le=2000.0)
+    shadow_y: float = Field(default=0.0, ge=-2000.0, le=2000.0)
+    shadow_alpha: float = Field(default=0.75, ge=0.0, le=1.0)
+    shadow_blur: float = Field(default=0.0, ge=0.0, le=1000.0)
+    shadow_color: str = "#000000"
 
 
 class ImageText(BaseModel):
-    """Надпись на картинке. Место — середина букв в пикселях оригинала."""
+    """Надпись на картинке. Место — середина букв в пикселях оригинала.
+
+    Настройки те же, что у надписи в монтаже, только все размеры — в
+    пикселях оригинала: картинка не меняет разрешения, как проект монтажа.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     x: float
     y: float
     text: str = Field(max_length=2000)
     font: str = "Arial"
+    bold: bool = False
+    italic: bool = False
     #: Высота букв в пикселях оригинала.
-    size: int = Field(default=48, ge=4, le=2000)
+    size: float = Field(default=48, ge=1, le=2000)
     color: str = "#ffffff"
-    #: Толщина обводки в пикселях оригинала, 0 — без обводки.
-    stroke: int = Field(default=0, ge=0, le=200)
-    #: Окно присылает имя в своём написании — понимаем оба.
-    stroke_color: str = Field(default="#000000", validation_alias=AliasChoices("strokeColor", "stroke_color"))
+    align: Literal["left", "center", "right"] = "center"
+    #: Обводка: толщина в пикселях оригинала. Прежние надписи включателя не
+    #: знали — у них обводка была, если толщина больше нуля.
+    stroke_on: bool = True
+    stroke: float = Field(default=0, ge=0, le=500)
+    stroke_color: str = "#000000"
+    shadow_on: bool = False
+    shadow_x: float = Field(default=0.0, ge=-2000.0, le=2000.0)
+    shadow_y: float = Field(default=0.0, ge=-2000.0, le=2000.0)
+    shadow_alpha: float = Field(default=0.75, ge=0.0, le=1.0)
+    shadow_blur: float = Field(default=0.0, ge=0.0, le=1000.0)
+    shadow_color: str = "#000000"
+    #: Подложка под буквами: цвет, видимость, отступ и скругление.
+    box: bool = False
+    box_color: str = "#000000"
+    box_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    box_pad: float = Field(default=0.0, ge=0.0, le=2000.0)
+    box_radius: float = Field(default=0.0, ge=0.0, le=2000.0)
 
 
 class ImageOptions(BaseModel):
@@ -168,6 +209,11 @@ class ImageOptions(BaseModel):
     max_dimension: int = Field(default=1920, ge=0, le=16384)
     #: Усилие кодера: 0 = медленно и качественно, 8 = быстро.
     effort: int = Field(default=4, ge=0, le=9)
+    #: Повернуть по часовой стрелке: 0, 90, 180 или 270 градусов — после
+    #: правок и обрезки, которые нарисованы на картинке как она есть.
+    rotate: Literal[0, 90, 180, 270] = 0
+    #: Отразить по горизонтали — уже после поворота.
+    flip_h: bool = False
 
 
 class ExportRequest(BaseModel):

@@ -128,6 +128,10 @@ export interface Preset {
 export interface VideoOptions {
   codec: string
   crf: number
+  /** Битрейт видео, кбит/с. Ноль или нет — вес задан качеством. */
+  bitrate_kbps?: number
+  /** Подгонять качество под разрешение — у пресетов для паков. */
+  adapt_crf?: boolean
   speed_preset: string
   max_height: number
   max_fps: number
@@ -174,10 +178,22 @@ export interface Rect {
   height: number
   /** Цвет заливки маски. Пусто — чёрный. */
   color?: string
+  /** Украшения заливки — как у заливки монтажа, в пикселях оригинала. */
+  radius?: number
+  strokeOn?: boolean
+  stroke?: number
+  strokeColor?: string
+  strokeRound?: number
+  shadowOn?: boolean
+  shadowX?: number
+  shadowY?: number
+  shadowAlpha?: number
+  shadowBlur?: number
+  shadowColor?: string
 }
 
 export interface ImageOptions {
-  format: 'avif' | 'webp' | 'jpg' | 'png'
+  format: 'avif' | 'webp' | 'jpg' | 'png' | 'ico'
   quality: number
   max_dimension: number
   effort: number
@@ -188,6 +204,9 @@ export interface ImageOptions {
   paint_png?: string | null
   /** Кадрирование в пикселях оригинала. */
   crop: Rect | null
+  /** Поворот по часовой стрелке и отражение — после правок и обрезки. */
+  rotate?: 0 | 90 | 180 | 270
+  flip_h?: boolean
 }
 
 export interface ToolInfo {

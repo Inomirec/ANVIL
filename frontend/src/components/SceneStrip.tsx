@@ -83,7 +83,7 @@ export function SceneStrip({
       {edges.slice(1, -1).map((x) => (
         <div
           key={`cut-${x}`}
-          className="absolute top-0 h-full w-[2px] -translate-x-1/2 bg-white/90 shadow-[0_0_0_1px_rgba(0,0,0,0.75)]"
+          className="absolute top-0 h-full w-px -translate-x-1/2 bg-white/35"
           style={{ left: x }}
         />
       ))}

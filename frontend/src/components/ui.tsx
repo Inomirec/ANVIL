@@ -60,7 +60,7 @@ export function Button({
 }) {
   const tones: Record<ButtonTone, string> = {
     primary:
-      'bg-accent-strong text-white hover:bg-accent shadow-[0_0_22px_rgba(22,156,145,0.35),inset_0_1px_0_rgba(255,255,255,0.12)]',
+      'bg-accent-strong text-white hover:bg-accent shadow-[0_0_10px_rgba(22,156,145,0.14),inset_0_1px_0_rgba(255,255,255,0.1)]',
     subtle: 'bg-surface-3 text-ink hover:bg-line',
     ghost: 'bg-transparent text-ink-dim hover:bg-surface-3 hover:text-ink',
     danger: 'bg-danger/15 text-danger hover:bg-danger/25',
@@ -369,6 +369,7 @@ export function Section({
   id,
   summary,
   hint,
+  defaultFolded = false,
 }: {
   title: string
   children: ReactNode
@@ -378,12 +379,15 @@ export function Section({
   /** Что показать у заголовка, пока раздел свёрнут. */
   summary?: ReactNode
   hint?: string
+  /** Свёрнут, пока человек сам его не раскрыл. */
+  defaultFolded?: boolean
 }) {
   const key = id ? `sgh.section.${id}` : null
   const [folded, setFolded] = useState(() => {
     if (!key) return false
     try {
-      return localStorage.getItem(key) === '1'
+      const saved = localStorage.getItem(key)
+      return saved === null ? defaultFolded : saved === '1'
     } catch {
       return false
     }

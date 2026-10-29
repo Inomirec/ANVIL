@@ -150,7 +150,7 @@ function soundMarks(small: number, medium: number, large: number) {
   ]
 }
 
-const AUDIO_CODECS: {
+export const AUDIO_CODECS: {
   value: string
   label: string
   title: string
@@ -215,7 +215,7 @@ export const CONTAINERS = [
  * «экономно», «обычно», «с запасом»; края шкалы — от половины экономного до
  * полутора «с запасом», чтобы подписи не жались в один угол.
  */
-const NORMAL_1080: Record<string, number> = { av1_svt: 4500, h265: 6000, h264: 8000 }
+const NORMAL_1080: Record<string, number> = { av1_svt: 4500, h266: 3500, h265: 6000, h264: 8000 }
 
 /**
  * Подсказки описывают сам готовый файл, а не сравнение с исходником: на
@@ -254,11 +254,11 @@ export function scaleFrame(frame: Frame, custom: boolean): Frame {
 }
 
 /** Обычный битрейт для кодека и кадра — его ставим при смене кодека. */
-function bitrateNormal(codec: string, frame: Frame): number {
+export function bitrateNormal(codec: string, frame: Frame): number {
   return bitrateMarks(codec, frame)[1].value
 }
 
-function bitrateRange(codec: string, frame: Frame): { min: number; max: number } {
+export function bitrateRange(codec: string, frame: Frame): { min: number; max: number } {
   const marks = bitrateMarks(codec, frame)
   return { min: round250(marks[0].value / 2), max: Math.ceil((marks[2].value * 1.5) / 500) * 500 }
 }
@@ -296,15 +296,17 @@ const qualityMarks = (low: number, mid: number, high: number) => [
 const QUALITY_SCALE: Record<string, { best: number; worst: number; marks: { crf: number; label: string; hint: string }[] }> = {
   av1_svt: { best: 16, worst: 52, marks: qualityMarks(46, 35, 24) },
   h265: { best: 14, worst: 40, marks: qualityMarks(34, 27, 20) },
+  // У H.266 шкала — qp кодировщика, от 0 до 63, как у AV1.
+  h266: { best: 16, worst: 48, marks: qualityMarks(40, 33, 26) },
   h264: { best: 12, worst: 38, marks: qualityMarks(32, 25, 18) },
 }
 
-function qualityScale(codec: string) {
+export function qualityScale(codec: string) {
   return QUALITY_SCALE[codec] ?? QUALITY_SCALE.h264
 }
 
 /** Слово для нынешнего качества: середины между подписями — границы. */
-function qualityWord(codec: string, crf: number): string {
+export function qualityWord(codec: string, crf: number): string {
   const [low, mid, high] = qualityScale(codec).marks
   if (crf <= high.crf - 3) return 'наивысшее'
   if (crf <= (high.crf + mid.crf) / 2) return 'высокое'
@@ -319,7 +321,7 @@ function qualityWord(codec: string, crf: number): string {
  * картинке файл легче), быстрее — готово раньше. У AV1 это числа, у
  * остальных — слова.
  */
-const SPEED_HINTS = [
+export const SPEED_HINTS = [
   'Программа потратит больше всего времени на кодирование — в несколько раз дольше обычного. Картинка при том же весе станет чуть чище, а файл при том же качестве — чуть легче',
   'Кодирование заметно дольше обычного. Картинка при том же весе немного чище, файл при том же качестве немного легче',
   'Обычное время кодирования, хорошая картинка и разумный вес файла. Подходит почти всегда',
@@ -360,11 +362,13 @@ export function Choice({
 }: {
   label: string
   value: string
-  options: { value: string; label: string; title?: string; disabled?: boolean }[]
+  /** ``short`` — подпись на самой кнопке, если полная в неё не влезает. */
+  options: { value: string; label: string; short?: string; title?: string; disabled?: boolean }[]
   onChange: (value: string) => void
   /** Что это за настройка — подсказка у заголовка. */
   hint?: string
 }) {
+  const chosen = options.find((item) => item.value === value)
   return (
     <div className="min-w-0 flex-1">
       <span className="label" title={hint}>{label}</span>
@@ -375,7 +379,7 @@ export function Choice({
         className="field flex w-full items-center gap-1 text-left text-[12.5px] hover:border-line"
       >
         <span className="min-w-0 flex-1 truncate">
-          {options.find((item) => item.value === value)?.label ?? value}
+          {chosen?.short ?? chosen?.label ?? value}
         </span>
         <ChevronDown size={13} className="shrink-0 text-ink-faint" />
       </Dropdown>

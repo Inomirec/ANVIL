@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from ..models import ImageOptions, ImageText
+from ..models import ComposeClip, ImageOptions, ImageText, Rect
 from . import binaries
 from .jobs import failure_text
 from .probe import MediaInfo, probe
@@ -31,7 +31,10 @@ _AVIF_CRF = (20, 63)      # меньше = лучше
 _JPEG_QSCALE = (2, 31)    # меньше = лучше
 _WEBP_QUALITY = (10, 100)  # больше = лучше
 
-EXTENSIONS = {"avif": ".avif", "webp": ".webp", "jpg": ".jpg", "png": ".png"}
+EXTENSIONS = {"avif": ".avif", "webp": ".webp", "jpg": ".jpg", "png": ".png", "ico": ".ico"}
+
+#: Больше 256 точек по стороне значок Windows не вмещает.
+ICO_LIMIT = 256
 
 
 @dataclass(slots=True)
@@ -85,29 +88,89 @@ def _ffmpeg_color(value: str) -> str:
     return value or "black"
 
 
-def _text_filter(mark: ImageText) -> str:
-    """Надпись на картинке — тем же ``drawtext``, что и в монтаже.
+def _text_clip(mark: ImageText, index: int, width: int, height: int) -> ComposeClip:
+    """Надпись картинки как надпись монтажа — её рисует тот же код.
 
-    В x и y стоит середина самих букв: ``drawtext`` считает ``text_h`` по
-    нарисованным буквам, и окно правки ставит надпись так же.
+    В монтаже размеры хранятся долями высоты кадра, здесь — пикселями
+    оригинала: переводим, а дальше всё общее, включая тень и подложку.
+    Проверку значений пропускаем (`model_construct`): пределы у монтажа
+    рассчитаны на кадр, а не на картинку в десять тысяч точек.
     """
-    from . import compose, fonts
+    return ComposeClip.model_construct(
+        id=f"image-text-{index}",
+        source="",
+        kind="text",
+        duration=1.0,
+        anim={},
+        text=mark.text,
+        font=mark.font,
+        bold=mark.bold,
+        italic=mark.italic,
+        font_size=max(1.0, mark.size) / height,
+        text_color=mark.color,
+        align=mark.align,
+        x=mark.x / width,
+        y=mark.y / height,
+        stroke_on=mark.stroke_on and mark.stroke > 0,
+        stroke=mark.stroke / height,
+        stroke_color=mark.stroke_color,
+        shadow_on=mark.shadow_on,
+        shadow_x=mark.shadow_x / height,
+        shadow_y=mark.shadow_y / height,
+        shadow_alpha=mark.shadow_alpha,
+        shadow_blur=mark.shadow_blur / height,
+        shadow_color=mark.shadow_color,
+        box=mark.box,
+        box_color=mark.box_color,
+        box_alpha=mark.box_alpha,
+        box_pad=mark.box_pad / height,
+        box_radius=mark.box_radius / height,
+    )
 
-    parts = [f"textfile={compose._escaped(str(compose.text_file(mark.text)))}"]
-    where = fonts.path_for(mark.font, False, False)
-    if where:
-        parts.append(f"fontfile={compose._escaped(where)}")
-    if mark.stroke:
-        # Обводка снаружи букв, скруглённая — как кольцо теней в окне.
-        parts += [f"borderw={mark.stroke}", f"bordercolor={_ffmpeg_color(mark.stroke_color)}"]
-    parts += [
-        f"fontsize={mark.size}",
-        f"fontcolor={_ffmpeg_color(mark.color)}",
-        "text_align=C",
-        f"x='{mark.x:.1f}-text_w/2'",
-        f"y='{mark.y:.1f}-text_h/2'",
-    ]
-    return "drawtext=" + ":".join(parts)
+
+def decorated(box: Rect) -> bool:
+    """Заливка со скруглением, рамкой или тенью — её рисуем картинкой."""
+    shadow = box.shadow_on and box.shadow_alpha > 0
+    return box.radius > 0 or (box.stroke_on and box.stroke > 0) or shadow
+
+
+def _fill_clip(box: Rect, color: str, width: int, height: int) -> ComposeClip:
+    """Заливка картинки как заливка монтажа: место и размер — долями кадра."""
+    return ComposeClip.model_construct(
+        id="image-fill",
+        source="",
+        kind="color",
+        duration=1.0,
+        anim={},
+        effects=[],
+        color=color,
+        size=box.width / width,
+        size_y=box.height / height,
+        x=(box.x + box.width / 2) / width,
+        y=(box.y + box.height / 2) / height,
+        radius=box.radius / height,
+        stroke_on=box.stroke_on,
+        stroke=box.stroke / height,
+        stroke_color=box.stroke_color,
+        stroke_round=box.stroke_round / height,
+        shadow_on=box.shadow_on,
+        shadow_x=box.shadow_x / height,
+        shadow_y=box.shadow_y / height,
+        shadow_alpha=box.shadow_alpha,
+        shadow_blur=box.shadow_blur / height,
+        shadow_color=box.shadow_color,
+    )
+
+
+def _orient_filters(options: ImageOptions) -> list[str]:
+    """Поворот и отражение — уже после правок и обрезки."""
+    turn = {90: ["transpose=1"], 180: ["hflip", "vflip"], 270: ["transpose=2"]}.get(options.rotate, [])
+    return turn + (["hflip"] if options.flip_h else [])
+
+
+def has_edits(options: ImageOptions) -> bool:
+    """Есть ли нарисованное поверх картинки — его кладём отдельным проходом."""
+    return bool(options.boxes or any(mark.text.strip() for mark in options.texts) or options.paint_png)
 
 
 def build_args(
@@ -131,23 +194,9 @@ def build_args(
 
     # Порядок фильтров важен: сначала закрашиваем и обрезаем в координатах
     # оригинала (их и рисует пользователь), и только потом уменьшаем.
+    # Нарисованное поверх (заливки, надписи, кисть) накладывается раньше,
+    # отдельным проходом (`_apply_edits`): сюда картинка приходит уже с ним.
     chain: list[str] = []
-    if options.boxes or options.texts:
-        # Маски рисуем в обычном RGB. В «телевизионном» цветовом виде drawbox
-        # укладывает цвет в диапазон 16-235, и заданный цвет оседает бледнее:
-        # выбранный пипеткой фон переставал совпадать с самим фоном.
-        # Именно rgba, а не rgb24: у картинок с прозрачностью rgb24 срезал бы
-        # альфа-канал, и прозрачный фон стал бы чёрным.
-        chain.append("format=rgba")
-    for box in options.boxes:
-        chain.append(
-            f"drawbox=x={box.x}:y={box.y}:w={box.width}:h={box.height}"
-            f":color={_ffmpeg_color(box.color or options.box_color)}:t=fill"
-        )
-
-    for mark in options.texts:
-        if mark.text.strip():
-            chain.append(_text_filter(mark))
 
     source_width = info.video.width if info and info.video else None
     source_height = info.video.height if info and info.video else None
@@ -157,8 +206,34 @@ def build_args(
         chain.append(f"crop={crop.width}:{crop.height}:{crop.x}:{crop.y}")
         source_width, source_height = crop.width, crop.height
 
+    chain += _orient_filters(options)
+    if options.rotate in (90, 270) and source_width and source_height:
+        source_width, source_height = source_height, source_width
+
     resize = None
-    if source_width and source_height:
+    if fmt == "ico":
+        # Значок — квадрат не больше 256 точек: картинку вписываем целиком,
+        # а лишнее по краям оставляем прозрачным, иначе Windows её растянет.
+        limit = min(ICO_LIMIT, options.max_dimension) if options.max_dimension else ICO_LIMIT
+        if source_width and source_height:
+            # Размер известен — считаем числами: команду потом читает человек
+            # в окне «своей команды», и формулы в кавычках там нечитаемы.
+            ratio = min(1.0, limit / max(source_width, source_height))
+            wide = max(1, round(source_width * ratio))
+            tall = max(1, round(source_height * ratio))
+            side = max(wide, tall)
+            chain += [
+                f"scale={wide}:{tall}:flags=lanczos",
+                "format=rgba",
+                f"pad={side}:{side}:{(side - wide) // 2}:{(side - tall) // 2}:color=black@0",
+            ]
+        else:
+            chain += [
+                f"scale=w='min({limit},iw)':h='min({limit},ih)':force_original_aspect_ratio=decrease:flags=lanczos",
+                "format=rgba",
+                "pad=w='max(iw,ih)':h='max(iw,ih)':x='(ow-iw)/2':y='(oh-ih)/2':color=black@0",
+            ]
+    elif source_width and source_height:
         resize = _target_dimensions(source_width, source_height, options.max_dimension)
     if resize:
         chain.append(f"scale={resize[0]}:{resize[1]}:flags=lanczos")
@@ -246,6 +321,16 @@ def build_args(
             "-frames:v", "1",
             "-f", "image2",
         ]
+    elif fmt == "ico":
+        # Внутри значка — PNG: его понимают все Windows начиная с Vista, и
+        # прозрачность он держит.
+        args += [
+            "-vf", scale,
+            "-c:v", "png",
+            "-pix_fmt", "rgba",
+            "-frames:v", "1",
+            "-f", "ico",
+        ]
     else:
         raise ValueError(f"Неизвестный формат изображения: {fmt}")
 
@@ -311,38 +396,92 @@ async def alpha_is_used(source: Path) -> bool:
     return True
 
 
-async def _apply_paint(source: Path, data: str, workdir: Path) -> Path:
-    """Накладывает нарисованное кистью поверх картинки отдельным проходом.
+async def _apply_edits(source: Path, options: ImageOptions, info: MediaInfo | None, workdir: Path) -> Path:
+    """Кладёт нарисованное поверх картинки отдельным проходом в PNG без потерь.
 
-    Мазки приходят готовым прозрачным PNG размером с оригинал: прямоугольником
-    не закрыть надпись, идущую дугой, а описывать каждый мазок фильтрами
-    ffmpeg — бессмысленно сложно.
+    Мазки кистью, заливки и надписи рисуются в координатах оригинала, до
+    обрезки и уменьшения, — так их и рисует человек. Отдельный шаг держит
+    команду сжатия простой: в ней остаются только обрезка, поворот и размер.
 
-    Наложение делаем до всего остального, отдельным быстрым шагом в PNG без
-    потерь. Так координаты закраски и обрезки остаются в системе оригинала,
-    а собранная ниже команда сжатия не усложняется вторым входом.
+    Заливку со скруглением, рамкой или тенью и надпись с тенью и подложкой
+    рисует код монтажа (`compose`): у картинки ровно те же украшения, что у
+    кадра монтажа. Каждая надпись — на своём прозрачном слое: у слоёв
+    подложки и размытой тени цвет и прозрачность меняются по всему слою, и
+    общий слой испортил бы соседние надписи.
     """
-    workdir.mkdir(parents=True, exist_ok=True)
-    layer = workdir / "paint.png"
-    payload = data.split(",", 1)[-1] if data.startswith("data:") else data
-    layer.write_bytes(base64.b64decode(payload))
+    from . import compose
 
-    painted = workdir / "painted.png"
+    workdir.mkdir(parents=True, exist_ok=True)
+    width = info.video.width if info and info.video else 0
+    height = info.video.height if info and info.video else 0
+    if not width or not height:
+        raise ValueError("Не удалось узнать размер картинки — правки наложить не на что.")
+
+    inputs: list[str] = ["-i", str(source)]
+    graph: list[str] = ["[0:v]format=rgba[e0]"]
+    step = 0
+
+    def put_over(picture: Path, x: int, y: int) -> None:
+        nonlocal step
+        inputs.extend(["-i", str(picture)])
+        number = len(inputs) // 2 - 1
+        graph.append(f"[e{step}][{number}:v]overlay=x={x}:y={y}:format=auto[e{step + 1}]")
+        step += 1
+
+    if options.paint_png:
+        # Мазки кистью приходят готовым прозрачным PNG размером с оригинал:
+        # описывать каждый фильтрами ffmpeg — бессмысленно сложно.
+        paint = workdir / "paint.png"
+        data = options.paint_png
+        payload = data.split(",", 1)[-1] if data.startswith("data:") else data
+        paint.write_bytes(base64.b64decode(payload))
+        put_over(paint, 0, 0)
+
+    for box in options.boxes:
+        color = _ffmpeg_color(box.color or options.box_color)
+        if decorated(box):
+            hex_color = "#" + color[2:] if color.startswith("0x") else "#000000"
+            clip = _fill_clip(box, hex_color, width, height)
+            margin = compose.fill_margin(clip, height)
+            put_over(await compose._render_fill(clip, width, height), box.x - margin, box.y - margin)
+        else:
+            # Маски рисуем в обычном RGB: в «телевизионном» виде drawbox
+            # укладывает цвет в диапазон 16-235, и выбранный пипеткой фон
+            # переставал совпадать с самим фоном.
+            graph.append(
+                f"[e{step}]drawbox=x={box.x}:y={box.y}:w={box.width}:h={box.height}"
+                f":color={color}:t=fill[e{step + 1}]"
+            )
+            step += 1
+
+    for index, mark in enumerate(options.texts):
+        if not mark.text.strip():
+            continue
+        clip = _text_clip(mark, index, width, height)
+        if compose.text_layered(clip):
+            chain = compose.text_layers(clip, width, height).removesuffix(",format=yuva420p") + ",format=rgba"
+        else:
+            chain = compose.text_filter(clip, width, height)
+        graph.append(f"color=c=black@0:s={width}x{height}:d=1,format=rgba[t{index}in]")
+        graph.append(f"[t{index}in]{chain}[t{index}]")
+        graph.append(f"[e{step}][t{index}]overlay=format=auto[e{step + 1}]")
+        step += 1
+
+    edited = workdir / "edited.png"
     await _run([
         binaries.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-        "-i", str(source),
-        "-i", str(layer),
-        "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto",
+        *inputs,
+        "-filter_complex", ";".join(graph) + f";[e{step}]format=rgba[out]",
+        "-map", "[out]",
         "-pix_fmt", "rgba",
         "-frames:v", "1",
-        str(painted),
+        str(edited),
     ])
-    layer.unlink(missing_ok=True)
-    return painted
+    return edited
 
 
 #: Приписка к имени файла по формату — та же, что предлагает интерфейс.
-SUFFIXES = {"avif": "_avif", "jpg": "_jpeg", "webp": "_webp", "png": "_png"}
+SUFFIXES = {"avif": "_avif", "jpg": "_jpeg", "webp": "_webp", "png": "_png", "ico": "_ico"}
 
 
 async def resolve_format(source: Path, options: ImageOptions) -> str:
@@ -368,9 +507,13 @@ async def compress(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     paint_dir: Path | None = None
-    if options.paint_png:
+    if has_edits(options):
         paint_dir = output.parent / f".{output.stem}.paint"
-        source = await _apply_paint(source, options.paint_png, paint_dir)
+        try:
+            source = await _apply_edits(source, options, await probe(source), paint_dir)
+        except BaseException:
+            shutil.rmtree(paint_dir, ignore_errors=True)
+            raise
 
     info = await probe(source)
     if info and info.animated and options.format != "webp":
@@ -416,6 +559,12 @@ def _result(
     height = info.video.height if info.video else 0
     if options.crop:
         width, height = options.crop.width, options.crop.height
+    if options.rotate in (90, 270):
+        width, height = height, width
+    if options.format == "ico":
+        limit = min(ICO_LIMIT, options.max_dimension) if options.max_dimension else ICO_LIMIT
+        side = min(limit, max(width or 0, height or 0))
+        return ImageResult(output=output, size=size, width=side, height=side, quality_used=quality)
     resized = _target_dimensions(width or 0, height or 0, options.max_dimension)
     if resized:
         width, height = resized

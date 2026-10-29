@@ -220,7 +220,7 @@ async def image_preview(request: ImagePreviewRequest) -> dict[str, object]:
 
 #: Имя превью мы задаём сами — на вход принимаем только такое, иначе через
 #: «..» можно было бы вычитать что угодно с диска.
-_PREVIEW_NAME = re.compile(r"[0-9a-f]{20}\.(avif|webp|jpg|png)")
+_PREVIEW_NAME = re.compile(r"[0-9a-f]{20}\.(avif|webp|jpg|png|ico)")
 
 
 @router.get("/preview/{name}")

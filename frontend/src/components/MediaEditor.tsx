@@ -6,11 +6,12 @@ import {
   Play,
   Repeat,
   Scissors,
+  SkipBack,
   Volume2,
-  VolumeX,
 } from 'lucide-react'
 import { api, mediaUrl } from '../lib/api'
 import { humanSize, timecode } from '../lib/format'
+import { loadPrefs, onPrefs } from '../lib/prefs'
 import { cutTimes, frameCode, useScenes } from '../lib/scenes'
 import type { FileInfo, FilmstripInfo } from '../lib/types'
 import { useStore } from '../store'
@@ -95,6 +96,19 @@ export function MediaEditor({
   const revealQueue = useStore((state) => state.revealQueue)
 
   const isVideo = file.kind === 'video'
+  // Кадры на дорожке видео: по склейкам, редко или никак — и их качество.
+  // Настройка в окне настроек, меняется на ходу.
+  const [frames, setFrames] = useState(() => ({
+    mode: loadPrefs().timelineFrames ?? 'scenes',
+    large: loadPrefs().timelineQuality === 'high',
+  }))
+  useEffect(
+    () =>
+      onPrefs(() =>
+        setFrames({ mode: loadPrefs().timelineFrames ?? 'scenes', large: loadPrefs().timelineQuality === 'high' }),
+      ),
+    [],
+  )
   // Колесо над кадром приближает его, зажатое колесо таскает: мелкую надпись
   // или край кадра иначе не разглядеть. На готовый файл не влияет.
   const zoom = useZoomPan(file.path, isVideo ? 8 : 1, isVideo ? 0.4 : 1)
@@ -160,16 +174,19 @@ export function MediaEditor({
   }, [file.path, file.media?.hasAudio])
 
   // Лента кадров для верхней дорожки — её тоже готовит и кэширует бэкенд.
+  // Равномерная лента дешёвая (читаются только опорные кадры) и показывается,
+  // пока кадры по склейкам ещё считаются; при «Без кадров» её нет вовсе.
   useEffect(() => {
-    if (file.kind !== 'video') {
+    if (file.kind !== 'video' || frames.mode === 'off') {
       setStrip(null)
+      setStripLoading(false)
       return
     }
     let cancelled = false
     setStrip(null)
     setStripLoading(true)
     api
-      .filmstrip(file.path)
+      .filmstrip(file.path, frames.mode === 'sparse' && frames.large ? 80 : undefined)
       .then((data) => {
         if (!cancelled) setStrip(data)
       })
@@ -182,7 +199,7 @@ export function MediaEditor({
     return () => {
       cancelled = true
     }
-  }, [file.path, file.kind])
+  }, [file.path, file.kind, frames.mode, frames.large])
 
   /** Держит громкость и затемнение в соответствии с нарисованными затуханиями. */
   const applyFades = useCallback(
@@ -250,7 +267,7 @@ export function MediaEditor({
   )
 
   // Склейки ролика: Shift со стрелкой шагает к соседней смене сцены.
-  const scenes = useScenes(isVideo ? file.path : null, isVideo)
+  const scenes = useScenes(isVideo ? file.path : null, isVideo && frames.mode === 'scenes', frames.large)
   const toScene = useCallback(
     (forward: boolean) => {
       const media = mediaRef.current
@@ -379,25 +396,41 @@ export function MediaEditor({
 
   // Сведения о файле делятся на два угла над кадром: слева сам файл, справа
   // его дорожки.
-  const fileDetails = [
-    humanSize(file.size),
-    media?.width ? `${media.width}×${media.height}${media.fps ? ` · ${media.fps.toFixed(media.fps % 1 ? 2 : 0)} кадров/с` : ''}` : '',
-  ].filter(Boolean)
-  const streamDetails = [
+  // У звука — только вес, кодек и битрейт, справа. У MP3 с обложкой ffprobe
+  // видит обложку отдельным потоком «видео», и её размер выдавался за
+  // сведения о самом файле.
+  const fileDetails = isVideo
+    ? [
+        humanSize(file.size),
+        media?.width ? `${media.width}×${media.height}${media.fps ? ` · ${media.fps.toFixed(media.fps % 1 ? 2 : 0)} кадров/с` : ''}` : '',
+      ].filter(Boolean)
+    : []
+  const audioRate = media?.audioBitRate || (!isVideo && media?.duration ? (file.size * 8) / media.duration : 0)
+  const streamDetails = !isVideo
+    ? [
+        humanSize(file.size),
+        [
+          media?.audioCodec ? codecName(media.audioCodec) : file.ext.toUpperCase(),
+          media?.audioChannels && media.audioChannels !== 2 ? channelsName(media.audioChannels) : '',
+          audioRate ? kbps(audioRate) : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      ]
+    : [
     media?.videoCodec ? `Видео ${codecName(media.videoCodec)}${media.videoBitRate ? ` · ${kbps(media.videoBitRate)}` : ''}` : '',
     media?.audioCodec
       ? `Звук ${codecName(media.audioCodec)}${media.audioChannels ? ` · ${channelsName(media.audioChannels)}` : ''}${media.audioBitRate ? ` · ${kbps(media.audioBitRate)}` : ''}`
       : '',
   ].filter(Boolean)
 
-  // Панель плеера — над таймлайном, как в монтаже. Всё в одну строку и
-  // ничего не прячется на узком окне: скорость просмотра убрана, громкость
-  // ползунком всплывает над значком.
-  const toolbar = (
+  // Панель плеера — над таймлайном и устроена как в монтаже: слева время и
+  // метки, посередине просмотр (стоит по центру и не ездит), справа кадр,
+  // полный экран и масштаб таймлайна. Всё в одну строку на любом окне.
+  const cutting =
+    (trim.in !== null && trim.in > 0.05) || (trim.out !== null && duration > 0 && trim.out < duration - 0.05)
+  const left = (
     <>
-      <IconButton onClick={togglePlay} active={playing} title="Воспроизведение / пауза (Пробел)">
-        {playing ? <Pause size={14} /> : <Play size={14} />}
-      </IconButton>
       <span className="shrink-0 cursor-text select-text font-mono text-[11px] tabular-nums text-ink-dim">
         <span title={isVideo ? 'Минуты, секунды и номер кадра в секунде' : undefined}>
           {isVideo ? frameCode(time, fps) : timecode(time, true)}
@@ -407,66 +440,94 @@ export function MediaEditor({
 
       <span className="mx-0.5 h-4 w-px shrink-0 bg-line-soft" />
 
-      <IconButton onClick={setIn} title={`Метка начала (I)${trim.in !== null ? ` — сейчас ${timecode(trim.in, true)}` : ''}`}>
+      <IconButton className="h-7 w-7" onClick={setIn} title={`Метка начала (I)${trim.in !== null ? ` — сейчас ${timecode(trim.in, true)}` : ''}`}>
         <span className="text-[12px] font-bold text-accent-soft">I</span>
       </IconButton>
-      <IconButton onClick={setOut} title={`Метка конца (O)${trim.out !== null ? ` — сейчас ${timecode(trim.out, true)}` : ''}`}>
+      <IconButton className="h-7 w-7" onClick={setOut} title={`Метка конца (O)${trim.out !== null ? ` — сейчас ${timecode(trim.out, true)}` : ''}`}>
         <span className="text-[12px] font-bold text-accent-soft">O</span>
       </IconButton>
       {selectionLength !== null && (
+        // Длина отрезка видна всегда, а выделена — только когда метки и
+        // правда что-то отрезают.
         <button
           type="button"
           onClick={() => onTrimChange({ in: 0, out: duration })}
           title={`Отрезок ${timecode(trim.in ?? 0, true)} → ${timecode(trim.out ?? duration, true)}. Нажмите, чтобы вернуть метки на края файла`}
-          className="flex h-7 shrink-0 items-center gap-1 bg-accent/15 px-2 font-mono text-[11px] tabular-nums text-accent-soft hover:bg-accent/25"
+          className={`flex h-7 shrink-0 items-center gap-1 px-2 font-mono text-[11px] tabular-nums ${
+            cutting ? 'bg-accent/15 text-accent-soft hover:bg-accent/25' : 'text-ink-faint hover:bg-surface-3 hover:text-ink-dim'
+          }`}
         >
           <Scissors size={11} />
           {timecode(Math.max(selectionLength, 0), true)}
         </button>
       )}
-      <IconButton
+    </>
+  )
+
+  const shownVolume = muted ? 0 : volume
+  const changeVolume = (value: number) => {
+    setVolume(value)
+    setMuted(value === 0)
+    localStorage.setItem(VOLUME_KEY, String(value))
+  }
+  const center = (
+    <>
+      <IconButton className="h-7 w-7" onClick={() => seek(trim.in ?? 0)} title="К началу отрезка (Home — к началу файла)">
+        <SkipBack size={14} />
+      </IconButton>
+      <IconButton className="h-7 w-7" onClick={togglePlay} active={playing} title="Воспроизведение / пауза (Пробел)">
+        {playing ? <Pause size={14} /> : <Play size={14} />}
+      </IconButton>
+      <IconButton className="h-7 w-7"
         onClick={() => setLoopSelection((value) => !value)}
         active={loopSelection}
-        title="Зациклить выделение (L)"
+        title="Повторять отрезок по кругу (L)"
       >
         <Repeat size={14} />
       </IconButton>
-      {isVideo && (
-        <IconButton
-          onClick={() => void grabFrame()}
-          disabled={grabbing}
-          title="Сохранить текущий кадр картинкой (S)"
-        >
-          <Camera size={14} />
-        </IconButton>
-      )}
-
-      <span className="ml-auto" />
+      {/* Громкость просмотра — как в монтаже: есть место — обычная полоска
+          рядом со значком, тесно — ползунок всплывает над значком. */}
       <VolumeControl
+        small
         volume={volume}
         muted={muted}
+        popupClassName="@[700px]:hidden"
         onMute={() => setMuted((value) => !value)}
-        onChange={(value) => {
-          setVolume(value)
-          setMuted(value === 0)
-          localStorage.setItem(VOLUME_KEY, String(value))
-        }}
+        onChange={changeVolume}
       />
-      {isVideo && (
-        <IconButton
-          onClick={() => {
-            const element = mediaRef.current
-            if (document.fullscreenElement) void document.exitFullscreen()
-            else void element?.requestFullscreen?.()
-          }}
-          title="Полный экран"
-        >
-          <Maximize2 size={14} />
-        </IconButton>
-      )}
-      <span className="mx-0.5 h-4 w-px shrink-0 bg-line-soft" />
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={Math.round(shownVolume * 100)}
+        onChange={(event) => changeVolume(Number(event.target.value) / 100)}
+        title={`Громкость просмотра ${Math.round(shownVolume * 100)}% — на файл не влияет`}
+        className="ml-0.5 hidden w-[72px] @[700px]:block"
+      />
     </>
   )
+
+  const right = isVideo ? (
+    <>
+      <IconButton className="h-7 w-7"
+        onClick={() => void grabFrame()}
+        disabled={grabbing}
+        title="Сохранить текущий кадр картинкой (S)"
+      >
+        <Camera size={14} />
+      </IconButton>
+      <IconButton className="h-7 w-7"
+        onClick={() => {
+          const element = mediaRef.current
+          if (document.fullscreenElement) void document.exitFullscreen()
+          else void element?.requestFullscreen?.()
+        }}
+        title="Полный экран"
+      >
+        <Maximize2 size={14} />
+      </IconButton>
+    </>
+  ) : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -554,7 +615,7 @@ export function MediaEditor({
               {item}
             </span>
           ))}
-          {!media?.audioCodec && <span className="text-warn">без звуковой дорожки</span>}
+          {isVideo && !media?.audioCodec && <span className="text-warn">без звуковой дорожки</span>}
         </div>
 
         {error && (
@@ -565,7 +626,8 @@ export function MediaEditor({
       </div>
 
       <Timeline
-        toolbar={toolbar}
+        toolbar={{ left, center, right }}
+        framesOff={frames.mode === 'off'}
         duration={duration}
         currentTime={time}
         inPoint={trim.in}

@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, FileX2, FolderInput, Play } from 'lucide-react'
+import { Eye, FileX2, FolderInput, Play, Terminal } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural } from '../lib/format'
 import { imageEffort, loadPrefs, savePrefs, SPEED_LABELS } from '../lib/prefs'
-import { Choice } from './ComposeRender'
+import { Choice, SPEED_HINTS } from './ComposeRender'
 import { strokesToPng } from '../lib/paint'
 import type { FileInfo, ImageOptions, ImagePreview, Preset } from '../lib/types'
 import { useStore } from '../store'
 import type { ImageEdit } from './ImageEditorTop'
-import { Button, MarkIcons, Modal, QuietHints, Section, Segmented, Select, Toggle } from './ui'
+import { Button, MarkIcons, Modal, QuietHints, Section, Segmented, Toggle } from './ui'
 
 const DEFAULT_IMAGE: ImageOptions = {
   format: 'avif',
-  quality: 94,
+  quality: 90,
   max_dimension: 0,
   effort: 4,
   boxes: [],
@@ -20,27 +20,48 @@ const DEFAULT_IMAGE: ImageOptions = {
   crop: null,
 }
 
-type Format = 'avif' | 'jpg' | 'webp'
+type Format = 'avif' | 'jpg' | 'webp' | 'ico'
 
 const FORMATS: { value: Format; label: string; title: string }[] = [
   { value: 'avif', label: 'AVIF', title: 'Жмёт лучше всех, держит прозрачность' },
   { value: 'jpg', label: 'JPEG', title: 'Открывается везде, прозрачность не держит' },
   { value: 'webp', label: 'WebP', title: 'Середина: жмёт хорошо, поддержки больше' },
+  {
+    value: 'ico',
+    label: 'ICO',
+    title: 'Значок для программ и ярлыков Windows: квадрат не больше 256 точек, прозрачность держит',
+  },
 ]
 
+/** Предел по длинной стороне. Маленькие картинки не растягиваются. */
 const SIZES = [
-  { value: '0', label: 'Как есть' },
-  { value: '1280', label: 'до 1280 px' },
-  { value: '1600', label: 'до 1600 px' },
-  { value: '1920', label: 'до 1920 px' },
+  // На кнопке — коротко: в строку с «Скоростью» полное имя не влезает.
+  { value: '0', label: 'Оригинальный файл', short: 'Оригинал', title: 'Размер не меняется' },
   { value: '2560', label: 'до 2560 px' },
+  { value: '1920', label: 'до 1920 px' },
+  { value: '1600', label: 'до 1600 px' },
+  { value: '1280', label: 'до 1280 px' },
+  { value: '1024', label: 'до 1024 px' },
+  { value: '854', label: 'до 854 px', title: 'Как кадр 480p' },
+  { value: '640', label: 'до 640 px', title: 'Как кадр 360p' },
+  { value: '480', label: 'до 480 px' },
+  { value: '256', label: 'до 256 px', title: 'Размер значка' },
+  { value: '128', label: 'до 128 px' },
+  { value: '64', label: 'до 64 px' },
 ]
 
 /** Слева ползунок не уходит в нечитаемое месиво, справа — в бессмысленный вес. */
 const MIN_QUALITY = 20
 const MAX_QUALITY = 100
 
-const SUFFIXES: Record<string, string> = { avif: '_avif', jpg: '_jpeg', webp: '_webp' }
+const SUFFIXES: Record<string, string> = { avif: '_avif', jpg: '_jpeg', webp: '_webp', ico: '_ico' }
+
+/** Скорость с подсказками — те же, что у видео. */
+const SPEED_OPTIONS = SPEED_LABELS.map((label, index) => ({
+  value: String(index),
+  label,
+  title: SPEED_HINTS[index],
+}))
 
 /** Настройки, от которых зависит результат: остальные превью не пересчитывают. */
 function encodeKey(options: ImageOptions) {
@@ -83,6 +104,12 @@ export function ImagePanel({
       savePrefs({ imageSizeAsIs: true })
       if (saved.max_dimension === 1600) saved.max_dimension = 0
     }
+    // «Рекомендуемое сжатие» было качеством 94, теперь 90. Запомненные 94 —
+    // это прежний пресет, а не выбор человека: переводим один раз.
+    if (!prefs.imageQuality90) {
+      savePrefs({ imageQuality90: true })
+      if (saved.format === 'avif' && saved.quality === 94) saved.quality = 90
+    }
     return saved
   })
   // Удаление исходника — не настройка сжатия, а решение про файл, поэтому
@@ -96,6 +123,7 @@ export function ImagePanel({
     () => loadPrefs().subfolder ?? localStorage.getItem('sgh.outputSubfolder') !== 'off',
   )
   const [busy, setBusy] = useState(false)
+  const [command, setCommand] = useState<string | null>(null)
   // Движущуюся картинку умеет сохранить только WebP: в AVIF и JPEG влезает
   // один кадр, и от анимации остался бы стоп-кадр. Формат за человека не
   // меняем — спрашиваем перед самой обработкой.
@@ -137,7 +165,8 @@ export function ImagePanel({
   }, [showPreview])
 
   const hasEdits =
-    Boolean(edit.crop) || edit.boxes.length > 0 || edit.strokes.length > 0 || (edit.texts ?? []).some((mark) => mark.text.trim())
+    Boolean(edit.crop) || edit.boxes.length > 0 || edit.strokes.length > 0 ||
+    (edit.texts ?? []).some((mark) => mark.text.trim()) || Boolean(edit.rotate) || Boolean(edit.flipH)
 
   const editPayload = useMemo(
     () => ({
@@ -150,6 +179,8 @@ export function ImagePanel({
       paint_png: edit.strokes.length
         ? strokesToPng(edit.strokes, file.media?.width ?? 0, file.media?.height ?? 0, '#000000')
         : null,
+      rotate: edit.rotate ?? 0,
+      flip_h: edit.flipH ?? false,
     }),
     [edit, file.media?.width, file.media?.height],
   )
@@ -201,6 +232,8 @@ export function ImagePanel({
       boxes: withEdits ? editPayload.boxes : [],
       texts: withEdits ? editPayload.texts : [],
       paint_png: withEdits ? editPayload.paint_png : null,
+      rotate: withEdits ? editPayload.rotate : 0,
+      flip_h: withEdits ? editPayload.flip_h : false,
     },
     // Без подпапки результат ложится прямо туда, где лежал оригинал.
     output_dir: intoSubfolder ? null : parentDir(source),
@@ -289,6 +322,49 @@ export function ImagePanel({
   }
 
 
+  // Своя команда ffmpeg: пока поле открыто, оно пересобирается под настройки.
+  // Сломали строку — тронули настройку, и появилась рабочая.
+  async function loadCommand() {
+    try {
+      const preview = await api.exportPreview(buildRequest(file.path, true, false))
+      setCommand(preview.command ?? '')
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    }
+  }
+  useEffect(() => {
+    if (command === null) return
+    let cancelled = false
+    api
+      .exportPreview(buildRequest(file.path, true, false))
+      .then((preview) => !cancelled && setCommand(preview.command ?? ''))
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [encodeKey(options), speed, editPayload, intoSubfolder])
+
+  async function runRaw() {
+    if (!command?.trim()) return
+    setBusy(true)
+    try {
+      await api.exportRaw(command, file.path)
+      revealQueue()
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Нарисованное поверх команда не видит: программа кладёт его отдельным
+  // проходом до неё.
+  const drawn =
+    edit.boxes.length > 0 || edit.strokes.length > 0 || (edit.texts ?? []).some((mark) => mark.text.trim())
+  // У значка и PNG качества нет: они без потерь.
+  const lossless = options.format === 'ico' || options.format === 'png'
+
   const formatLabel = FORMATS.find((item) => item.value === options.format)?.label ?? options.format
   const sizeLabel = SIZES.find((item) => item.value === String(options.max_dimension))?.label
 
@@ -334,7 +410,7 @@ export function ImagePanel({
         <Section
           title="Настроить вручную"
           id="image.manual"
-          summary={`${formatLabel} · ${options.quality}${sizeLabel ? ` · ${sizeLabel}` : ''}`}
+          summary={`${formatLabel}${lossless ? '' : ` · ${options.quality}`}${sizeLabel ? ` · ${sizeLabel}` : ''}`}
         >
           <Segmented<Format>
             value={options.format as Format}
@@ -348,6 +424,14 @@ export function ImagePanel({
             </p>
           )}
 
+          {options.format === 'ico' && (
+            <p className="rounded-lg bg-surface-2 px-3 py-2 text-[11px] leading-snug text-ink-dim">
+              Значок получится квадратным, не больше 256 точек: картинка
+              впишется целиком, а лишнее по краям останется прозрачным.
+            </p>
+          )}
+
+          {!lossless && (
           <div>
             <div className="flex items-center justify-between">
               <span className="label">Качество</span>
@@ -372,27 +456,31 @@ export function ImagePanel({
               <span>Лёгкое</span>
             </div>
           </div>
-
-          <Select
-            label="Размер"
-            value={String(options.max_dimension)}
-            options={SIZES}
-            onChange={(value) => setOptions({ ...options, max_dimension: Number(value) })}
-            hint="Уменьшает только слишком большие картинки, маленькие не растягивает."
-          />
-          {/* Скорость — как в монтаже. У JPEG и PNG её нет. */}
-          {(options.format === 'avif' || options.format === 'webp') && (
-            <Choice
-              label="Скорость"
-              hint="Сколько кодировщик старается. Медленнее — дольше ждать, но при том же качестве файл чуть легче"
-              value={String(speed)}
-              options={SPEED_LABELS.map((label, index) => ({ value: String(index), label }))}
-              onChange={(value) => {
-                setSpeed(Number(value))
-                savePrefs({ imageSpeed: Number(value) })
-              }}
-            />
           )}
+
+          {/* Размер и скорость — одной строкой, как скорость и контейнер у
+              видео. У JPEG, PNG и значка скорости нет. */}
+          <div className="flex gap-2">
+            <Choice
+              label="Размер"
+              hint="Предел по длинной стороне. Уменьшает только слишком большие картинки, маленькие не растягивает"
+              value={String(options.max_dimension)}
+              options={SIZES}
+              onChange={(value) => setOptions({ ...options, max_dimension: Number(value) })}
+            />
+            {(options.format === 'avif' || options.format === 'webp') && (
+              <Choice
+                label="Скорость"
+                hint="Сколько кодировщик старается. Медленнее — дольше ждать, но при том же качестве файл чуть легче"
+                value={String(speed)}
+                options={SPEED_OPTIONS}
+                onChange={(value) => {
+                  setSpeed(Number(value))
+                  savePrefs({ imageSpeed: Number(value) })
+                }}
+              />
+            )}
+          </div>
         </Section>
 
         {/* Вес результата виден на самой картинке — на кнопке «После» над ней,
@@ -407,6 +495,7 @@ export function ImagePanel({
                 ...(deleteOriginal ? [{ icon: FileX2, label: 'Оригинал уйдёт в корзину', danger: true }] : []),
                 ...(showPreview ? [{ icon: Eye, label: 'Показывать превью' }] : []),
                 ...(intoSubfolder ? [{ icon: FolderInput, label: 'Результат — в подпапку' }] : []),
+                ...(command !== null ? [{ icon: Terminal, label: 'Своя команда ffmpeg' }] : []),
               ]}
             />
           }
@@ -441,6 +530,32 @@ export function ImagePanel({
             label="Удалить оригинал"
             hint="После успешного сжатия исходная картинка уйдёт в корзину Windows — оттуда её можно вернуть. По умолчанию выключено."
           />
+          <Toggle
+            checked={command !== null}
+            onChange={(value) => (value ? void loadCommand() : setCommand(null))}
+            label="Задать параметры в консоли ffmpeg"
+            hint="Для тех, кто знает ffmpeg: показывает готовую команду, её можно поправить и запустить как есть."
+          />
+          {command !== null && (
+            <div className="space-y-2">
+              <textarea
+                className="field h-40 resize-y font-code text-[10.5px] leading-relaxed"
+                spellCheck={false}
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+              />
+              <p className="text-[11px] leading-snug text-ink-faint">
+                {drawn
+                  ? 'Заливки, кисть и надписи в команду не входят: программа кладёт их отдельным шагом до неё. Обрезка, поворот и размер — входят. '
+                  : ''}
+                Последнее слово в строке — путь к результату. Запускается только ffmpeg, ничего другого.
+              </p>
+              <Button onClick={() => void runRaw()} disabled={busy} className="w-full">
+                <Terminal size={14} />
+                Запустить эту команду
+              </Button>
+            </div>
+          )}
         </Section>
 
       </div>

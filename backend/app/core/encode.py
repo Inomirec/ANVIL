@@ -392,6 +392,21 @@ def video_codec_args(options: VideoOptions, crf: int | None = None) -> list[str]
             "-pix_fmt", "yuv420p",
         ]
 
+    if codec == "h266":
+        # H.266 (VVC) — libvvenc. Шкала качества у него — qp от 0 до 63, как
+        # у AV1; скорости называются по-своему, переводим из обычных имён.
+        speed = {
+            "veryslow": "slower", "slow": "slow", "medium": "medium",
+            "fast": "fast", "veryfast": "faster",
+        }.get(str(options.speed_preset), "medium")
+        return [
+            "-c:v", "libvvenc",
+            *(["-qp", str(min(63, quality))] if rate <= 0 else ["-b:v", f"{rate}k"]),
+            "-preset", speed,
+            # Другого формата кадра кодировщик не принимает.
+            "-pix_fmt", "yuv420p10le",
+        ]
+
     raise ValueError(f"Неизвестный видеокодек: {codec}")
 
 
@@ -422,6 +437,10 @@ def audio_codec_args(options: AudioOptions) -> list[str]:
         args = ["-c:a", "aac", "-b:a", f"{options.bitrate_kbps}k"]
     elif codec == "mp3":
         args = ["-c:a", "libmp3lame", "-b:a", f"{options.bitrate_kbps}k"]
+        # Больше двух каналов MP3 не держит: звук 5.1 сводим в стерео, иначе
+        # кодировщик отказывается.
+        if not options.mono:
+            args += ["-ac", "2"]
     elif codec == "flac":
         args = ["-c:a", "flac"]
     else:

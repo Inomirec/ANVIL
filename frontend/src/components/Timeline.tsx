@@ -72,6 +72,7 @@ export function Timeline({
   onFadesChange,
   playing = false,
   toolbar,
+  framesOff = false,
 }: {
   duration: number
   currentTime: number
@@ -97,11 +98,13 @@ export function Timeline({
   onVolumeChange?: (volume: number) => void
   playing?: boolean
   /**
-   * Левая часть панели над таймлайном — кнопки плеера. Панель стоит над
-   * дорожками, как в монтаже: кнопка «играть» под таймлайном выглядела
-   * чужой. Справа на ней магнит и масштаб самого таймлайна.
+   * Панель над таймлайном — тремя частями, как в монтаже: слева метки,
+   * посередине просмотр (держится по центру и не ездит), справа — кадр и
+   * масштаб самого таймлайна. Магнит и масштаб Timeline добавляет сам.
    */
-  toolbar?: ReactNode
+  toolbar?: { left?: ReactNode; center?: ReactNode; right?: ReactNode }
+  /** Кадры на дорожке видео выключены в настройках — дорожка остаётся пустой. */
+  framesOff?: boolean
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<Drag>(null)
@@ -305,7 +308,10 @@ export function Timeline({
     tickStep < 1 ? timecode(value, true) : timecode(value)
 
   const selection = { from: toRatio(from), to: toRatio(to) }
-  const showStrip = hasVideo && Boolean(strip || stripLoading)
+  // Метки что-то отрезают — только тогда отрезок подсвечен на линейке.
+  const cutting = from > 0.05 || to < safeDuration - 0.05
+  // Без кадров дорожка видео всё равно нужна: на ней тянут затухание картинки.
+  const showStrip = hasVideo && (framesOff || Boolean(strip || stripLoading || scenes))
   const zoomed = zoom > 1.01
 
   const startDrag = (event: React.PointerEvent, mode: Drag) => {
@@ -323,11 +329,15 @@ export function Timeline({
 
   return (
     <div className="select-none border-t border-line-soft bg-surface">
-      {/* Панель: слева плеер, справа магнит и масштаб таймлайна. */}
-      <div className="flex h-9 items-center gap-2 border-b border-line-soft px-3">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5">{toolbar}</div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          <IconButton
+      {/* Панель тремя частями, как в монтаже: середина — просмотр — стоит
+          по центру и не ездит, когда по краям что-то появляется. */}
+      <div className="@container flex h-9 items-center gap-2 border-b border-line-soft px-3">
+        <div className="flex min-w-0 flex-auto items-center gap-1.5 overflow-hidden">{toolbar?.left}</div>
+        <div className="flex shrink-0 items-center gap-0.5">{toolbar?.center}</div>
+        <div className="flex min-w-0 flex-auto items-center justify-end gap-0.5 overflow-hidden">
+          {toolbar?.right}
+          {toolbar?.right && <span className="mx-0.5 h-4 w-px shrink-0 bg-line-soft" />}
+          <IconButton className="h-7 w-7"
             onClick={() => setSnap(!snap)}
             active={snap}
             title={
@@ -338,17 +348,17 @@ export function Timeline({
           >
             <Magnet size={14} />
           </IconButton>
-          <IconButton onClick={() => applyZoom(zoom / 1.6)} disabled={!zoomed} title="Отдалить (колесо мыши вниз)">
+          <IconButton className="h-7 w-7" onClick={() => applyZoom(zoom / 1.6)} disabled={!zoomed} title="Отдалить (колесо мыши вниз)">
             <ZoomOut size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             onClick={() => applyZoom(zoom * 1.6)}
             disabled={zoom >= maxZoom - 0.01}
             title="Приблизить к игле (колесо мыши вверх)"
           >
             <ZoomIn size={14} />
           </IconButton>
-          <IconButton
+          <IconButton className="h-7 w-7"
             onClick={() => {
               setZoom(1)
               setViewStart(0)
@@ -373,14 +383,17 @@ export function Timeline({
             onPointerLeave={() => setHover(null)}
             title="Нажмите или тяните — игла пойдёт сюда"
           >
-            {/* Отрезок между метками — подсветкой, как в монтаже. */}
-            <div
-              className="pointer-events-none absolute top-0 h-full bg-accent/15"
-              style={{
-                left: `${clamp(selection.from, 0, 1) * 100}%`,
-                width: `${Math.max(clamp(selection.to, 0, 1) - clamp(selection.from, 0, 1), 0) * 100}%`,
-              }}
-            />
+            {/* Отрезок между метками — подсветкой, как в монтаже. Только когда
+                метки и правда что-то отрезают: весь файл подсвечивать незачем. */}
+            {cutting && (
+              <div
+                className="pointer-events-none absolute top-0 h-full bg-accent/15"
+                style={{
+                  left: `${clamp(selection.from, 0, 1) * 100}%`,
+                  width: `${Math.max(clamp(selection.to, 0, 1) - clamp(selection.from, 0, 1), 0) * 100}%`,
+                }}
+              />
+            )}
             {/* Черта на каждом кадре — когда приблизили так, что кадр шире
                 нескольких пикселей. */}
             {fps && trackWidth > 0 && trackWidth / span / fps >= 6 && (
@@ -436,7 +449,9 @@ export function Timeline({
                 editable={Boolean(onFadesChange)}
                 onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'video', side })}
               >
-                {scenes && trackWidth > 0 ? (
+                {framesOff ? (
+                  <div className="h-full w-full bg-surface-3/40" />
+                ) : scenes && trackWidth > 0 ? (
                   <div className="relative h-full w-full">
                     <SceneStrip info={scenes} from={start} to={end} width={trackWidth} height={STRIP_HEIGHT} />
                   </div>

@@ -140,8 +140,8 @@ export const api = {
       `/api/library/waveform?path=${encodeURIComponent(path)}` +
         (buckets ? `&buckets=${Math.round(buckets)}` : ''),
     ),
-  filmstrip: (path: string) =>
-    request<FilmstripInfo>(`/api/library/filmstrip?path=${encodeURIComponent(path)}`),
+  filmstrip: (path: string, frames?: number) =>
+    request<FilmstripInfo>(`/api/library/filmstrip?path=${encodeURIComponent(path)}${frames ? `&frames=${frames}` : ''}`),
   scenes: (path: string, large = false) =>
     request<SceneInfo>(`/api/library/scenes?path=${encodeURIComponent(path)}${large ? '&large=1' : ''}`),
   deleteFile: (path: string) => post<{ ok: boolean }>('/api/library/delete', { path }),

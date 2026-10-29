@@ -3,11 +3,13 @@ import {
   Brush,
   Crop,
   Eraser,
+  FlipHorizontal2,
+  ListX,
   Maximize2,
   MousePointer2,
+  PaintBucket,
   Pipette,
-  RotateCcw,
-  Square,
+  RotateCwSquare,
   SquareDashedMousePointer,
   Trash2,
   Type,
@@ -16,11 +18,10 @@ import {
 import { mediaUrl } from '../lib/api'
 import { noStraySelection } from '../lib/noSelect'
 import { humanSize } from '../lib/format'
+import { clientToShare, orientTransform, sideways, type Orient } from '../lib/orient'
 import type { FileInfo, ImagePreview, Rect, Stroke } from '../lib/types'
 import { RectCanvas, type Selection, type Tool } from './RectCanvas'
-import { api } from '../lib/api'
-import { FontPicker, type FontRow } from './ComposeTextPanel'
-import { ImageTexts, type ImageTextMark } from './ImageTexts'
+import { ImageTexts, readTextStyle, type ImageTextMark } from './ImageTexts'
 import { ColorButton } from './ColorPicker'
 
 export interface ImageEdit {
@@ -30,46 +31,83 @@ export interface ImageEdit {
   strokes: Stroke[]
   /** Надписи поверх картинки. */
   texts: ImageTextMark[]
+  /** Поворот и отражение — после правок и обрезки. */
+  rotate?: Orient['rotate']
+  flipH?: boolean
 }
 
-export const emptyImageEdit: ImageEdit = { crop: null, boxes: [], strokes: [], texts: [] }
+export const emptyImageEdit: ImageEdit = { crop: null, boxes: [], strokes: [], texts: [], rotate: 0, flipH: false }
 
-/** Как выглядит следующая надпись — запоминается между картинками. */
-const TEXT_STYLE_KEY = 'sgh.imageText'
+/** Что выбрано на картинке — его настройки показывает колонка справа. */
+export type ImageFocus = { type: 'text'; index: number } | { type: 'box'; index: number } | null
 
-interface TextStyle {
-  font: string
-  size: number
-  color: string
-  stroke: number
-  strokeColor: string
-}
+type ToolInfo = { value: Tool; label: string; hint: string; icon: typeof Brush }
 
-function readTextStyle(): TextStyle {
-  try {
-    const saved = JSON.parse(localStorage.getItem(TEXT_STYLE_KEY) ?? 'null')
-    if (saved && typeof saved.font === 'string') return { stroke: 0, strokeColor: '#000000', ...saved }
-  } catch {
-    // Испорченная запись — берём обычные.
-  }
-  return { font: 'Arial', size: 64, color: '#ffffff', stroke: 0, strokeColor: '#000000' }
-}
-
-/** Инструменты редактора: значок, название и для чего он. */
-const TOOLS: { value: Tool; label: string; hint: string; icon: typeof Square }[] = [
-  // Курсор первым, как в редакторах: с него начинают и к нему возвращаются.
+/** Обычные инструменты. Курсор первым, как в редакторах: с него начинают. */
+const TOOLS: ToolInfo[] = [
   { value: 'view', label: 'Курсор', hint: 'просто смотреть, ничего не рисуя', icon: MousePointer2 },
-  { value: 'box', label: 'Закрасить', hint: 'прямоугольник: бренд, надпись, спойлер', icon: Square },
   { value: 'brush', label: 'Кисть', hint: 'закрасить от руки, для надписей дугой и наискось', icon: Brush },
   { value: 'eraser', label: 'Ластик', hint: 'стереть лишнее, что закрасили кистью', icon: Eraser },
-  { value: 'text', label: 'Текст', hint: 'надпись на картинке: нажмите, где она должна стоять', icon: Type },
   { value: 'crop', label: 'Обрезать', hint: 'отрезать пустые поля и чёрные края', icon: Crop },
   { value: 'select', label: 'Выделить', hint: 'обвести область и убрать всё лишнее разом', icon: SquareDashedMousePointer },
   { value: 'pick', label: 'Пипетка', hint: 'взять цвет прямо с картинки', icon: Pipette },
 ]
 
+/** Объекты со своими настройками в колонке справа — как в монтаже. */
+const OBJECT_TOOLS: ToolInfo[] = [
+  { value: 'box', label: 'Заливка', hint: 'прямоугольник: бренд, надпись, спойлер. Настройки — в колонке справа', icon: PaintBucket },
+  { value: 'text', label: 'Текст', hint: 'надпись на картинке: нажмите, где она должна стоять. Настройки — в колонке справа', icon: Type },
+]
+
 /** Ключ запомненного цвета закраски. */
-const COLOR_KEY = 'sgh.paintColor'
+export const COLOR_KEY = 'sgh.paintColor'
+
+/** Пределы приближения: отдалить — до половины, приблизить — в 16 раз. */
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 16
+
+/** Кнопка панели инструментов: все одного размера, чтобы панель была ровной. */
+function ToolButton({
+  active = false,
+  danger = false,
+  disabled = false,
+  title,
+  onClick,
+  children,
+}: {
+  active?: boolean
+  danger?: boolean
+  disabled?: boolean
+  title: string
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title.split(' — ')[0]}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-30 disabled:hover:bg-transparent ${
+        active
+          ? 'bg-accent-strong text-white'
+          : `text-ink-faint hover:bg-surface-3 ${danger ? 'hover:text-danger' : 'hover:text-ink-dim'}`
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** Группа кнопок — одной плашкой, все группы одинаковой высоты. */
+function ToolGroup({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="flex h-8 shrink-0 items-center gap-0.5 rounded-lg bg-surface-2 px-0.5 ring-1 ring-line-soft">
+      {children}
+    </span>
+  )
+}
 
 /**
  * Просмотр и правка изображения.
@@ -82,12 +120,18 @@ export function ImageEditor({
   edit,
   preview,
   onEditChange,
+  onFocusChange,
+  commitRef,
 }: {
   file: FileInfo
   edit: ImageEdit
   /** Просчитанный результат сжатия — то, что покажет кнопка «После». */
   preview?: ImagePreview | null
   onEditChange: (edit: ImageEdit) => void
+  /** Выбрали надпись или заливку — колонка справа покажет её настройки. */
+  onFocusChange?: (focus: ImageFocus) => void
+  /** Сюда редактор кладёт «запомнить для Ctrl+Z» — им пользуется колонка. */
+  commitRef?: React.MutableRefObject<(() => void) | null>
 }) {
   const [showAfter, setShowAfter] = useState(false)
   const [tool, setTool] = useState<Tool>('box')
@@ -105,14 +149,10 @@ export function ImageEditor({
   // Меню по правой кнопке над маской.
   const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
 
-  // Надписи: какая выбрана, какая только что поставлена и как выглядит
-  // следующая. Список шрифтов читаем, только когда он понадобился.
+  // Надписи: какая выбрана и какая только что поставлена.
   const texts = edit.texts ?? []
   const [textSel, setTextSel] = useState<number | null>(null)
   const [freshText, setFreshText] = useState<number | null>(null)
-  const [textStyle, setTextStyle] = useState(readTextStyle)
-  const [fonts, setFonts] = useState<FontRow[] | null>(null)
-  const textSession = useRef(false)
   // Точек окна на пиксель оригинала: по нему растут буквы надписей.
   const [scale, setScale] = useState(1)
   const [, setViewport] = useState(0)
@@ -125,6 +165,7 @@ export function ImageEditor({
   const [panning, setPanning] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const spaceRef = useRef(false)
   const panRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null)
   // Обработчик колеса живёт вне React, поэтому текущие значения берём из ссылок.
@@ -133,6 +174,8 @@ export function ImageEditor({
 
   const media = file.media
   const natural = { width: media?.width ?? 0, height: media?.height ?? 0 }
+  const orient: Orient = { rotate: edit.rotate ?? 0, flipH: edit.flipH ?? false }
+  const turned = sideways(orient)
 
   const resetView = useCallback(() => {
     setZoom(1)
@@ -151,11 +194,16 @@ export function ImageEditor({
     setFreshText(null)
   }, [file.path, resetView])
 
+  // Ширина сцены — по ней ужимается картинка, повёрнутая боком.
+  const [stageWidth, setStageWidth] = useState(0)
   useLayoutEffect(() => {
     const image = imageRef.current
-    if (!image || !natural.width || !image.offsetWidth) return
-    const next = image.offsetWidth / natural.width
-    if (Math.abs(next - scale) > 1e-4) setScale(next)
+    if (image && natural.width && image.offsetWidth) {
+      const next = image.offsetWidth / natural.width
+      if (Math.abs(next - scale) > 1e-4) setScale(next)
+    }
+    const stage = viewportRef.current
+    if (stage && Math.abs(stage.clientWidth - stageWidth) > 1) setStageWidth(stage.clientWidth)
   })
   // Окно поменяло размер — картинка тоже, а с ней и буквы.
   useEffect(() => {
@@ -164,20 +212,30 @@ export function ImageEditor({
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  useEffect(() => {
-    if ((tool !== 'text' && textSel === null) || fonts) return
-    api
-      .fonts()
-      .then((data) => setFonts(data.fonts))
-      .catch(() => setFonts([]))
-  }, [tool, textSel, fonts])
-
   // Ушли с инструмента — надпись больше не выбрана.
   useEffect(() => {
     if (tool !== 'text') setTextSel(null)
   }, [tool])
 
-  /** Правка надписи; ``commitFirst`` — запомнить состояние для Ctrl+Z. */
+  // Колонке справа — что выбрано сейчас.
+  const focusText = textSel !== null && texts[textSel] ? textSel : null
+  const focusBox = selection?.type === 'box' && edit.boxes[selection.index] ? selection.index : null
+  useEffect(() => {
+    onFocusChange?.(
+      focusText !== null
+        ? { type: 'text', index: focusText }
+        : focusBox !== null
+          ? { type: 'box', index: focusBox }
+          : null,
+    )
+  }, [focusText, focusBox, onFocusChange])
+  useEffect(() => () => onFocusChange?.(null), [onFocusChange])
+  // Цвет заливки меняют в колонке справа — следующая встанет того же цвета.
+  useEffect(() => {
+    if (focusBox === null) setPaintColor((was) => localStorage.getItem(COLOR_KEY) || was)
+  }, [focusBox])
+
+  /** Правка надписи. */
   const patchText = useCallback(
     (index: number, patch: Partial<ImageTextMark>) => {
       onEditChange({
@@ -188,35 +246,21 @@ export function ImageEditor({
     [edit, texts, onEditChange],
   )
 
-  /** Вид надписи на панели: у выбранной — её, иначе — следующей. */
-  const chosenText = textSel !== null ? texts[textSel] : undefined
-  const shownStyle: TextStyle = chosenText
-    ? { ...textStyle, ...chosenText, stroke: chosenText.stroke ?? 0, strokeColor: chosenText.strokeColor ?? '#000000' }
-    : textStyle
-  const applyStyle = (patch: Partial<TextStyle>) => {
-    const next = { ...textStyle, ...patch }
-    setTextStyle(next)
-    try {
-      localStorage.setItem(TEXT_STYLE_KEY, JSON.stringify(next))
-    } catch {
-      // Без памяти просто не запомним.
-    }
-    if (textSel !== null && texts[textSel]) {
-      if (!textSession.current) {
-        commit()
-        textSession.current = true
-      }
-      patchText(textSel, patch)
-    }
-  }
+  const applyColor = useCallback((color: string) => {
+    setPaintColor(color)
+    localStorage.setItem(COLOR_KEY, color)
+  }, [])
 
-
-  const applyColor = useCallback(
-    (color: string) => {
-      setPaintColor(color)
-      localStorage.setItem(COLOR_KEY, color)
+  /** Точка окна → пиксели оригинала, с учётом приближения и поворота. */
+  const toImage = useCallback(
+    (clientX: number, clientY: number) => {
+      const layer = overlayRef.current
+      if (!layer || !natural.width) return null
+      const share = clientToShare(layer, clientX, clientY, orient)
+      return share && { x: share.u * natural.width, y: share.v * natural.height }
     },
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [natural.width, natural.height, orient.rotate, orient.flipH],
   )
 
   /** Пипетка: берёт цвет ровно того пикселя, по которому щёлкнули. */
@@ -251,7 +295,8 @@ export function ImageEditor({
   }, [tool])
 
   // Колесо приближает к курсору, а не к центру: иначе нужная деталь уезжает
-  // за край ровно в тот момент, когда её пытаешься рассмотреть.
+  // за край ровно в тот момент, когда её пытаешься рассмотреть. Отдаляется
+  // до половины — чтобы окинуть взглядом высокую картинку целиком.
   useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport) return
@@ -264,13 +309,16 @@ export function ImageEditor({
       const my = event.clientY - (box.top + box.height / 2)
 
       const { zoom: current, pan: offset } = viewRef.current
-      const next = Math.min(16, Math.max(1, current * (event.deltaY < 0 ? 1.2 : 1 / 1.2)))
+      let next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current * (event.deltaY < 0 ? 1.2 : 1 / 1.2)))
+      // Через обычный размер не проскакиваем: на нём удобно остановиться.
+      if ((current < 1 && next > 1) || (current > 1 && next < 1)) next = 1
       if (next === current) return
       const ratio = next / current
 
       setZoom(next)
+      // Мельче обычного картинка стоит посередине: двигать её незачем.
       setPan(
-        next === 1
+        next <= 1
           ? { x: 0, y: 0 }
           : { x: mx - ratio * (mx - offset.x), y: my - ratio * (my - offset.y) },
       )
@@ -284,7 +332,7 @@ export function ImageEditor({
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
-      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+      if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return
       if (event.code !== 'Space') return
       // Иначе пробел нажмёт кнопку, на которой остался фокус, и прокрутит страницу.
       event.preventDefault()
@@ -345,6 +393,7 @@ export function ImageEditor({
   const commit = useCallback(() => {
     setHistory((current) => [...current.slice(-40), edit])
   }, [edit])
+  if (commitRef) commitRef.current = commit
 
   const undo = useCallback(() => {
     setHistory((current) => {
@@ -355,13 +404,20 @@ export function ImageEditor({
     })
   }, [onEditChange])
 
+  /** Убирает выбранное: надпись, маску или рамку обрезки. */
   const removeSelected = useCallback(() => {
+    if (focusText !== null) {
+      commit()
+      onEditChange({ ...edit, texts: texts.filter((_, i) => i !== focusText) })
+      setTextSel(null)
+      return
+    }
     if (!selection) return
     commit()
     if (selection.type === 'crop') onEditChange({ ...edit, crop: null })
     else onEditChange({ ...edit, boxes: edit.boxes.filter((_, i) => i !== selection.index) })
     setSelection(null)
-  }, [selection, edit, onEditChange, commit])
+  }, [focusText, selection, edit, texts, onEditChange, commit])
 
   /** Собирает всё, что попало в обведённую область. */
   const markArea = useCallback(
@@ -421,15 +477,12 @@ export function ImageEditor({
     [edit, onEditChange, commit],
   )
 
-  // Цвет на панели относится не только к следующей маске: если что-то
-  // выбрано — маска нажатием или маски с мазками рамкой, — перекрашиваем и
-  // его. Иначе поменять цвет уже нарисованного было нечем, кроме меню по
-  // правой кнопке, о котором ещё надо знать.
+  // Цвет на панели относится не только к следующему мазку: маски и мазки,
+  // обведённые рамкой, перекрашиваются в него.
   const colorSession = useRef(false)
   const recolorChosen = useCallback(
     (color: string) => {
       const boxes = new Set(marked.boxes)
-      if (selection?.type === 'box') boxes.add(selection.index)
       const strokes = new Set(marked.strokes)
       if (!boxes.size && !strokes.size) return
       // Окно выбора цвета присылает цвет на каждое движение мыши — отмена
@@ -446,9 +499,9 @@ export function ImageEditor({
         ),
       })
     },
-    [marked, selection, edit, onEditChange, commit],
+    [marked, edit, onEditChange, commit],
   )
-  const hasChosen = selection?.type === 'box' || marked.boxes.length > 0 || marked.strokes.length > 0
+  const hasMarked = marked.boxes.length > 0 || marked.strokes.length > 0
 
   // Горячие клавиши работают, пока фокус не в поле ввода.
   useEffect(() => {
@@ -472,28 +525,37 @@ export function ImageEditor({
         event.preventDefault()
         undo()
       } else if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (textSel !== null && texts[textSel]) {
-          event.preventDefault()
-          commit()
-          onEditChange({ ...edit, texts: texts.filter((_, i) => i !== textSel) })
-          setTextSel(null)
-        } else if (marked.boxes.length || marked.strokes.length) {
+        if (hasMarked) {
           event.preventDefault()
           removeMarked()
-        } else if (selection) {
+        } else if (focusText !== null || selection) {
           event.preventDefault()
           removeSelected()
         }
       } else if (event.key === 'Escape') {
         setSelection(null)
+        setTextSel(null)
         setMarked({ boxes: [], strokes: [] })
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [undo, removeSelected, removeMarked, selection, marked, textSel, texts, edit, onEditChange, commit, markArea, natural.width, natural.height])
+  }, [undo, removeSelected, removeMarked, selection, hasMarked, focusText, markArea, natural.width, natural.height])
 
-  const hasEdits = Boolean(edit.crop) || edit.boxes.length > 0 || texts.length > 0
+  const hasEdits =
+    Boolean(edit.crop) || edit.boxes.length > 0 || edit.strokes.length > 0 || texts.length > 0 ||
+    Boolean(edit.rotate) || Boolean(edit.flipH)
+  const canRemove = focusText !== null || Boolean(selection) || hasMarked
+
+  const pickTool = (value: Tool) => {
+    setTool(value)
+    setSelection(null)
+  }
+
+  // Повёрнутая боком картинка ужимается по повёрнутым сторонам: ширину
+  // держит высота сцены, высоту — её ширина.
+  const fitHeight = 'calc(100vh - 330px)'
+  const fitWidth = stageWidth ? `${Math.max(80, stageWidth - 32)}px` : '100%'
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -514,13 +576,13 @@ export function ImageEditor({
         }}
       >
         {/* Обёртка обтягивает картинку, поэтому наложения совпадают с ней точно.
-            Масштаб задан ей целиком — разметка правок едет вместе с картинкой,
-            и пересчитывать координаты не нужно. Переменная --z отдана вниз:
-            по ней рамки и маркеры ужимаются обратно, чтобы не пухли при зуме. */}
+            Масштаб, поворот и отражение заданы ей целиком — разметка правок едет
+            вместе с картинкой. Переменная --z отдана вниз: по ней рамки и
+            маркеры ужимаются обратно, чтобы не пухли при зуме. */}
         <div
           className="relative"
           style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) ${orientTransform(orient)}`,
             '--z': zoom,
           } as React.CSSProperties}
         >
@@ -529,86 +591,96 @@ export function ImageEditor({
             ref={imageRef}
             src={mediaUrl(file.path)}
             alt={file.name}
-            className="block max-w-full select-none object-contain"
+            className="block select-none object-contain"
             draggable={false}
-            style={{ maxHeight: 'calc(100vh - 330px)' }}
+            style={{
+              maxWidth: turned ? fitHeight : '100%',
+              maxHeight: turned ? fitWidth : fitHeight,
+            }}
           />
 
           {/* Результат сжатия кладём поверх оригинала в ту же рамку: масштаб и
               положение общие, поэтому «до» и «после» можно щёлкать, разглядывая
-              одну и ту же деталь. Правки уже вжжены в него, инструменты прячем. */}
+              одну и ту же деталь. Он уже повёрнут сервером — поворот обёртки
+              ему снимаем обратно. Правки вжжены в него, инструменты прячем. */}
           {showAfter && preview && (
             <img
               src={preview.url}
               alt="после сжатия"
-              className="absolute inset-0 h-full w-full select-none object-contain"
+              className="absolute left-1/2 top-1/2 max-w-none select-none object-contain"
               draggable={false}
+              style={{
+                width: turned ? `${(natural.height / (natural.width || 1)) * 100}%` : '100%',
+                height: turned ? `${(natural.width / (natural.height || 1)) * 100}%` : '100%',
+                transform: `translate(-50%, -50%) rotate(${-orient.rotate}deg)${orient.flipH ? ' scaleX(-1)' : ''}`,
+              }}
             />
           )}
 
           {natural.width > 0 && !showAfter && (
             <div
+              ref={overlayRef}
               className="absolute inset-0"
               // Пока двигают картинку, инструменты не должны ловить нажатия.
               style={{ pointerEvents: spaceHeld || panning ? 'none' : undefined }}
             >
-            <RectCanvas
-              width={natural.width}
-              height={natural.height}
-              boxes={edit.boxes}
-              crop={edit.crop}
-              tool={tool}
-              selection={selection}
-              onSelect={setSelection}
-              strokes={edit.strokes}
-              brushSize={brushSize}
-              paintColor={paintColor}
-              onBoxesChange={(boxes) => onEditChange({ ...edit, boxes })}
-              onCropChange={(crop) => onEditChange({ ...edit, crop })}
-              onStrokesChange={(strokes) => onEditChange({ ...edit, strokes })}
-              onCommit={commit}
-              onPick={pickColor}
-              onBoxMenu={(index, x, y) => setMenu({ index, x, y })}
-              marked={marked}
-              onMarquee={markArea}
-            />
-            <ImageTexts
-              texts={texts}
-              natural={natural}
-              scale={scale}
-              zoom={zoom}
-              active={tool === 'text'}
-              selected={textSel}
-              fresh={freshText}
-              onSelect={(index) => {
-                setTextSel(index)
-                setFreshText(null)
-                textSession.current = false
-              }}
-              onChange={patchText}
-              onCommit={commit}
-              onRemove={(index) => {
-                onEditChange({ ...edit, texts: texts.filter((_, i) => i !== index) })
-                setTextSel(null)
-              }}
-              onCreate={(x, y) => {
-                // Нажали мимо надписей: снимаем выбор, а если ничего не было
-                // выбрано — ставим новую там, где нажали.
-                if (textSel !== null) {
+              <RectCanvas
+                width={natural.width}
+                height={natural.height}
+                boxes={edit.boxes}
+                crop={edit.crop}
+                tool={tool}
+                selection={selection}
+                onSelect={setSelection}
+                strokes={edit.strokes}
+                brushSize={brushSize}
+                paintColor={paintColor}
+                onBoxesChange={(boxes) => onEditChange({ ...edit, boxes })}
+                onCropChange={(crop) => onEditChange({ ...edit, crop })}
+                onStrokesChange={(strokes) => onEditChange({ ...edit, strokes })}
+                onCommit={commit}
+                onPick={pickColor}
+                onBoxMenu={(index, x, y) => setMenu({ index, x, y })}
+                marked={marked}
+                onMarquee={markArea}
+                orient={orient}
+              />
+              <ImageTexts
+                texts={texts}
+                natural={natural}
+                scale={scale}
+                zoom={zoom}
+                active={tool === 'text'}
+                selected={textSel}
+                fresh={freshText}
+                toImage={toImage}
+                onSelect={(index) => {
+                  setTextSel(index)
+                  setFreshText(null)
+                }}
+                onChange={patchText}
+                onCommit={commit}
+                onRemove={(index) => {
+                  onEditChange({ ...edit, texts: texts.filter((_, i) => i !== index) })
                   setTextSel(null)
-                  return
-                }
-                commit()
-                const index = texts.length
-                onEditChange({
-                  ...edit,
-                  texts: [...texts, { x: Math.round(x), y: Math.round(y), text: 'Текст', ...textStyle }],
-                })
-                setTextSel(index)
-                setFreshText(index)
-                textSession.current = false
-              }}
-            />
+                }}
+                onCreate={(x, y) => {
+                  // Нажали мимо надписей: снимаем выбор, а если ничего не было
+                  // выбрано — ставим новую там, где нажали.
+                  if (textSel !== null) {
+                    setTextSel(null)
+                    return
+                  }
+                  commit()
+                  const index = texts.length
+                  onEditChange({
+                    ...edit,
+                    texts: [...texts, { ...readTextStyle(), x: Math.round(x), y: Math.round(y), text: 'Текст' }],
+                  })
+                  setTextSel(index)
+                  setFreshText(index)
+                }}
+              />
             </div>
           )}
         </div>
@@ -616,7 +688,7 @@ export function ImageEditor({
         {/* Сведения о картинке — мелко в правом верхнем углу, над ней: во
             время правки они не нужны и не должны закрывать картинку. */}
         <div className="pointer-events-none absolute right-3 top-2.5 z-10 flex items-center gap-2.5 text-[11px] text-ink-faint">
-          {edit.boxes.length > 0 && <span className="text-accent-soft">масок: {edit.boxes.length}</span>}
+          {edit.boxes.length > 0 && <span className="text-accent-soft">заливок: {edit.boxes.length}</span>}
           {edit.crop && (
             <span className="text-accent-soft">
               обрезка {edit.crop.width}×{edit.crop.height}
@@ -638,7 +710,7 @@ export function ImageEditor({
           <button
             type="button"
             onClick={resetView}
-            title="Вписать — вернуть картинку в исходное положение. Колесо — приблизить, средняя кнопка или пробел — двигать"
+            title="Вписать — вернуть картинку в исходное положение. Колесо — приблизить или отдалить, средняя кнопка или пробел — двигать"
             className="absolute bottom-3 right-3 z-10 flex items-center gap-1 bg-accent/25 px-2 py-1 font-mono text-[11px] tabular-nums text-accent-soft backdrop-blur hover:bg-accent/35"
           >
             <Maximize2 size={11} />
@@ -671,93 +743,28 @@ export function ImageEditor({
         )}
       </div>
 
-      {/* Инструменты — плашкой внизу по центру сцены. С настройками
-          инструмента она раздаётся в обе стороны. Центрируется полями, а не
-          transform: под transform всплывающие окошки выбора цвета и шрифта
-          считали бы место от плашки, а не от окна. */}
-      <div className="absolute inset-x-0 bottom-4 z-20 mx-auto flex h-11 w-fit max-w-[calc(100%-32px)] items-center gap-x-2 rounded-xl bg-surface px-3 text-[11px] text-ink-faint shadow-[0_12px_30px_rgba(0,0,0,0.45)] ring-1 ring-line-soft">
-        <span className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5 ring-1 ring-line-soft">
+      {/* Инструменты — плашкой внизу по центру сцены, тремя группами одной
+          высоты: обычные инструменты, объекты со своими настройками в колонке
+          справа (заливка и текст), действия. У кисти толщина и цвет — прямо на
+          плашке, между первыми двумя группами. Центрируется полями, а не
+          transform: под transform всплывающее окошко цвета считало бы место
+          от плашки, а не от окна. */}
+      <div className="absolute inset-x-0 bottom-4 z-20 mx-auto flex h-11 w-fit max-w-[calc(100%-32px)] items-center gap-x-2 rounded-xl bg-surface px-2 text-[11px] text-ink-faint shadow-[0_12px_30px_rgba(0,0,0,0.45)] ring-1 ring-line-soft">
+        <ToolGroup>
           {TOOLS.map((item) => (
-            <button
+            <ToolButton
               key={item.value}
-              type="button"
-              onClick={() => {
-                setTool(item.value)
-                setSelection(null)
-              }}
+              active={tool === item.value}
               title={`${item.label} — ${item.hint}`}
-              aria-label={item.label}
-              className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
-                tool === item.value
-                  ? 'bg-accent-strong text-white'
-                  : 'text-ink-faint hover:bg-surface-3 hover:text-ink-dim'
-              }`}
+              onClick={() => pickTool(item.value)}
             >
               <item.icon size={14} />
-            </button>
+            </ToolButton>
           ))}
-        </span>
-
-        {/* Надпись: шрифт, размер и цвет — прямо на панели. Правят выбранную
-            надпись, а без выбора — следующую. */}
-        {(tool === 'text' || textSel !== null) && (
-          <span className="flex items-center gap-1.5">
-            <span className="w-24">
-              <FontPicker
-                up
-                value={shownStyle.font}
-                fonts={fonts}
-                onChange={(font) => {
-                  textSession.current = false
-                  applyStyle({ font })
-                }}
-              />
-            </span>
-            <label
-              className="flex items-center rounded-lg bg-surface-2 px-1.5 ring-1 ring-line-soft"
-              title="Размер букв в пикселях картинки"
-            >
-              <input
-                type="number"
-                min={4}
-                max={2000}
-                value={shownStyle.size}
-                onFocus={() => {
-                  textSession.current = false
-                }}
-                onChange={(event) => {
-                  const value = Number(event.target.value)
-                  if (value >= 4 && value <= 2000) applyStyle({ size: value })
-                }}
-                className="w-12 bg-transparent py-1 text-right font-mono text-[12px] text-ink outline-none"
-              />
-              <span className="ml-0.5 text-[10px]">px</span>
-            </label>
-            <ColorButton
-              value={shownStyle.color}
-              title="Цвет надписи"
-              onOpen={() => {
-                textSession.current = false
-              }}
-              onChange={(color) => applyStyle({ color })}
-            />
-            {/* Обводка — во всплывающем окошке у буквы с контуром: в строке
-                панели ей не хватало места. */}
-            <StrokeButton
-              stroke={shownStyle.stroke}
-              color={shownStyle.strokeColor}
-              size={shownStyle.size}
-              onChange={(patch) => {
-                textSession.current = false
-                applyStyle(patch)
-              }}
-            />
-          </span>
-        )}
+        </ToolGroup>
 
         {(tool === 'brush' || tool === 'eraser') && (
-          <label className="flex items-center gap-2" title="Толщина кисти">
-            {tool === 'brush' ? <Brush size={12} /> : <Eraser size={12} />}
+          <label className="flex h-8 shrink-0 items-center gap-2 px-1" title="Толщина кисти, в пикселях картинки">
             <input
               type="range"
               min={4}
@@ -765,20 +772,17 @@ export function ImageEditor({
               step={2}
               value={brushSize}
               onChange={(event) => setBrushSize(Number(event.target.value))}
-              className="w-24"
+              className="w-20"
             />
-            <span className="w-8 font-mono tabular-nums text-ink">{brushSize}</span>
+            <span className="w-7 font-mono tabular-nums text-ink">{brushSize}</span>
           </label>
         )}
 
-        {tool !== 'view' && tool !== 'crop' && tool !== 'text' && (
+        {/* Цвет кисти. С инструментом «Выделить» он перекрашивает обведённое. */}
+        {(tool === 'brush' || (tool === 'select' && hasMarked)) && (
           <ColorButton
             value={paintColor}
-            title={
-              hasChosen
-                ? 'Цвет закраски — выбранное перекрасится в него'
-                : 'Цвет закраски — нажмите, чтобы выбрать'
-            }
+            title={hasMarked ? 'Цвет — обведённое перекрасится в него' : 'Цвет кисти'}
             onOpen={() => {
               colorSession.current = false
             }}
@@ -786,61 +790,69 @@ export function ImageEditor({
               applyColor(color)
               recolorChosen(color)
             }}
-            className="flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-surface-3"
+            className="flex h-8 shrink-0 items-center rounded-lg px-1.5 transition-colors hover:bg-surface-3"
           />
         )}
 
+        <ToolGroup>
+          {OBJECT_TOOLS.map((item) => (
+            <ToolButton
+              key={item.value}
+              active={tool === item.value}
+              title={`${item.label} — ${item.hint}`}
+              onClick={() => pickTool(item.value)}
+            >
+              <item.icon size={14} />
+            </ToolButton>
+          ))}
+        </ToolGroup>
 
-        <button
-          type="button"
-          onClick={undo}
-          disabled={!history.length}
-          title="Отменить последнее действие (Ctrl+Z)"
-          aria-label="Отменить"
-          className="inline-flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3 hover:text-ink-dim disabled:opacity-30 disabled:hover:bg-transparent"
-        >
-          <Undo2 size={13} />
-        </button>
-
-        {(marked.boxes.length > 0 || marked.strokes.length > 0) && (
-          <button
-            type="button"
-            onClick={removeMarked}
-            title="Убрать всё, что попало в рамку (Delete)"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent/15 px-2 py-1 text-accent-soft transition-colors hover:bg-accent/25"
+        <ToolGroup>
+          <ToolButton
+            title="Повернуть на 90° по часовой стрелке"
+            onClick={() => {
+              commit()
+              onEditChange({ ...edit, rotate: (((edit.rotate ?? 0) + 90) % 360) as Orient['rotate'] })
+            }}
           >
-            <Trash2 size={12} />
-            {marked.boxes.length + marked.strokes.length}
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={removeSelected}
-          disabled={!selection}
-          title="Удалить выделенное (Delete)"
-          aria-label="Удалить"
-          className="inline-flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3 hover:text-danger disabled:opacity-30 disabled:hover:bg-transparent"
-        >
-          <Trash2 size={13} />
-        </button>
-
-        {hasEdits && (
-          <button
-            type="button"
+            <RotateCwSquare size={14} />
+          </ToolButton>
+          <ToolButton
+            active={Boolean(edit.flipH)}
+            title="Отразить по горизонтали"
+            onClick={() => {
+              commit()
+              onEditChange({ ...edit, flipH: !edit.flipH })
+            }}
+          >
+            <FlipHorizontal2 size={14} />
+          </ToolButton>
+          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+          <ToolButton title="Отменить последнее действие (Ctrl+Z)" disabled={!history.length} onClick={undo}>
+            <Undo2 size={14} />
+          </ToolButton>
+          <ToolButton
+            danger
+            disabled={!canRemove}
+            title={hasMarked ? 'Убрать всё, что попало в рамку (Delete)' : 'Удалить выбранное (Delete)'}
+            onClick={() => (hasMarked ? removeMarked() : removeSelected())}
+          >
+            <Trash2 size={14} />
+          </ToolButton>
+          <ToolButton
+            danger
+            disabled={!hasEdits}
+            title="Убрать все правки картинки: заливки, кисть, надписи, обрезку и поворот"
             onClick={() => {
               commit()
               onEditChange(emptyImageEdit)
               setSelection(null)
+              setTextSel(null)
             }}
-            title="Сбросить все правки картинки"
-            aria-label="Сбросить всё"
-            className="inline-flex items-center rounded-lg p-1.5 transition-colors hover:bg-surface-3 hover:text-ink-dim"
           >
-            <RotateCcw size={13} />
-          </button>
-        )}
-
+            <ListX size={14} />
+          </ToolButton>
+        </ToolGroup>
       </div>
 
       {menu && (
@@ -934,91 +946,5 @@ function BoxMenu({
         Удалить
       </button>
     </div>
-  )
-}
-
-/**
- * Обводка надписи: буква с контуром на панели, настройки — во всплывающем
- * окошке над ней. Буква подсвечена, пока обводка включена.
- */
-function StrokeButton({
-  stroke,
-  color,
-  size,
-  onChange,
-}: {
-  stroke: number
-  color: string
-  /** Кегль надписи — от него обычная толщина обводки. */
-  size: number
-  onChange: (patch: { stroke?: number; strokeColor?: string }) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const holder = useRef<HTMLSpanElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const away = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
-      if (!holder.current?.contains(target) && !target.closest('[data-color-popover]')) setOpen(false)
-    }
-    window.addEventListener('mousedown', away)
-    return () => window.removeEventListener('mousedown', away)
-  }, [open])
-
-  return (
-    <span ref={holder} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((was) => !was)}
-        title={stroke ? 'Обводка включена' : 'Обводка букв'}
-        className={`flex h-7 w-7 items-center justify-center rounded-lg text-[15px] font-bold transition-colors ${
-          stroke ? 'bg-accent/20' : 'hover:bg-surface-3'
-        }`}
-        style={{
-          color: 'transparent',
-          WebkitTextStroke: `1.2px ${stroke ? 'var(--color-accent-soft)' : 'var(--color-ink-dim)'}`,
-        }}
-      >
-        A
-      </button>
-      {open && (
-        <span className="absolute bottom-full left-1/2 z-40 mb-2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-xl border border-line bg-surface-2 px-2.5 py-2 text-[11px] text-ink-dim shadow-xl">
-          <label className="flex cursor-pointer items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={stroke > 0}
-              onChange={(event) =>
-                onChange({ stroke: event.target.checked ? Math.max(2, Math.round(size / 16)) : 0 })
-              }
-            />
-            Обводка
-          </label>
-          <ColorButton
-            value={color}
-            title="Цвет обводки"
-            onChange={(strokeColor) => onChange({ strokeColor, stroke: stroke || Math.max(2, Math.round(size / 16)) })}
-            className="flex items-center rounded-lg p-1 transition-colors hover:bg-surface-3"
-          />
-          <label
-            className="flex items-center rounded-lg bg-surface px-1.5 ring-1 ring-line-soft"
-            title="Толщина обводки в пикселях картинки"
-          >
-            <input
-              type="number"
-              min={1}
-              max={200}
-              value={stroke || Math.max(2, Math.round(size / 16))}
-              onChange={(event) => {
-                const value = Number(event.target.value)
-                if (value >= 1 && value <= 200) onChange({ stroke: value })
-              }}
-              className="w-10 bg-transparent py-1 text-right font-mono text-[12px] text-ink outline-none"
-            />
-            <span className="ml-0.5 text-[10px]">px</span>
-          </label>
-        </span>
-      )}
-    </span>
   )
 }

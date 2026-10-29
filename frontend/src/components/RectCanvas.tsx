@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Rect, Stroke } from '../lib/types'
 import { drawStrokes } from '../lib/paint'
+import { clientToShare, NO_ORIENT, type Orient } from '../lib/orient'
 
 /** Точки, за которые можно тянуть прямоугольник. */
 export type Grip = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move'
@@ -105,6 +106,7 @@ export function RectCanvas({
   onBoxMenu,
   marked,
   onMarquee,
+  orient = NO_ORIENT,
 }: {
   width: number
   height: number
@@ -129,6 +131,8 @@ export function RectCanvas({
   marked?: { boxes: number[]; strokes: number[] }
   /** Обвели область — родитель решает, что в неё попало. */
   onMarquee?: (rect: Rect) => void
+  /** Как картинка повёрнута и отражена в окне — мышь считаем обратно. */
+  orient?: Orient
 }) {
   const shellRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -148,14 +152,11 @@ export function RectCanvas({
   const toImage = useCallback(
     (clientX: number, clientY: number) => {
       const shell = shellRef.current
-      const rect = shell?.getBoundingClientRect()
-      if (!rect || !rect.width || !rect.height || !width || !height) return null
-      return {
-        x: ((clientX - rect.left) / rect.width) * width,
-        y: ((clientY - rect.top) / rect.height) * height,
-      }
+      if (!shell || !width || !height) return null
+      const share = clientToShare(shell, clientX, clientY, orient)
+      return share && { x: share.u * width, y: share.v * height }
     },
-    [width, height],
+    [width, height, orient],
   )
 
   // Перерисовываем холст на каждое изменение мазков: их немного, а держать
@@ -182,6 +183,9 @@ export function RectCanvas({
   }, [strokes, liveStroke, width, height, paintColor, marked])
 
   const painting = tool === 'brush' || tool === 'eraser'
+
+  /** Пиксели оригинала в единицах слоя: слой объявлен контейнером. */
+  const unit = (value: number) => `calc(${value} * 100cqw / ${width || 1})`
 
   const asStyle = (rect: Rect) => ({
     left: `${(rect.x / width) * 100}%`,
@@ -326,6 +330,7 @@ export function RectCanvas({
   return (
     <div
       ref={shellRef}
+      style={{ containerType: 'size' }}
       className={`absolute inset-0 select-none ${
         tool === 'view' ? '' : painting ? 'cursor-none' : 'cursor-crosshair'
       }`}
@@ -448,7 +453,6 @@ export function RectCanvas({
             } ${tool === 'view' ? '' : 'cursor-move'}`}
             style={{
               ...asStyle(box),
-              background: box.color ?? '#000000',
               outlineStyle: inMarquee ? 'dashed' : 'solid',
               outlineWidth: `calc(${selected || inMarquee ? 2 : 1}px / var(--z, 1))`,
             }}
@@ -471,6 +475,7 @@ export function RectCanvas({
               })
             }}
           >
+            <BoxFill box={box} unit={unit} />
             {selected &&
               tool !== 'view' &&
               GRIPS.map((grip) => (
@@ -527,6 +532,53 @@ export function RectCanvas({
         />
       )}
     </div>
+  )
+}
+
+/** Цвет #rrggbb с прозрачностью — для тени. */
+function withAlpha(hex: string, alpha: number): string {
+  const clean = hex.replace('#', '')
+  const r = parseInt(clean.slice(0, 2), 16)
+  const g = parseInt(clean.slice(2, 4), 16)
+  const b = parseInt(clean.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+/**
+ * Заливка с украшениями — так же, как её нарисует сервер: рамка снаружи
+ * заливки, её внешние углы по умолчанию — скругление плюс толщина, тень — от
+ * всей фигуры вместе с рамкой. Размытие в CSS — радиус, примерно две сигмы.
+ */
+function BoxFill({ box, unit }: { box: Rect; unit: (value: number) => string }) {
+  const radius = box.radius ?? 0
+  const border = box.strokeOn && (box.stroke ?? 0) > 0 ? box.stroke ?? 0 : 0
+  const outer = box.strokeRound ? box.strokeRound : radius > 0 ? radius + border : 0
+  const shadow =
+    box.shadowOn && (box.shadowAlpha ?? 0.75) > 0
+      ? `${unit(box.shadowX ?? 0)} ${unit(box.shadowY ?? 0)} ${unit(2 * (box.shadowBlur ?? 0))} ${withAlpha(box.shadowColor ?? '#000000', box.shadowAlpha ?? 0.75)}`
+      : undefined
+  return (
+    <>
+      {border > 0 && (
+        <span
+          className="pointer-events-none absolute"
+          style={{
+            inset: `calc(-1 * ${unit(border)})`,
+            background: box.strokeColor ?? '#ffffff',
+            borderRadius: outer ? unit(outer) : undefined,
+            boxShadow: shadow,
+          }}
+        />
+      )}
+      <span
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: box.color ?? '#000000',
+          borderRadius: radius ? unit(radius) : undefined,
+          boxShadow: border > 0 ? undefined : shadow,
+        }}
+      />
+    </>
   )
 }
 

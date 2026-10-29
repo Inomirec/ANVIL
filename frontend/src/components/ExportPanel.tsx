@@ -1,9 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AudioLines, FileX2, FolderInput, Headphones, Play, Speaker, Terminal, Zap } from 'lucide-react'
+import { ArrowLeftRight, AudioLines, FileX2, FolderInput, Headphones, Play, Speaker, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
-import { Choice, CONTAINERS, speedOptions } from './ComposeRender'
+import {
+  AUDIO_CODECS as SOUND_CODECS,
+  bitrateMarks,
+  bitrateNormal,
+  bitrateRange,
+  Choice,
+  CONTAINERS,
+  qualityScale,
+  qualityWord,
+  speedOptions,
+  type Frame,
+} from './ComposeRender'
 import type { AudioOptions, FileInfo, Preset, VideoOptions } from '../lib/types'
 import { useStore } from '../store'
 import type { TrimState } from './MediaEditor'
@@ -189,6 +200,8 @@ export function ExportPanel({
     const remembered = saved === 'archive_av1' ? 'pack_quality' : saved
     const first =
       kindPresets.find((preset) => preset.id === remembered && preset.available !== false) ??
+      // «Качество» стоит в списке первым, но обычный выбор — «Баланс».
+      kindPresets.find((preset) => preset.id === 'pack_balanced' && preset.available !== false) ??
       kindPresets.find((preset) => preset.available !== false)
     if (first && !kindPresets.some((preset) => preset.id === presetId)) {
       applyPreset(first)
@@ -244,6 +257,15 @@ export function ExportPanel({
   // WebM держит только AV1 и Opus: у пресетов на H.264 или с AAC он
   // недоступен, и тогда собираем в MP4.
   const webmFits = video.codec.startsWith('av1') && (audio.codec === 'opus' || audio.codec === 'none')
+
+  // Кадр результата — по нему считается шкала битрейта у ручных настроек.
+  const sourceWidth = file.media?.width ?? 0
+  const frameHeight =
+    (video.max_height && file.media?.height ? Math.min(video.max_height, file.media.height) : file.media?.height) || 1080
+  const outputFrame: Frame = {
+    width: sourceWidth && file.media?.height ? Math.round((sourceWidth * frameHeight) / file.media.height) : Math.round((frameHeight * 16) / 9),
+    height: frameHeight,
+  }
   const shownContainer = container === 'webm' && !webmFits ? 'mp4' : container
 
   // Выбор дорожек идёт всей пачке: у других серий дорожка ищется по языку
@@ -509,6 +531,22 @@ export function ExportPanel({
         </Section>
 
 
+        {!isAudio && !gif && !streamCopy && (
+          <ManualSection
+            video={video}
+            audio={audio}
+            frame={outputFrame}
+            // Тронули кодек или вес — пресет погас: это уже свои настройки.
+            // Подгонку качества под разрешение выключаем: число значит ровно
+            // то, что выставлено.
+            onChange={(nextVideo, nextAudio) => {
+              setVideo({ ...nextVideo, adapt_crf: false } as VideoOptions)
+              setAudio(nextAudio)
+              setPresetId('')
+            }}
+          />
+        )}
+
         {isAudio && !streamCopy && (
           <AudioCodecSection
             audio={audio}
@@ -687,6 +725,171 @@ export function ExportPanel({
       </div>
     </div>
     </QuietHints>
+  )
+}
+
+/**
+ * Видеокодеки ручных настроек — те же, что в монтаже, плюс H.266. У каждого
+ * своя шкала качества и битрейта (`qualityScale`, `bitrateMarks`).
+ */
+const VIDEO_CODECS = [
+  {
+    value: 'av1_svt', label: 'AV1',
+    title: 'Лучшее качество при меньшем весе. Кодируется дольше H.264 и H.265, совсем старые телефоны и телевизоры могут его не открыть. Играет в SIGame',
+  },
+  {
+    value: 'h266', label: 'H.266',
+    title: 'Новейший кодек: при той же картинке файл ещё легче, чем у AV1, но кодируется в разы дольше. Почти ничем пока не открывается — ни Windows, ни браузеры, ни SIGame, ни предпросмотр программы. Для архива на будущее',
+  },
+  {
+    value: 'h265', label: 'H.265',
+    title: 'Файл примерно в полтора раза легче, чем у H.264 с той же картинкой, а кодируется быстрее AV1. Телефоны и телевизоры играют его хорошо, а браузерам и Windows иногда нужно расширение',
+  },
+  {
+    value: 'h264', label: 'H.264',
+    title: 'Самый совместимый: открывается на любом устройстве и в любой программе, в том числе в монтажных. Кодируется быстро, но файл тяжелее, чем у AV1 и H.265',
+  },
+]
+
+/** Что можно положить в WebM. */
+const webmVideo = (codec: string) => codec.startsWith('av1')
+
+/**
+ * Ручные настройки видео и звука — как в монтаже, одним разделом: свернул —
+ * исчезло всё разом. Ничего не трогали — работает пресет.
+ */
+function ManualSection({
+  video,
+  audio,
+  frame,
+  onChange,
+}: {
+  video: VideoOptions
+  audio: AudioOptions
+  frame: Frame
+  onChange: (video: VideoOptions, audio: AudioOptions) => void
+}) {
+  const known = VIDEO_CODECS.find((item) => item.value === video.codec)
+  // Пресет мог выбрать кодек, которого в списке нет, — показываем ближайший.
+  const codec = known?.value ?? (video.codec.startsWith('av1') ? 'av1_svt' : 'h264')
+  const byBitrate = (video.bitrate_kbps ?? 0) > 0
+  const scale = qualityScale(codec)
+  // Ползунок качества перевёрнут: вправо — лучше, а у кодека меньше — лучше.
+  const flip = (crf: number) => scale.best + scale.worst - crf
+  const range = bitrateRange(codec, frame)
+  const sound = SOUND_CODECS.find((item) => item.value === audio.codec) ?? SOUND_CODECS[0]
+  const setVideo = (patch: Partial<VideoOptions>) => onChange({ ...video, ...patch }, audio)
+  const setAudio = (patch: Partial<AudioOptions>) => onChange(video, { ...audio, ...patch })
+
+  /** Смена кодека: качество встаёт на ту же подпись L/M/H у нового кодека. */
+  const pickCodec = (next: string) => {
+    if (next === codec) return
+    const level = scale.marks.findIndex((mark) => mark.crf === video.crf)
+    const crf = qualityScale(next).marks[level >= 0 ? level : 1].crf
+    setVideo({
+      codec: next,
+      crf,
+      ...(byBitrate ? { bitrate_kbps: bitrateNormal(next, frame) } : {}),
+    })
+  }
+
+  const modeButton = (
+    <button
+      type="button"
+      onClick={() =>
+        byBitrate ? setVideo({ bitrate_kbps: 0 }) : setVideo({ bitrate_kbps: bitrateNormal(codec, frame) })
+      }
+      title={
+        byBitrate
+          ? 'Вес задан битрейтом: на каждую секунду видео уходит примерно одинаково данных, и вес файла известен заранее. На быстрых и зернистых сценах картинка может стать хуже. Нажмите — задавать качеством'
+          : 'Вес задан качеством: картинка везде одинаково хорошая, а данных на сложные сцены уходит больше, поэтому вес заранее неизвестен. Нажмите — задавать битрейтом'
+      }
+      className="inline-flex items-center gap-1 rounded-md border border-line-soft px-1.5 py-0.5 text-[11.5px] text-ink-dim transition-colors hover:border-line hover:text-ink"
+    >
+      {byBitrate ? 'Битрейт' : 'Качество'}
+      <ArrowLeftRight size={11} className="text-ink-faint" />
+    </button>
+  )
+
+  // У заголовка — коротко, иначе он переносится на вторую строку.
+  const audioSummary = sound.value === 'none' ? 'без звука' : `${sound.label}${sound.max > 0 ? ` ${audio.bitrate_kbps}` : ''}`
+
+  return (
+    <Section
+      title="Настроить вручную"
+      id="export.manual"
+      defaultFolded
+      summary={`${known?.label ?? codec} · ${audioSummary}`}
+    >
+      <span className="label">Видео</span>
+      <Segmented
+        columns={4}
+        value={codec}
+        options={VIDEO_CODECS.map((item) => ({
+          ...item,
+          // В WebM кладётся только AV1 — с остальными файл соберётся в MP4.
+          title: item.title + (webmVideo(item.value) ? '' : '. В WebM не кладётся — файл соберётся в MP4'),
+        }))}
+        onChange={pickCodec}
+      />
+      {byBitrate ? (
+        <SliderNumber
+          stacked
+          label={modeButton}
+          unit="кбит/с"
+          value={video.bitrate_kbps ?? 0}
+          min={range.min}
+          max={range.max}
+          step={250}
+          reset={bitrateNormal(codec, frame)}
+          marks={bitrateMarks(codec, frame)}
+          entryLimits={[200, 200000]}
+          onChange={(bitrate) => setVideo({ bitrate_kbps: Math.max(200, Math.round(bitrate)) })}
+        />
+      ) : (
+        <SliderNumber
+          stacked
+          label={modeButton}
+          unit=""
+          readout={
+            <span className="shrink-0 text-[12px] text-ink" title={`crf ${video.crf}: меньше число — лучше картинка`}>
+              {qualityWord(codec, video.crf)}
+            </span>
+          }
+          value={flip(video.crf)}
+          min={scale.best}
+          max={scale.worst}
+          reset={flip(scale.marks[1].crf)}
+          marks={scale.marks.map((mark) => ({ value: flip(mark.crf), label: mark.label, hint: mark.hint }))}
+          onChange={(position) => setVideo({ crf: Math.round(flip(position)) })}
+        />
+      )}
+
+      <span className="label pt-1">Звук</span>
+      <Segmented
+        columns={5}
+        value={sound.value}
+        options={SOUND_CODECS.map((item) => ({ value: item.value, label: item.label, title: item.title }))}
+        onChange={(value) => {
+          const next = SOUND_CODECS.find((item) => item.value === value)!
+          setAudio({ codec: value, ...(next.normal ? { bitrate_kbps: next.normal } : {}) })
+        }}
+      />
+      {sound.max > 0 && (
+        <SliderNumber
+          stacked
+          label="Битрейт звука"
+          unit="кбит/с"
+          value={audio.bitrate_kbps}
+          min={sound.min}
+          max={sound.max}
+          step={8}
+          reset={sound.normal}
+          marks={sound.marks}
+          onChange={(bitrate_kbps) => setAudio({ bitrate_kbps })}
+        />
+      )}
+    </Section>
   )
 }
 

@@ -17,6 +17,8 @@ export interface Prefs {
   videoPreset?: string
   /** Размер картинки один раз переведён с прежнего умолчания на «как есть». */
   imageSizeAsIs?: boolean
+  /** Качество «Рекомендуемого сжатия» один раз переведено с 94 на 90. */
+  imageQuality90?: boolean
   /** Пресет для GIF: видео или движущийся WebP. */
   gifPreset?: string
   audioPreset?: string
@@ -36,6 +38,21 @@ export interface Prefs {
   imageSpeed?: number
   /** Контейнер обработанного видео. */
   videoContainer?: string
+  /**
+   * Кадры на дорожке видео в медиатеке: по склейкам (читается весь ролик),
+   * редко (только опорные кадры — быстро) или без кадров.
+   */
+  timelineFrames?: 'scenes' | 'sparse' | 'off'
+  /** Кадры покрупнее и чётче — для широкого окна. */
+  timelineQuality?: 'normal' | 'high'
+}
+
+/** Событие окна: настройки поменялись — кто их показывает, перечитывает. */
+const PREFS_EVENT = 'sgh:prefs'
+
+export function onPrefs(listener: () => void): () => void {
+  window.addEventListener(PREFS_EVENT, listener)
+  return () => window.removeEventListener(PREFS_EVENT, listener)
 }
 
 /** Скорость кодирования — одни и те же подписи у видео и картинок. */
@@ -61,4 +78,5 @@ export function savePrefs(patch: Prefs): void {
   } catch {
     // Приватный режим браузера — тогда просто не запомним.
   }
+  window.dispatchEvent(new Event(PREFS_EVENT))
 }
