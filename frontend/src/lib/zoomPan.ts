@@ -79,11 +79,17 @@ export function useZoomPan(resetKey: unknown, max = 8, min = 1) {
   // Сдвинута ли картинка с места: тогда кнопка «100%» видна и подсвечена,
   // и по ней картинка возвращается на место.
   const changed = view !== 1 || pan.x !== 0 || pan.y !== 0
+  /** Кратность из списка — от середины, без сдвига. */
+  const zoomTo = useCallback((next: number) => {
+    setView(Math.min(max, Math.max(min, next)))
+    setPan({ x: 0, y: 0 })
+  }, [max, min])
   return {
     shell,
     view,
     changed,
     reset,
+    zoomTo,
     onMouseDown,
     transform: changed ? `translate(${pan.x}px, ${pan.y}px) scale(${view})` : undefined,
   }

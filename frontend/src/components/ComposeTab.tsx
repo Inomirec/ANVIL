@@ -1,11 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  Camera,
   ChevronDown,
   Columns2,
   Film,
   FolderOpen,
-  Grid3x3,
   Loader2,
   Save,
   Play,
@@ -33,7 +31,8 @@ import {
 } from '../composeStore'
 import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
-import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
+import { ComposeFrameBox, ComposeGrid } from './ComposeFrameBox'
+import { PreviewBar, useGridChoice } from './PreviewBar'
 import { ComposeCropBox } from './ComposeCropBox'
 import { ComposeDelogoBox, shownDelogos } from './ComposeDelogoBox'
 import { ComposeMaskBox } from './ComposeMaskBox'
@@ -99,7 +98,6 @@ function BusyMark({ from, text }: { from: { x: number; y: number }; text: string
  */
 // Экран просмотра умеет и отдаляться: клип, вылезший за край кадра, иначе не
 // ухватить за уголок — он оказывается за пределами окна.
-const VIEWS = [0.5, 0.75, 1, 1.5, 2, 3, 4]
 
 /**
  * Поле размера кадра.
@@ -360,14 +358,8 @@ export function ComposeTab() {
   // Сетку часто включают и выключают, поэтому у неё отдельная кнопка, а вид
   // выбирается списком рядом. Выключенная сетка помнит свой вид: включил —
   // вернулась та же.
-  const [gridOn, setGridOn] = useState(() => localStorage.getItem('sgh.composeGridOn') === '1')
-  const [gridKind, setGridKind] = useState<GridKind>(() => {
-    const saved = localStorage.getItem('sgh.composeGrid')
-    return GRIDS.some((item) => item.value === saved && item.value !== 'none')
-      ? (saved as GridKind)
-      : 'thirds'
-  })
-  const grid: GridKind = gridOn ? gridKind : 'none'
+  const gridChoice = useGridChoice('sgh.composeGrid')
+  const grid = gridChoice.shown
   const [snapping, setSnapping] = useState(false)
   // Увеличительное стекло над кадром: во сколько раз и насколько сдвинут.
   // Сдвиг в пикселях от середины — так кадр можно и таскать зажатым колесом,
@@ -990,78 +982,22 @@ export function ComposeTab() {
                 пустого места, а снизу — почти ничего. Кадр может заходить
                 под плашку; плашка небольшая и стоит у самого верха. */}
             {clips > 0 && (
-              <div className="absolute inset-x-0 top-1.5 z-20 mx-auto flex w-fit items-center gap-0.5 rounded-lg bg-surface/85 px-1 py-0.5 ring-1 ring-line-soft backdrop-blur">
-                {/* Увеличительное стекло: сколько сейчас и выбор кратности.
-                    Нажатие на число возвращает обычный размер. */}
-                <div className="flex items-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setView(1)
-                      setPan({ x: 0, y: 0 })
-                    }}
-                    title="Увеличение экрана просмотра — на готовый файл не влияет. Колесо приближает, зажатое колесо таскает кадр. Нажмите, чтобы вернуть обычный размер."
-                    className={`inline-flex h-6 items-center rounded-md px-1.5 font-mono text-[10.5px] tabular-nums transition-colors ${
-                      view !== 1 || pan.x !== 0 || pan.y !== 0
-                        ? 'bg-accent/20 text-accent-soft hover:bg-accent/30'
-                        : 'text-ink-faint hover:text-ink'
-                    }`}
-                  >
-                    {Math.round(view * 100)}%
-                  </button>
-                  <Dropdown
-                    value={String(view)}
-                    title="Насколько увеличить экран"
-                    className="flex h-6 w-3.5 items-center justify-center text-ink-faint hover:text-ink"
-                    options={VIEWS.map((item) => ({
-                      value: String(item),
-                      label: `Экран ${Math.round(item * 100)}%`,
-                    }))}
-                    onChange={(item) => {
-                      setView(Number(item))
-                      setPan({ x: 0, y: 0 })
-                    }}
-                  >
-                    <ChevronDown size={11} />
-                  </Dropdown>
-                </div>
-
-                {/* Сетка — не только разметка для глаза: клип к её линиям
-                    прилипает, поэтому точное положение можно набрать мышью.
-                    Кнопка включает и выключает, список рядом меняет вид. */}
-                <div className="flex items-center">
-                  <IconButton
-                    className="h-6 w-6"
-                    title="Сетка поверх кадра. К её линиям, к краям кадра и к его середине клип прилипает, когда его двигают."
-                    active={gridOn}
-                    onClick={() => {
-                      setGridOn((on) => {
-                        localStorage.setItem('sgh.composeGridOn', on ? '0' : '1')
-                        return !on
-                      })
-                    }}
-                  >
-                    <Grid3x3 size={13} />
-                  </IconButton>
-                  {/* Галочка рядом со значком: сам список нужен редко, а
-                      место занимал бы постоянно, поэтому от него оставлена
-                      только стрелка. */}
-                  <Dropdown
-                    value={gridKind}
-                    title="Какая сетка"
-                    className="flex h-6 w-3.5 items-center justify-center text-ink-faint hover:text-ink"
-                    options={GRIDS.filter((item) => item.value !== 'none')}
-                    onChange={(value) => {
-                      setGridKind(value)
-                      setGridOn(true)
-                      localStorage.setItem('sgh.composeGrid', value)
-                      localStorage.setItem('sgh.composeGridOn', '1')
-                    }}
-                  >
-                    <ChevronDown size={11} />
-                  </Dropdown>
-                </div>
-
+              <PreviewBar
+                view={view}
+                changed={view !== 1 || pan.x !== 0 || pan.y !== 0}
+                onReset={() => {
+                  setView(1)
+                  setPan({ x: 0, y: 0 })
+                }}
+                onView={(item) => {
+                  setView(item)
+                  setPan({ x: 0, y: 0 })
+                }}
+                grid={gridChoice}
+                gridTitle="Сетка поверх кадра. К её линиям, к краям кадра и к его середине клип прилипает, когда его двигают."
+                onSnap={() => void grabFrame()}
+                snapping={snapping}
+              >
                 <IconButton
                   className="h-6 w-6"
                   title="Сравнить: слева кадр без эффектов, справа — с ними. Удобно подбирать цвет и другие эффекты. Работает на остановленном кадре"
@@ -1099,16 +1035,7 @@ export function ComposeTab() {
                     : `${custom ? player.quality : Math.min(player.quality, quality)}p`}
                   <ChevronDown size={11} className="text-ink-faint" />
                 </Dropdown>
-
-                <IconButton
-                  className="h-6 w-6"
-                  title="Сохранить кадр картинкой"
-                  onClick={() => void grabFrame()}
-                  disabled={snapping}
-                >
-                  <Camera size={13} />
-                </IconButton>
-              </div>
+              </PreviewBar>
             )}
 
             {/* Размер кадра считается от этого места: «containerType: size»

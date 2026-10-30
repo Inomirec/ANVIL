@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Camera,
   Maximize2,
   Pause,
   Play,
@@ -19,6 +18,8 @@ import { Timeline, type Fades, type LaneFade } from './Timeline'
 import { fadeInGain, fadeOutGain } from '../lib/fades'
 import { VolumeControl } from './VolumeControl'
 import { IconButton } from './ui'
+import { ComposeGrid } from './ComposeFrameBox'
+import { PreviewBar, useGridChoice } from './PreviewBar'
 
 export interface TrimState {
   in: number | null
@@ -91,6 +92,33 @@ export function MediaEditor({
   // Колесо над кадром приближает его, зажатое колесо таскает: мелкую надпись
   // или край кадра иначе не разглядеть. На готовый файл не влияет.
   const zoom = useZoomPan(file.path, isVideo ? 8 : 1, isVideo ? 0.4 : 1)
+  // Сетка поверх ролика — как в монтаже, со своим запомненным выбором.
+  const grid = useGridChoice('sgh.mediaGrid')
+  // Где лежит сам ролик в окне: сетка ложится ровно на него, а не на всё
+  // поле вокруг.
+  const [videoBox, setVideoBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  const measureVideo = useCallback(() => {
+    const element = mediaRef.current
+    if (!(element instanceof HTMLVideoElement)) return
+    setVideoBox({
+      left: element.offsetLeft,
+      top: element.offsetTop,
+      width: element.offsetWidth,
+      height: element.offsetHeight,
+    })
+  }, [])
+  useEffect(() => {
+    const element = mediaRef.current
+    if (!isVideo || !element) return
+    measureVideo()
+    const watch = new ResizeObserver(measureVideo)
+    watch.observe(element)
+    window.addEventListener('resize', measureVideo)
+    return () => {
+      watch.disconnect()
+      window.removeEventListener('resize', measureVideo)
+    }
+  }, [isVideo, file.path, measureVideo])
 
   /**
    * Метки должны существовать сразу, а не появляться после нажатия I/O:
@@ -463,13 +491,6 @@ export function MediaEditor({
   const right = isVideo ? (
     <>
       <IconButton className="h-7 w-7"
-        onClick={() => void grabFrame()}
-        disabled={grabbing}
-        title="Сохранить текущий кадр картинкой (S)"
-      >
-        <Camera size={14} />
-      </IconButton>
-      <IconButton className="h-7 w-7"
         onClick={() => {
           const element = mediaRef.current
           if (document.fullscreenElement) void document.exitFullscreen()
@@ -493,7 +514,21 @@ export function MediaEditor({
         // поле. Сверху отступ под сведения о файле: они стоят над кадром.
         className="stage relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 pt-9"
       >
-        {zoom.changed && (
+        {/* Плашка над кадром — та же, что в монтаже: увеличение, сетка,
+            снимок кадра. Сравнения с эффектами здесь нет — эффектов нет. */}
+        {isVideo && (
+          <PreviewBar
+            view={zoom.view}
+            changed={zoom.changed}
+            onReset={zoom.reset}
+            onView={zoom.zoomTo}
+            grid={grid}
+            onSnap={() => void grabFrame()}
+            snapping={grabbing}
+            snapTitle="Сохранить текущий кадр картинкой (S)"
+          />
+        )}
+        {!isVideo && zoom.changed && (
           <button
             type="button"
             onClick={zoom.reset}
@@ -517,6 +552,7 @@ export function MediaEditor({
               const total = event.currentTarget.duration || 0
               setDuration(total)
               ensureTrim(total)
+              measureVideo()
             }}
             onTimeUpdate={onTimeUpdate}
             onPlay={() => setPlaying(true)}
@@ -555,14 +591,24 @@ export function MediaEditor({
         {/* Сведения о файле — мелко по углам над кадром, как у картинок:
             отдельная строка под плеером съедала место, а на самом кадре они
             мешали смотреть. */}
-        <div className="pointer-events-none absolute left-3 top-2.5 z-10 flex max-w-[calc(40%-24px)] items-center gap-2.5 overflow-hidden whitespace-nowrap text-[11px] text-ink-faint">
+        {isVideo && grid.shown !== 'none' && videoBox && (
+          <div
+            className="pointer-events-none absolute"
+            style={{ ...videoBox, transform: zoom.transform }}
+          >
+            <ComposeGrid kind={grid.shown} />
+          </div>
+        )}
+
+        {/* По бокам от плашки: середина верха — её. */}
+        <div className="pointer-events-none absolute left-3 top-2.5 z-10 flex max-w-[calc(50%-130px)] items-center gap-2.5 overflow-hidden whitespace-nowrap text-[11px] text-ink-faint">
           {fileDetails.map((item) => (
             <span key={item} className="truncate">
               {item}
             </span>
           ))}
         </div>
-        <div className="pointer-events-none absolute right-3 top-2.5 z-10 flex max-w-[calc(60%-24px)] items-center gap-2.5 overflow-hidden whitespace-nowrap text-[11px] text-ink-faint">
+        <div className="pointer-events-none absolute right-3 top-2.5 z-10 flex max-w-[calc(50%-130px)] items-center gap-2.5 overflow-hidden whitespace-nowrap text-[11px] text-ink-faint">
           {streamDetails.map((item) => (
             <span key={item} className="truncate">
               {item}
