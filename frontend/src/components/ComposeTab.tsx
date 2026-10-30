@@ -179,6 +179,22 @@ const TIMELINE_DEFAULT = 300
 const TIMELINE_MIN = 140
 /** Окну просмотра оставляем хотя бы столько, сколько бы ни тянули таймлайн. */
 const VIEWER_MIN = 260
+/**
+ * Частота монтажа под частоту файла: ближайшая из обычных, если файл от неё
+ * отличается не больше чем на 6%, иначе — сама частота файла, округлённая.
+ * У роликов с телефона и из мессенджеров частота «плавает» (средняя 29.87
+ * вместо 30), и прежнее «почти точное совпадение» её молча отбрасывало:
+ * монтаж брал размер файла, а частоту оставлял свою.
+ */
+function projectRate(fps: number): number | undefined {
+  if (!(fps > 0)) return undefined
+  const nearest = FRAME_RATES.reduce((best, item) =>
+    Math.abs(item.value - fps) < Math.abs(best.value - fps) ? item : best,
+  )
+  if (Math.abs(nearest.value - fps) / nearest.value <= 0.06) return nearest.value
+  return Math.min(120, Math.max(1, Math.round(fps)))
+}
+
 const TIMELINE_HEIGHT_KEY = 'sgh.timelineHeight'
 
 export function ComposeTab() {
@@ -655,11 +671,8 @@ export function ComposeTab() {
       useCompose.getState().setPlayhead(clip.start + Math.min(0.2, clip.duration / 2))
 
       const source = { width: info.media?.width ?? 0, height: info.media?.height ?? 0 }
-      // Частота кадров ролика — ближайшая из списка монтажа. У картинки её нет.
-      const rate =
-        clip.kind === 'video' && info.media?.fps
-          ? FRAME_RATES.find((item) => Math.abs(item.value - info.media!.fps!) < 0.05)?.value
-          : undefined
+      // Частота кадров ролика. У картинки её нет.
+      const rate = clip.kind === 'video' && info.media?.fps ? projectRate(info.media.fps) : undefined
       if (firstPicture && source.width && source.height) {
         const state = useCompose.getState()
         const wanted = sourceFrame(source.width, source.height)
