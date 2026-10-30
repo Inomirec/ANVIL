@@ -992,6 +992,23 @@ def video_fades(
     return _video_fade_filters(clip, at, take, fps, tag)
 
 
+def _opacity_filters(clip: ComposeClip, skip: float, take: float, fps: float, tag: str) -> list[str]:
+    """Полупрозрачность клипа — тот же канал прозрачности, только постоянный."""
+    if anim.animated(clip, "opacity"):
+        # По ключам: формулу от времени colorchannelmixer не понимает, но
+        # слушает команды — значение на каждый кадр шлёт sendcmd.
+        lines = anim.commands(
+            clip, "opacity", f"colorchannelmixer@{tag}", "aa",
+            skip=skip, take=take, fps=fps,
+            scale=lambda value: min(1.0, max(0.0, value)),
+        )
+        first = min(1.0, max(0.0, anim.value_at(clip, "opacity", skip)))
+        return [f"sendcmd=f={effects.command_file(lines)},colorchannelmixer@{tag}=aa={first:.3f}"]
+    if clip.opacity < 1.0:
+        return [f"colorchannelmixer=aa={clip.opacity:.3g}"]
+    return []
+
+
 def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: float = 25, tag: str = "o") -> str:
     """Появление и уход картинки по краям клипа.
 
@@ -1003,26 +1020,35 @@ def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: float = 
     skip = max(0.0, at - clip.start)
     parts: list[str] = []
 
-    if fades.custom(clip.fade_in_curve) or fades.custom(clip.fade_out_curve):
-        # Форму, кроме линейной, `fade` не рисует: видимость вместе с
-        # непрозрачностью шлём на каждый кадр командой, как ключи.
-        rate = max(fps, 1)
-        lines: list[tuple[float, str]] = []
-        last = ""
-        for index in range(max(1, int(math.ceil(take * rate)) + 1)):
-            moment = index / rate
-            local = skip + moment
-            value = (
-                f"{min(1.0, max(0.0, anim.value_at(clip, 'opacity', local))) * fade_gain(clip, clip.start + local):.3f}"
+    # Кусок, начавшийся посреди появления, тоже идёт формулой: `fade` начал
+    # бы появление с нуля, и на стыке кусков клип мигал бы в чёрное.
+    midway = 0 < skip < clip.fade_in - MIN_FADE
+    if fades.custom(clip.fade_in_curve) or fades.custom(clip.fade_out_curve) or midway:
+        # Форму, кроме линейной, `fade` не рисует — считаем видимость формулой
+        # `geq` и только на кадрах появления и ухода (`enable`), остальные
+        # проходят мимо. Командами `sendcmd` нельзя: на повторённых кадрах
+        # (картинка 25 к/с или ролик 24 к/с в монтаже на 60) они срабатывают
+        # через раз, и затухание шло ступеньками по 24 в секунду.
+        local = f"(T+{skip:.4f})"
+        gain: list[str] = []
+        when: list[str] = []
+        if clip.fade_in - skip > MIN_FADE:
+            share = f"{local}/{clip.fade_in:.4f}"
+            gain.append(f"if(lt({local},{clip.fade_in:.4f}),{fades.expression(clip.fade_in_curve or 'linear', share)},1)")
+            when.append(f"lt(t+{skip:.4f},{clip.fade_in:.4f})")
+        if clip.fade_out > MIN_FADE and (clip.duration - skip) - clip.fade_out < take:
+            starts = clip.duration - clip.fade_out
+            left = f"({clip.duration:.4f}-{local})/{clip.fade_out:.4f}"
+            curve = fades.expression(clip.fade_out_curve or "linear", f"1-{left}")
+            gain.append(f"if(gt({local},{starts:.4f}),1-{curve},1)")
+            when.append(f"gt(t+{skip:.4f},{starts:.4f})")
+        if gain:
+            parts.append(
+                "geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)'"
+                f":a='alpha(X,Y)*{'*'.join(gain)}':enable='{'+'.join(when)}'"
             )
-            if value != last:
-                lines.append((moment, f"colorchannelmixer@{tag} aa {value}"))
-                last = value
-        first = lines[0][1].rsplit(" ", 1)[-1]
-        return (
-            ",format=yuva420p,"
-            f"sendcmd=f={effects.command_file(lines)},colorchannelmixer@{tag}=aa={first}"
-        )
+        parts += _opacity_filters(clip, skip, take, fps, tag)
+        return ",format=yuva420p," + ",".join(parts) if parts else ""
 
     if clip.fade_in - skip > MIN_FADE:
         parts.append(f"fade=t=in:st=0:d={clip.fade_in - skip:.3f}:alpha=1")
@@ -1035,21 +1061,7 @@ def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: float = 
                 f":d={min(clip.fade_out, clip.duration):.3f}:alpha=1"
             )
 
-    # Полупрозрачный клип — тот же канал прозрачности, только постоянный.
-    if anim.animated(clip, "opacity"):
-        # По ключам: формулу от времени colorchannelmixer не понимает, но
-        # слушает команды — значение на каждый кадр шлёт sendcmd.
-        lines = anim.commands(
-            clip, "opacity", f"colorchannelmixer@{tag}", "aa",
-            skip=skip, take=take, fps=fps,
-            scale=lambda value: min(1.0, max(0.0, value)),
-        )
-        first = min(1.0, max(0.0, anim.value_at(clip, "opacity", skip)))
-        parts.append(
-            f"sendcmd=f={effects.command_file(lines)},colorchannelmixer@{tag}=aa={first:.3f}"
-        )
-    elif clip.opacity < 1.0:
-        parts.append(f"colorchannelmixer=aa={clip.opacity:.3g}")
+    parts += _opacity_filters(clip, skip, take, fps, tag)
 
     if not parts:
         return ""

@@ -28,6 +28,13 @@ import type { MeterLevels } from '../components/MasterMeter'
  * не успевал собраться, пока играет текущий.
  */
 const CHUNK_SECONDS = 12
+/** Первый кусок просмотра — короткий: его ждут, нажав «играть». */
+const QUICK_SECONDS = 3
+
+/** Ближайшая отметка кусков после ``at`` (сама ``at``, если она на отметке, — следующая). */
+function nextMark(at: number): number {
+  return (Math.floor(at / CHUNK_SECONDS + 1e-6) + 1) * CHUNK_SECONDS
+}
 /** На сколько секунд вперёд держим собранные куски. */
 const AHEAD_SECONDS = 60
 /** С какого качества начинаем. На слабой машине программа понизит сама. */
@@ -222,7 +229,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
 
   /** Просит у программы кусок монтажа с указанной секунды. */
   const fetchChunk = useCallback(
-    async (at: number, mine: number, from = at): Promise<Chunk | null> => {
+    async (at: number, mine: number, from = at, quick = false): Promise<Chunk | null> => {
       const started = performance.now()
       const version = usePreviewReady.getState().version
       try {
@@ -231,7 +238,22 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           project: snapshot(),
           at,
           // Кусок, на котором кончается круг повтора, — ровно до его конца.
-          span: Math.min(CHUNK_SECONDS, (loopRange(from)?.end ?? Infinity) - at),
+          // Кусок не с отметки — до ближайшей отметки, дальше снова обычные:
+          // их собирают впрок и берут из запаса при следующем просмотре.
+          // Первый кусок — короткий (`QUICK_SECONDS`): собирается вдвое
+          // быстрее, и просмотр начинается раньше; готовый обычный кусок
+          // сервер отдаст вместо него (`ready_at`).
+          span: Math.min(
+            quick ? QUICK_SECONDS : CHUNK_SECONDS,
+            nextMark(at) - at,
+            (loopRange(from)?.end ?? Infinity) - at,
+          ),
+          ...(quick
+            ? {
+                ready_at: Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS,
+                ready_span: Math.min(CHUNK_SECONDS, (loopRange(from)?.end ?? Infinity) - Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS),
+              }
+            : {}),
           height: previewHeight(asked === 'auto' ? height.current : asked),
         })
         let sound: AudioBuffer | null = null
@@ -382,9 +404,11 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   const reveal = useCallback(
     (index: number) => {
       // Прямо в разметке, не дожидаясь отрисовки: иначе на стыке мелькал бы
-      // кадр-другой не того видео.
-      element(index)?.classList.remove('invisible')
-      element(1 - index)?.classList.add('invisible')
+      // кадр-другой не того видео. Прячем прозрачностью, а не `visibility`:
+      // спрятанное так видео браузер не рисует вовсе, и в первый миг после
+      // показа на месте кадра был чёрный.
+      element(index)?.classList.remove('opacity-0')
+      element(1 - index)?.classList.add('opacity-0')
       shownRef.current = index
       setShown(index)
     },
@@ -400,14 +424,30 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     upcoming.current = null
     const target = element(next.index)
     void target?.play().catch(() => undefined)
-    reveal(next.index)
-    element(1 - next.index)?.pause()
+    // Следующий кусок ещё не вывел ни кадра — пусть до того стоит последний
+    // кадр прежнего: открой мы пустое видео сразу, на стыке мигал бы чёрный.
+    // Следующий за ним кусок грузится в прежнее видео — тоже только после
+    // этого, иначе оно погасло бы, ещё будучи на экране.
+    const outgoing = element(1 - next.index)
     // Звук прежнего куска уже кончился сам; на всякий случай снимаем его.
     silence(before)
     setPreparing(false)
-    schedule()
-    preload()
-    void fill()
+    let done = false
+    const show = () => {
+      if (done || current.current !== next) return
+      done = true
+      reveal(next.index)
+      outgoing?.pause()
+      schedule()
+      preload()
+      void fill()
+    }
+    if (!target || target.readyState >= 2) show()
+    else {
+      target.addEventListener('loadeddata', show, { once: true })
+      // Не ждать вечно, если событие не придёт.
+      setTimeout(show, 400)
+    }
   }, [element, reveal, schedule, preload, fill])
 
   const start = useCallback(async () => {
@@ -426,10 +466,10 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     let at = state.playhead
     // Игла осталась в самом конце — начинаем сначала, как любой плеер.
     if (at >= finish - 0.05) at = 0
-    // Кусок — с ровной отметки, а играть — с иглы внутри него: так кусок,
-    // однажды собранный, годится для просмотра с любого места в нём.
-    const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
-    const first = await fetchChunk(base, mine, at)
+    // Первый кусок — короткий и прямо с иглы: его ждут, нажав «играть».
+    // Если обычный кусок с отметки уже собран, сервер отдаст его, и играть
+    // начнём с иглы внутри него.
+    const first = await fetchChunk(at, mine, at, true)
     if (!first || !alive.current || mine !== run.current) {
       if (mine === run.current) setPreparing(false)
       return

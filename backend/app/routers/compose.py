@@ -103,7 +103,7 @@ async def frame(request: ComposeFrameRequest) -> Response:
 _DRAFT_KEEP = 80
 #: Версия сборки черновиков. Меняется, когда меняется то, как собирается
 #: кусок, — иначе просмотр брал бы из запаса куски, собранные по-старому.
-_DRAFT_VERSION = "5"
+_DRAFT_VERSION = "6"
 #: Пока собирается один кусок, следующий ждёт: иначе десяток ffmpeg разом
 #: положит машину, ради которой всё это и затевалось.
 _draft_lock = asyncio.Lock()
@@ -174,16 +174,24 @@ async def draft(request: ComposeDraftRequest) -> dict:
     if not total:
         raise HTTPException(400, "На таймлайне пусто")
 
-    at = min(request.at, total)
-    span = min(request.span, max(total - at, 0.0))
+    def place(at: float, span: float) -> tuple[float, float, Path]:
+        at = min(at, total)
+        span = min(span, max(total - at, 0.0))
+        # Номер версии сборки — в ключе: исправленная сборка не должна брать
+        # из запаса куски, собранные прежней (с пропавшим кадром на стыке).
+        stamp = f"{_DRAFT_VERSION}|{project.model_dump_json()}|{at:.3f}|{span:.3f}|{request.height}"
+        key = hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:20]
+        return at, span, _draft_dir() / f"{key}.mp4"
+
+    at, span, target = place(request.at, request.span)
     if span <= 0:
         raise HTTPException(400, "Дальше конца монтажа смотреть нечего")
-
-    # Номер версии сборки — в ключе: исправленная сборка не должна брать из
-    # запаса куски, собранные прежней (с пропавшим кадром на стыке).
-    stamp = f"{_DRAFT_VERSION}|{project.model_dump_json()}|{at:.3f}|{span:.3f}|{request.height}"
-    key = hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:20]
-    target = _draft_dir() / f"{key}.mp4"
+    if request.ready_at is not None and request.ready_span:
+        # Обычный кусок уже собран — он лучше короткого: дальше просмотр
+        # пойдёт от него без лишнего стыка.
+        ready = place(request.ready_at, request.ready_span)
+        if ready[1] > 0 and ready[2].exists():
+            at, span, target = ready
 
     if target.exists():
         # Кусок снова понадобился — он свежий: чистка убирает давно не нужные,

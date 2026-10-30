@@ -99,12 +99,15 @@ const DRAG_START = 4
 /** Ближе этого к краю видимой части таймлайн едет за перетаскиваемым. */
 const FOLLOW_EDGE = 40
 /**
- * Кнопки панели таймлайна: в узком окне — на четыре точки уже, разделители
- * пропадают, время иглы прячется (оно видно на самом таймлайне). Так в
- * самом маленьком окне с широкими колонками видны все кнопки, а не
- * обрезаются и не налезают друг на друга. Ступени — 720 и 560 точек панели.
+ * Кнопки панели таймлайна сужаются плавно вместе с панелью: от 28 точек при
+ * ширине панели 720 и больше до 20 при 474 (окно 1150 с растянутыми
+ * колонками). Уже 720 прячутся разделители и время иглы (оно видно на самом
+ * таймлайне). Так видны все кнопки, а не обрезаются и не налезают друг на
+ * друга; ступенями кнопки заметно прыгали.
  */
-const TOOL = 'h-7 w-5 @[560px]:w-6 @[720px]:w-7'
+const TOOL = 'h-7 w-[clamp(20px,calc(4.6px_+_3.25cqw),28px)]'
+/** Зазор между кнопками — тоже плавно, от нуля до двух точек. */
+const TOOL_GAP = 'gap-[clamp(0px,calc((100cqw_-_474px)/43),2px)]'
 const DIVIDER = 'mx-0.5 hidden h-4 w-px bg-line-soft @[720px]:block'
 /** Быстрее этого (точек за шаг в 16 мс) он не едет. */
 const FOLLOW_MAX = 30
@@ -963,9 +966,9 @@ export function ComposeTimeline({
           посередине — просмотр, справа — что делают со всем монтажом и с
           самим таймлайном. Середина держится по центру окна и не ездит,
           когда слева появляются надписи вроде «добавляю файл…». */}
-      <div className="@container flex h-9 shrink-0 items-center gap-1 border-b border-line-soft px-1 @[560px]:px-2 @[720px]:gap-2">
+      <div className="@container flex h-9 shrink-0 items-center gap-1 border-b border-line-soft px-1.5 @[720px]:gap-2 @[720px]:px-2">
         {/* Слева: что делают с клипами и дорожками */}
-        <div className="flex min-w-0 flex-auto items-center gap-0 overflow-hidden @[560px]:gap-0.5">
+        <div className={`flex min-w-0 flex-auto items-center overflow-hidden ${TOOL_GAP}`}>
           <IconButton className={TOOL}
             title="Отменить последнее действие (Ctrl+Z)"
             onClick={() => useCompose.getState().undo()}
@@ -1074,7 +1077,7 @@ export function ComposeTimeline({
         </div>
 
         {/* Посередине: просмотр */}
-        <div className="flex shrink-0 items-center gap-0 @[560px]:gap-0.5">
+        <div className={`flex shrink-0 items-center ${TOOL_GAP}`}>
           <IconButton className={TOOL}
             title="В начало монтажа"
             onClick={() => {
@@ -1136,7 +1139,7 @@ export function ComposeTimeline({
         {/* Справа: как выглядит сам таймлайн. Где стоит игла и что уйдёт в
             файл, видно на самом таймлайне — метками и её чертой, поэтому
             словами это здесь не повторяем: место на панели дороже. */}
-        <div className="flex min-w-0 flex-auto items-center justify-end gap-0 overflow-hidden @[560px]:gap-0.5">
+        <div className={`flex min-w-0 flex-auto items-center justify-end overflow-hidden ${TOOL_GAP}`}>
 
           <IconButton className={TOOL} title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null || renderOut !== null}>
             <FlagTriangleRight size={14} />

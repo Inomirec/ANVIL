@@ -1102,7 +1102,7 @@ export function ComposeTab() {
                     key={index}
                     ref={ref}
                     className={`absolute inset-0 h-full w-full object-contain ${
-                      player.playing && player.shown === index ? '' : 'invisible'
+                      player.playing && player.shown === index ? '' : 'pointer-events-none opacity-0'
                     }`}
                     muted
                     playsInline

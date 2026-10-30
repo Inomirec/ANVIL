@@ -697,6 +697,11 @@ class ComposeDraftRequest(ComposeModel):
     at: float = Field(default=0.0, ge=0)
     #: Сколько секунд собрать за раз.
     span: float = Field(default=12.0, gt=0, le=60)
+    #: Обычный кусок, который годится вместо этого, если он уже собран:
+    #: первый кусок просмотра короткий, чтобы начать быстрее, но готовый
+    #: обычный отдаётся сразу, без сборки.
+    ready_at: float | None = Field(default=None, ge=0)
+    ready_span: float | None = Field(default=None, gt=0, le=60)
     #: Высота кадра черновика. Меньше — быстрее собирается.
     height: int = Field(default=360, ge=144, le=4320)
 
