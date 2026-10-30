@@ -50,6 +50,28 @@ const SIZES = [
   { value: '64', label: 'до 64 px' },
 ]
 
+/**
+ * Размеры значка. Больше 256 точек ICO не бывает, поэтому крупные размеры
+ * для него бессмысленны; зато нужны мелкие — 48, 32 и 16, как у значков
+ * Windows. Значок квадратный, поэтому размер — одной стороной.
+ */
+const ICO_SIZES = [
+  { value: '256', label: '256 × 256', title: 'Крупный значок: рабочий стол, большие значки в папке' },
+  { value: '128', label: '128 × 128' },
+  { value: '64', label: '64 × 64' },
+  { value: '48', label: '48 × 48', title: 'Обычные значки в папке' },
+  { value: '32', label: '32 × 32', title: 'Список файлов, меню «Пуск»' },
+  { value: '16', label: '16 × 16', title: 'Заголовок окна, мелкие значки' },
+]
+
+/** Размер, который подходит формату: у значка — не больше 256 и из его списка. */
+function sizeFor(format: string, size: number): number {
+  if (format === 'ico') {
+    return ICO_SIZES.some((item) => Number(item.value) === size) ? size : 256
+  }
+  return SIZES.some((item) => Number(item.value) === size) ? size : 0
+}
+
 /** Слева ползунок не уходит в нечитаемое месиво, справа — в бессмысленный вес. */
 const MIN_QUALITY = 20
 const MAX_QUALITY = 100
@@ -119,6 +141,8 @@ export function ImagePanel({
   const fixedSuffix = useStore((state) => state.settings?.export.file_suffix ?? '')
   // Скорость (усилие) кодировщика: 2 — обычная.
   const [speed, setSpeed] = useState(() => loadPrefs().imageSpeed ?? 2)
+  // Размер, что стоял до значка: ушли с ICO — он и вернётся, а не 256.
+  const sizeBeforeIco = useRef<number | null>(null)
   const [intoSubfolder, setIntoSubfolder] = useState(
     () => loadPrefs().subfolder ?? localStorage.getItem('sgh.outputSubfolder') !== 'off',
   )
@@ -366,7 +390,8 @@ export function ImagePanel({
   const lossless = options.format === 'ico' || options.format === 'png'
 
   const formatLabel = FORMATS.find((item) => item.value === options.format)?.label ?? options.format
-  const sizeLabel = SIZES.find((item) => item.value === String(options.max_dimension))?.label
+  const sizes = options.format === 'ico' ? ICO_SIZES : SIZES
+  const sizeLabel = sizes.find((item) => item.value === String(options.max_dimension))?.label
 
   return (
     <QuietHints>
@@ -414,7 +439,12 @@ export function ImagePanel({
         >
           <Segmented<Format>
             value={options.format as Format}
-            onChange={(value) => setOptions({ ...options, format: value })}
+            onChange={(value) => {
+              let size = options.max_dimension
+              if (value === 'ico' && options.format !== 'ico') sizeBeforeIco.current = size
+              if (value !== 'ico' && options.format === 'ico') size = sizeBeforeIco.current ?? 0
+              setOptions({ ...options, format: value, max_dimension: sizeFor(value, size) })
+            }}
             options={FORMATS}
           />
           {animated && (
@@ -426,8 +456,8 @@ export function ImagePanel({
 
           {options.format === 'ico' && (
             <p className="rounded-lg bg-surface-2 px-3 py-2 text-[11px] leading-snug text-ink-dim">
-              Значок получится квадратным, не больше 256 точек: картинка
-              впишется целиком, а лишнее по краям останется прозрачным.
+              Значок получится квадратным: картинка впишется целиком, а
+              лишнее по краям останется прозрачным.
             </p>
           )}
 
@@ -463,9 +493,13 @@ export function ImagePanel({
           <div className="flex gap-2">
             <Choice
               label="Размер"
-              hint="Предел по длинной стороне. Уменьшает только слишком большие картинки, маленькие не растягивает"
-              value={String(options.max_dimension)}
-              options={SIZES}
+              hint={
+                options.format === 'ico'
+                  ? 'Сторона значка. Больше 256 точек значок не бывает'
+                  : 'Предел по длинной стороне. Уменьшает только слишком большие картинки, маленькие не растягивает'
+              }
+              value={String(options.format === 'ico' ? sizeFor('ico', options.max_dimension) : options.max_dimension)}
+              options={sizes}
               onChange={(value) => setOptions({ ...options, max_dimension: Number(value) })}
             />
             {(options.format === 'avif' || options.format === 'webp') && (

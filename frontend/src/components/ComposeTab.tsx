@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Camera,
   ChevronDown,
+  Columns2,
   Film,
   FolderOpen,
   Grid3x3,
@@ -40,7 +41,7 @@ import { ComposeMissing } from './ComposeMissing'
 import { ComposeFrameAsk, type FrameQuestion } from './ComposeFrameAsk'
 import { ComposeTextPanel } from './ComposeTextPanel'
 import { ComposeFillPanel } from './ComposeFillPanel'
-import { ClipAddBar, ComposeClipPanel } from './ComposeClipPanel'
+import { ClipAddBar, ComposeClipPanel, ComposeTrackFxPanel } from './ComposeClipPanel'
 import { CROP_FIELDS, withoutGroup } from '../composeAnim'
 import { ComposeTextOverlay } from './ComposeTextOverlay'
 import {
@@ -53,6 +54,7 @@ import {
 import { FolderPicker } from './FolderPicker'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { PREVIEW_QUALITIES, useComposePlayer, type PreviewQuality } from '../hooks/useComposePlayer'
+import { useVoiceRecorder } from '../hooks/useVoiceRecorder'
 import { Button, Dropdown, Empty, IconButton, QuietHints, Section, Segmented, Toggle } from './ui'
 
 /** Имя готового файла, если поле оставили пустым. */
@@ -206,6 +208,10 @@ export function ComposeTab() {
   const settings = useStore((state) => state.settings)
 
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
+  // Сравнение: левая половина кадра — без эффектов, правая — с ними. Тот же
+  // кадр под иглой, собранный второй раз без эффектов клипов и дорожек.
+  const [compare, setCompare] = useState(() => localStorage.getItem('sgh.composeCompare') === '1')
+  const [rawUrl, setRawUrl] = useState<string | null>(null)
   const [frameError, setFrameError] = useState<string | null>(null)
   const [missingOpen, setMissingOpen] = useState(false)
   const opened = useCompose((state) => state.opened)
@@ -276,6 +282,47 @@ export function ComposeTab() {
   // Держим и место, откуда началась работа: значок должен появиться под
   // курсором сразу, а не после первого движения мыши.
   const [adding, setAdding] = useState<{ x: number; y: number } | null>(null)
+
+  // Запись голоса: ложится на свободную звуковую дорожку с места иглы.
+  const recording = useVoiceRecorder(
+    player,
+    (path, at, trim) => void placeRecording(path, at, trim),
+    (text) => toast(text, 'error'),
+  )
+  const recordingRef = useRef(recording)
+  recordingRef.current = recording
+  useEffect(() => {
+    // Ctrl+R — запись. Без перехвата окно перезагрузило бы страницу.
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyR') {
+        event.preventDefault()
+        recordingRef.current.toggle()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  /** Готовая запись — на звуковую дорожку, где в это время пусто; нет такой — на новую. */
+  async function placeRecording(path: string, at: number, trim: number) {
+    try {
+      const info = await api.fileInfo(path)
+      const length = Math.max(0.2, (info.media?.duration ?? 0) - trim)
+      const free = (track: ComposeTrack) =>
+        track.kind === 'audio' &&
+        !track.clips.some((clip) => clip.start < at + length && clip.start + clip.duration > at)
+      let target = useCompose.getState().tracks.find(free)
+      if (!target) {
+        useCompose.getState().addTrack('audio')
+        target = useCompose.getState().tracks.filter((track) => track.kind === 'audio').at(-1)
+      }
+      if (!target) return
+      await dropFile(path, at, target.id, { x: window.innerWidth / 2, y: window.innerHeight - 120 }, trim)
+      toast(`Запись сохранена: ${info.name}`, 'ok')
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    }
+  }
   // Вопрос о размере кадра по первому файлу. Отметка нужна, когда бросили
   // сразу несколько файлов: первым считается только один.
   const [frameQuestion, setFrameQuestion] = useState<FrameQuestion | null>(null)
@@ -379,24 +426,44 @@ export function ComposeTab() {
         setFrameError(null)
         return
       }
-      api
-        .composeFrame(
+      const frameOf = (tracks: typeof shownTracks) =>
+        api.composeFrame(
           {
             project: {
               width: view.width,
               height: view.height,
               fps: view.fps,
-              tracks: shownTracks,
+              tracks,
             },
             at: playhead,
             preview_width: 960,
           },
           control.signal,
         )
-        .then(({ blob, missing }) => {
+      // Кадр без эффектов нужен, только когда сравнивают и эффекты есть:
+      // иначе обе половины одинаковые, и второй просчёт ни к чему.
+      const withEffects = shownTracks.some(
+        (track) => (track.effects ?? []).length || track.clips.some((clip) => (clip.effects ?? []).length),
+      )
+      const raw =
+        compare && withEffects
+          ? frameOf(
+              shownTracks.map((track) => ({
+                ...track,
+                effects: [],
+                clips: track.clips.map((clip) => ({ ...clip, effects: [] })),
+              })),
+            )
+          : Promise.resolve(null)
+      Promise.all([frameOf(shownTracks), raw])
+        .then(([{ blob, missing }, plain]) => {
           setFrameUrl((old) => {
             if (old) URL.revokeObjectURL(old)
             return URL.createObjectURL(blob)
+          })
+          setRawUrl((old) => {
+            if (old) URL.revokeObjectURL(old)
+            return plain ? URL.createObjectURL(plain.blob) : null
           })
           setFrameError(null)
           // Файл удалили прямо во время работы — кадр собран без него, а
@@ -418,7 +485,7 @@ export function ComposeTab() {
     }
     // Размер кадра тоже: без него после смены формы окно показывало кадр
     // прежней формы, пока не сдвинешь иглу.
-  }, [playhead, clips, tracks, player.playing, liveTextId, width, height, fps, refresh, cropping])
+  }, [playhead, clips, tracks, player.playing, liveTextId, width, height, fps, refresh, cropping, compare])
 
   // Открыли проект (или программа подняла прошлый монтаж) — сразу чёрный
   // кадр вместо кадра прежнего проекта: иначе ошибку о пропавшем файле
@@ -470,6 +537,9 @@ export function ComposeTab() {
   useEffect(() => () => {
     if (frameUrl) URL.revokeObjectURL(frameUrl)
   }, [frameUrl])
+  useEffect(() => () => {
+    if (rawUrl) URL.revokeObjectURL(rawUrl)
+  }, [rawUrl])
 
   /** Файл притащили из медиатеки — добавляем клип на дорожку. */
   async function dropFile(
@@ -477,6 +547,8 @@ export function ComposeTab() {
     at: number,
     trackId: string,
     from: { x: number; y: number },
+    /** Сколько секунд от начала файла не брать — у записи голоса. */
+    trim = 0,
   ) {
     setAdding(from)
     let claimed = false
@@ -523,8 +595,8 @@ export function ComposeTab() {
         kind: info.kind === 'audio' ? 'audio' : info.kind === 'image' ? 'image' : 'video',
         start: Math.max(0, Math.round(at * 100) / 100),
         // Картинка висит столько, сколько скажут; у ролика берём его длину.
-        duration: info.kind === 'image' ? DEFAULT_IMAGE_SECONDS : Math.max(0.2, length),
-        sourceIn: 0,
+        duration: info.kind === 'image' ? DEFAULT_IMAGE_SECONDS : Math.max(0.2, length - trim),
+        sourceIn: trim,
         sourceDuration: info.kind === 'image' ? 0 : length,
         hasAudio: Boolean(info.media?.hasAudio),
         volume: 1,
@@ -723,6 +795,8 @@ export function ComposeTab() {
   // картинка и звук; выбор такой пары тоже считается одним файлом.
   const picked = useCompose((state) => state.picked)
   const partnerOf = useCompose((state) => state.partnerOf)
+  // Нажали Fx у дорожки — колонка показывает её эффекты.
+  const trackFx = useCompose((state) => state.trackFx)
   const mediaClip = (() => {
     const all = tracks.flatMap((track) => track.clips)
     const chosen = all.filter((clip) => selected.includes(clip.id))
@@ -959,6 +1033,20 @@ export function ComposeTab() {
                   </Dropdown>
                 </div>
 
+                <IconButton
+                  className="h-6 w-6"
+                  title="Сравнить: слева кадр без эффектов, справа — с ними. Удобно подбирать цвет и другие эффекты. Работает на остановленном кадре"
+                  active={compare}
+                  onClick={() => {
+                    setCompare((on) => {
+                      localStorage.setItem('sgh.composeCompare', on ? '0' : '1')
+                      return !on
+                    })
+                  }}
+                >
+                  <Columns2 size={13} />
+                </IconButton>
+
                 <Dropdown
                   value={String(player.quality)}
                   title="Качество просмотра. На готовый файл не влияет — только на то, что видно здесь."
@@ -995,9 +1083,14 @@ export function ComposeTab() {
             )}
 
             {/* Размер кадра считается от этого места: «containerType: size»
-                позволяет внутри мерить его ширину и высоту прямо в CSS. */}
+                позволяет внутри мерить его ширину и высоту прямо в CSS.
+                Отступ сверху — под плашку с кнопками: в обычном размере кадр
+                стоит под ней, а не заходит под неё. Под плашку уходит только
+                увеличенный кадр. */}
             <div
-              className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden"
+              className={`flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden ${
+                clips > 0 ? 'pt-[22px]' : ''
+              }`}
               style={{ containerType: 'size' }}
             >
             {!clips ? (
@@ -1061,6 +1154,26 @@ export function ComposeTab() {
                 ))}
                 {!player.playing && frameUrl && (
                   <img src={frameUrl} alt="" className="h-full w-full object-contain" />
+                )}
+                {/* Сравнение: левая половина — тот же кадр без эффектов. */}
+                {!player.playing && compare && frameUrl && (
+                  <>
+                    {rawUrl && (
+                      <img
+                        src={rawUrl}
+                        alt=""
+                        className="absolute inset-0 h-full w-full object-contain"
+                        style={{ clipPath: 'inset(0 50% 0 0)' }}
+                      />
+                    )}
+                    <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-white/70" />
+                    <span className="pointer-events-none absolute bottom-1.5 left-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] text-white/85">
+                      Без эффектов
+                    </span>
+                    <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] text-white/85">
+                      С эффектами
+                    </span>
+                  </>
                 )}
                 {/* Ошибка — в одном месте, посреди кадра: и кадра, и просмотра.
                     Прежде ошибка просмотра повторялась ещё и полосой внизу. Текст
@@ -1131,6 +1244,7 @@ export function ComposeTab() {
           />
           <ComposeTimeline
             adding={adding !== null}
+            recording={recording}
             player={player}
             onDropFile={(path, at, trackId, from) => void dropFile(path, at, trackId, from)}
           />
@@ -1152,6 +1266,8 @@ export function ComposeTab() {
             <ComposeFillPanel clip={fillClip} />
           ) : mediaClip ? (
             <ComposeClipPanel clip={mediaClip} />
+          ) : trackFx ? (
+            <ComposeTrackFxPanel trackId={trackFx} />
           ) : (
           <>
           {/* Кадр проекта. Без заголовка и без лишних чисел: что выбрано,

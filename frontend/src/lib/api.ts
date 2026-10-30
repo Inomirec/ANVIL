@@ -120,6 +120,24 @@ export const api = {
       { source, params },
     ),
   /** Какие файлы монтажа пропали и какие лежат вне рабочих папок. */
+  /** Запись с микрофона — сервер кладёт её в папку «Записи» и отдаёт путь. */
+  composeRecord: async (blob: Blob): Promise<{ path: string }> => {
+    const response = await fetch('/api/compose/record', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+    })
+    if (!response.ok) {
+      let detail = `Ошибка ${response.status}`
+      try {
+        detail = (await response.json())?.detail ?? detail
+      } catch {
+        /* тело может быть пустым */
+      }
+      throw new ApiError(String(detail), response.status)
+    }
+    return response.json()
+  },
   composeCheck: (sources: string[]) =>
     post<{ missing: string[]; outside: string[] }>('/api/compose/check', { sources }),
   /** Ищет пропавшие файлы в папке, где нашёлся один из них. */

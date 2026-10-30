@@ -7,6 +7,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   Layers,
+  Mic,
   Link2,
   Loader2,
   Magnet,
@@ -29,6 +30,7 @@ import {
 } from 'lucide-react'
 import { VolumeControl } from './VolumeControl'
 import { usePreviewReady } from '../hooks/useComposePlayer'
+import type { VoiceRecording } from '../hooks/useVoiceRecorder'
 import { setMagnet, useMagnet } from '../lib/magnet'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
@@ -50,6 +52,7 @@ import {
   shareToVolume,
   snap,
   snapFrame,
+  trackAudible,
   trackColor,
   trackNumber,
   volumeLabel,
@@ -174,8 +177,11 @@ type Drag =
 export function ComposeTimeline({
   onDropFile,
   adding,
+  recording,
   player,
 }: {
+  /** Запись голоса с микрофона: кнопка стоит на панели таймлайна. */
+  recording: VoiceRecording
   /** Файл притащили из медиатеки: путь, секунда, дорожка и место броска. */
   onDropFile: (
     path: string,
@@ -248,7 +254,7 @@ export function ComposeTimeline({
     x: number
     y: number
     id: string
-    where: 'lane' | 'head'
+    where: 'lane' | 'head' | 'empty'
     at: number
   } | null>(null)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
@@ -257,6 +263,22 @@ export function ComposeTimeline({
   /** Куда поставить прокрутку, когда масштаб сменится: игла и её место на экране. */
   const pendingScroll = useRef<{ playhead: number; keep: number } | null>(null)
   const vscroll = useRef<HTMLDivElement>(null)
+  // Полоса прокрутки вбок — своя, у самого низа таймлайна. У полотна она
+  // стояла сразу под последней дорожкой, и с каждой новой дорожкой уезжала
+  // вниз, а под ней оставалась пустота.
+  const hbar = useRef<HTMLDivElement>(null)
+  // Ширина вертикальной полосы прокрутки: на неё нижняя полоса короче, иначе
+  // их длины расходятся и прокрутка не доходит до конца.
+  const [gutter, setGutter] = useState(0)
+  useEffect(() => {
+    const element = vscroll.current
+    if (!element) return
+    const measure = () => setGutter(element.offsetWidth - element.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
   const drag = useRef<Drag>(null)
 
   const duration = tracks.reduce(
@@ -903,6 +925,38 @@ export function ComposeTimeline({
           >
             <Type size={14} />
           </IconButton>
+          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+          {/* Запись голоса: красная, пока пишет, рядом — сколько записано. */}
+          <button
+            type="button"
+            onClick={recording.toggle}
+            disabled={recording.saving}
+            title={
+              recording.waiting
+                ? 'Монтаж готовится играть — начинайте говорить, когда пойдёт время. Нажмите, чтобы отменить (Ctrl+R)'
+                : recording.active
+                ? 'Остановить запись (Ctrl+R)'
+                : 'Записать голос с микрофона (Ctrl+R). Запись начнётся с места иглы, монтаж будет играть под неё; готовая ляжет на свободную звуковую дорожку'
+            }
+            className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 transition-colors disabled:opacity-50 ${
+              recording.waiting
+                ? 'bg-danger/30 text-white'
+                : recording.active
+                ? 'bg-danger/85 text-white hover:bg-danger'
+                : 'text-ink-dim hover:bg-surface-3 hover:text-ink'
+            }`}
+          >
+            {recording.saving || recording.waiting ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Mic size={14} />
+            )}
+            {recording.active && (
+              <span className="font-mono text-[11px] tabular-nums">
+                {recording.waiting ? 'готовлю…' : timecode(recording.seconds)}
+              </span>
+            )}
+          </button>
           <KeyBar />
 
           {/* Чтение файла занимает мгновение, но без этого окно выглядит
@@ -1071,15 +1125,31 @@ export function ComposeTimeline({
             event.preventDefault()
             setTrackMenu({ x: event.clientX, y: event.clientY, id, where: 'head', at: 0 })
           }}
+          onEmptyMenu={(event) => {
+            event.preventDefault()
+            setTrackMenu({ x: event.clientX, y: event.clientY, id: '', where: 'empty', at: 0 })
+          }}
         />
 
-      <div ref={scroller} className="min-h-0 min-w-0 flex-1 overflow-x-auto">
+      {/* Полотно — не ниже видимой части: под дорожками остаётся часть
+          таймлайна, где их ещё нет. Там работает игла, рамка выделения и
+          меню «добавить дорожку». Своя полоса прокрутки спрятана — вместо
+          неё нижняя, у самого края. */}
+      <div
+        ref={scroller}
+        className="flex min-h-full min-w-0 flex-1 flex-col overflow-x-auto"
+        style={{ scrollbarWidth: 'none' }}
+        onScroll={(event) => {
+          const left = event.currentTarget.scrollLeft
+          if (hbar.current && hbar.current.scrollLeft !== left) hbar.current.scrollLeft = left
+        }}
+      >
         {/* Полотно не уже видимой части: иначе справа остаётся пустое место,
             куда файл бросить нельзя, а выглядит оно так же, как дорожка. */}
         <div
           ref={canvas}
           style={{ width, minWidth: '100%' }}
-          className="relative select-none"
+          className="relative flex flex-1 select-none flex-col"
         >
           <Ruler
             span={span}
@@ -1160,6 +1230,11 @@ export function ComposeTimeline({
                 className="pointer-events-none absolute inset-0"
                 style={{ background: `${trackColor(tracks, track.id)}1c` }}
               />
+              {/* Выключенная дорожка (M или чужое S) — под тёмной вуалью:
+                  клипы на ней в кадр и в файл не попадают. */}
+              {!trackAudible(tracks, track) && (
+                <div className="pointer-events-none absolute inset-0 z-[5] bg-black/45" />
+              )}
               {duration > 0 && (
                 <div
                   className="pointer-events-none absolute inset-y-0 w-px bg-line"
@@ -1278,6 +1353,26 @@ export function ComposeTimeline({
             </div>
           ))}
 
+          {/* Место, где дорожек ещё нет. Нажатие ставит иглу, протяжка — рамка
+              выделения, правая кнопка — меню с новыми дорожками. */}
+          <div
+            className="min-h-0 flex-1"
+            onMouseDown={(event) => {
+              if (event.button !== 0 || event.target !== event.currentTarget) return
+              drag.current = {
+                kind: 'pending',
+                fromAt: secondsAt(event.clientX),
+                fromX: event.clientX,
+                fromY: event.clientY,
+              }
+            }}
+            onContextMenu={(event) => {
+              if (event.target !== event.currentTarget) return
+              event.preventDefault()
+              setTrackMenu({ x: event.clientX, y: event.clientY, id: '', where: 'empty', at: 0 })
+            }}
+          />
+
           {/* Рамка выделения */}
           {marquee && (
             <div
@@ -1311,6 +1406,23 @@ export function ComposeTimeline({
           )}
         </div>
       </div>
+      </div>
+
+      {/* Нижняя полоса прокрутки — всегда у края таймлайна. Слева отступ на
+          колонку дорожек, справа — на вертикальную полосу. */}
+      <div className="flex shrink-0 border-t border-line-soft">
+        <div className="shrink-0 border-r border-line" style={{ width: headWidth }} />
+        <div
+          ref={hbar}
+          className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
+          onScroll={(event) => {
+            const left = event.currentTarget.scrollLeft
+            if (scroller.current && scroller.current.scrollLeft !== left) scroller.current.scrollLeft = left
+          }}
+        >
+          <div style={{ width, minWidth: '100%', height: 1 }} />
+        </div>
+        {gutter > 0 && <div className="shrink-0" style={{ width: gutter }} />}
       </div>
 
       {menu && (
@@ -1362,6 +1474,7 @@ function TrackHeads({
   onRename,
   onLevel,
   onMenu,
+  onEmptyMenu,
   onMoveTrack,
   compact,
 }: {
@@ -1372,8 +1485,12 @@ function TrackHeads({
   onRename: (id: string, name: string) => void
   onLevel: (id: string, level: number) => void
   onMenu: (event: React.MouseEvent, id: string) => void
+  onEmptyMenu: (event: React.MouseEvent) => void
   onMoveTrack: (id: string, to: number) => void
 }) {
+  const updateTrack = useCompose((state) => state.updateTrack)
+  const trackFx = useCompose((state) => state.trackFx)
+  const setTrackFx = useCompose((state) => state.setTrackFx)
   const grab = useRef<{ from: number; width: number } | null>(null)
   // Дорожку переставляют, потянув её за колонку с названием. Строки одной
   // высоты, поэтому место под курсором считается делением.
@@ -1497,8 +1614,12 @@ function TrackHeads({
 
   return (
     <div
-      className="relative shrink-0 border-r border-line bg-surface"
+      className="relative min-h-full shrink-0 border-r border-line bg-surface"
       style={{ width }}
+      onContextMenu={(event) => {
+        // Пустое место под дорожками — меню новых дорожек.
+        if (event.target === event.currentTarget) onEmptyMenu(event)
+      }}
     >
       {/* Пустое место под линейкой: дорожки должны встать вровень с полотном. */}
       <div style={{ height: RULER_HEIGHT }} className="border-b border-line-soft" />
@@ -1562,15 +1683,24 @@ function TrackHeads({
                   narrow ? 'items-center' : 'flex-col justify-center py-1'
                 }`}
               >
-                <input
-                  value={track.name ?? ''}
-                  onChange={(event) => onRename(track.id, event.target.value)}
-                  placeholder={track.kind === 'audio' ? 'Звук' : 'Видео'}
-                  title="Название дорожки — нажмите, чтобы переименовать; потяните, чтобы переставить"
-                  className={`min-w-0 cursor-grab truncate bg-transparent text-[11.5px] text-ink outline-none placeholder:text-ink-faint/60 focus:cursor-text ${
-                    narrow ? 'flex-1' : 'w-full'
-                  }`}
-                />
+                <div className={`flex min-w-0 items-center gap-1 ${narrow ? 'flex-1' : 'w-full'}`}>
+                  <input
+                    value={track.name ?? ''}
+                    onChange={(event) => onRename(track.id, event.target.value)}
+                    placeholder={track.kind === 'audio' ? 'Звук' : 'Видео'}
+                    title="Название дорожки — нажмите, чтобы переименовать; потяните, чтобы переставить"
+                    className="min-w-0 flex-1 cursor-grab truncate bg-transparent text-[11.5px] text-ink outline-none placeholder:text-ink-faint/60 focus:cursor-text"
+                  />
+                  {width >= BUTTONS_FROM && (
+                    <TrackButtons
+                      track={track}
+                      fxOpen={trackFx === track.id}
+                      onMute={() => updateTrack(track.id, { muted: !track.muted })}
+                      onSolo={() => updateTrack(track.id, { solo: !track.solo })}
+                      onFx={() => setTrackFx(trackFx === track.id ? null : track.id)}
+                    />
+                  )}
+                </div>
                 {withLevel && sound && (
                   // Число стоит под ползунком, а не рядом: в узкой колонке
                   // подпись съедала половину его длины, и попасть в нужное
@@ -1631,6 +1761,85 @@ function TrackHeads({
         }}
         onDoubleClick={() => onWidth(width > HEAD_MIN ? HEAD_MIN : HEAD_DEFAULT)}
       />
+    </div>
+  )
+}
+
+/** С какой ширины колонки у дорожки видны кнопки M, S и Fx. */
+const BUTTONS_FROM = 120
+
+/**
+ * Кнопки дорожки, как в монтажных программах: M — выключить дорожку, S —
+ * оставить только её (среди дорожек того же вида), Fx — эффекты на всю
+ * дорожку. Подсвечены, когда включены; у Fx — когда эффекты есть.
+ */
+function TrackButtons({
+  track,
+  fxOpen,
+  onMute,
+  onSolo,
+  onFx,
+}: {
+  track: ComposeTrack
+  fxOpen: boolean
+  onMute: () => void
+  onSolo: () => void
+  onFx: () => void
+}) {
+  const sound = track.kind === 'audio'
+  const hasFx = (track.effects ?? []).some((effect) => effect.on)
+  const base =
+    'flex h-[18px] shrink-0 items-center justify-center rounded font-caps text-[9px] font-bold leading-none transition-colors'
+  const idle = 'bg-surface-3/70 text-ink-faint hover:bg-surface-3 hover:text-ink'
+  // Нажатие по кнопке не должно начинать перетаскивание дорожки.
+  const stop = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    event.preventDefault()
+  }
+  return (
+    <div className="flex shrink-0 items-center gap-0.5" onMouseDown={stop}>
+      <button
+        type="button"
+        onClick={onMute}
+        title={
+          sound
+            ? 'Заглушить дорожку: её звук не слышно ни при просмотре, ни в готовом файле'
+            : 'Скрыть дорожку: всё, что на ней лежит, пропадёт из кадра и из готового файла'
+        }
+        className={`${base} w-[18px] ${track.muted ? 'bg-danger/85 text-white' : idle}`}
+      >
+        M
+      </button>
+      <button
+        type="button"
+        onClick={onSolo}
+        title={
+          sound
+            ? 'Только эта дорожка: остальные звуковые дорожки замолкают. Можно включить у нескольких'
+            : 'Только эта дорожка: остальные видеодорожки пропадают из кадра. Можно включить у нескольких'
+        }
+        className={`${base} w-[18px] ${track.solo ? 'bg-accent-strong text-white' : idle}`}
+      >
+        S
+      </button>
+      <button
+        type="button"
+        onClick={onFx}
+        title={
+          sound
+            ? 'Эффекты звука на всю дорожку — откроются в колонке справа'
+            : 'Эффекты картинки на всю дорожку — откроются в колонке справа'
+        }
+        className={`${base} w-[22px] ${
+          fxOpen
+            ? 'bg-accent-strong text-white'
+            : hasFx
+              ? 'bg-accent/25 text-accent-soft hover:bg-accent/35'
+              : idle
+        }`}
+      >
+        Fx
+      </button>
     </div>
   )
 }
@@ -1825,7 +2034,7 @@ function TrackMenu({
   onPaste,
 }: {
   at: { x: number; y: number }
-  where: 'lane' | 'head'
+  where: 'lane' | 'head' | 'empty'
   trackId: string
   tracks: ComposeTrack[]
   onClose: () => void
@@ -1849,7 +2058,7 @@ function TrackMenu({
   const { box, place } = useMenuPlace(at)
 
   const track = tracks.find((item) => item.id === trackId)
-  if (!track) return null
+  if (!track && where !== 'empty') return null
   // Последнюю дорожку своего вида убрать нельзя: класть файлы стало бы некуда.
   // Не даём снять самую последнюю дорожку: на пустом таймлайне некуда было бы
   // положить файл. Последнюю звуковую или последнюю видео — можно: бывает
@@ -1878,7 +2087,14 @@ function TrackMenu({
       style={place}
       onContextMenu={(event) => event.preventDefault()}
     >
-      {where === 'lane' ? (
+      {where === 'empty' || !track ? (
+        // Пустое место под дорожками: новую дорожку заводят прямо там, где
+        // её не хватает.
+        <>
+          {item('Добавить видеодорожку', () => onAdd('video'), tracks.length >= MAX_TRACKS)}
+          {item('Добавить звуковую дорожку', () => onAdd('audio'), tracks.length >= MAX_TRACKS)}
+        </>
+      ) : where === 'lane' ? (
         <>
           {/* На звуковой дорожке надписи и заливке не место — они лягут на
               видеодорожку, в то же время. */}

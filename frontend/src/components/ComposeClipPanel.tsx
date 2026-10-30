@@ -14,7 +14,19 @@ import {
   Volume2,
   X,
 } from 'lucide-react'
-import { MIN_DB, dbToGain, gainToDb, isCropped, newMask, speedOf, useCompose, type ClipEffect, type ClipMask, type ComposeClip } from '../composeStore'
+import {
+  MIN_DB,
+  dbToGain,
+  gainToDb,
+  isCropped,
+  newMask,
+  speedOf,
+  trackNumber,
+  useCompose,
+  type ClipEffect,
+  type ClipMask,
+  type ComposeClip,
+} from '../composeStore'
 import { POINTS, shownAt, valueAt, withoutGroup } from '../composeAnim'
 import {
   EFFECTS,
@@ -94,6 +106,63 @@ export function ComposeClipPanel({ clip }: { clip: ComposeClip }) {
           колонки.
         </p>
       )}
+    </div>
+  )
+}
+
+/**
+ * Эффекты на всю дорожку — колонка справа после кнопки Fx у дорожки.
+ *
+ * Те же карточки, что у клипа, только действуют на каждый клип дорожки:
+ * один раз подобрать цвет для всех кусков записи, а не копировать эффект
+ * по клипам. Ключей у них нет — у дорожки нет своего времени. Стабилизатора
+ * в списке нет: он считает каждый ролик отдельно и долго.
+ */
+export function ComposeTrackFxPanel({ trackId }: { trackId: string }) {
+  const tracks = useCompose((state) => state.tracks)
+  const setTrackFx = useCompose((state) => state.setTrackFx)
+  const [picking, setPicking] = useState(false)
+  const track = tracks.find((item) => item.id === trackId)
+  if (!track) return null
+  const effects = track.effects ?? []
+  const target: EffectTarget = track.kind === 'audio' ? 'audio' : 'video'
+  const label = track.name?.trim() || (track.kind === 'audio' ? 'Звук' : 'Видео')
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
+          Эффекты дорожки {trackNumber(tracks, track.id)} · {label}
+        </h3>
+        <button
+          type="button"
+          onClick={() => setTrackFx(null)}
+          title="Закрыть — вернуться к настройкам сборки"
+          className="rounded p-1 text-ink-faint hover:bg-surface-3 hover:text-ink"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <p className="px-0.5 text-[11.5px] leading-snug text-ink-faint">
+        Действуют на каждый клип этой дорожки — и на те, что положите на неё
+        потом. Свои эффекты клипа идут раньше.
+      </p>
+      {effects.map((effect) => (
+        <EffectCard key={effect.id} clipId={track.id} effect={effect} />
+      ))}
+      <button
+        type="button"
+        className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11.5px] text-ink-dim transition-colors hover:border-line hover:text-ink"
+        onClick={() => setPicking(true)}
+      >
+        <Plus size={13} />
+        Добавить эффект
+      </button>
+      <EffectPicker
+        open={picking}
+        onClose={() => setPicking(false)}
+        parts={[{ clip: { id: track.id, effects }, target }]}
+        exclude={['stabilize']}
+      />
     </div>
   )
 }
@@ -900,10 +969,14 @@ export function EffectPicker({
   open,
   onClose,
   parts,
+  exclude = [],
 }: {
   open: boolean
   onClose: () => void
-  parts: { clip: ComposeClip; target: EffectTarget }[]
+  /** Кому добавляем: клипу или дорожке — у обоих есть свой список эффектов. */
+  parts: { clip: Pick<ComposeClip, 'id' | 'effects'>; target: EffectTarget }[]
+  /** Эффекты, которых здесь не предлагать. */
+  exclude?: string[]
 }) {
   const addEffect = useCompose((state) => state.addEffect)
   const groups: { title: string; target: EffectTarget }[] = [
@@ -923,7 +996,7 @@ export function EffectPicker({
                 {group.title}
               </h4>
               <div className="grid grid-cols-3 gap-2">
-                {EFFECTS.filter((effect) => effect.target === group.target).map((effect) => (
+                {EFFECTS.filter((effect) => effect.target === group.target && !exclude.includes(effect.type)).map((effect) => (
                   <button
                     key={effect.type}
                     type="button"

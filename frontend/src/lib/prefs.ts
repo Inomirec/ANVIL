@@ -50,7 +50,7 @@ export interface Prefs {
   /** Загрузка: качество, формат файла, кодек и что делать после пресета. */
   downloadHeight?: number
   downloadContainer?: 'mp4' | 'mkv' | 'webm' | 'auto'
-  downloadCodec?: 'any' | 'h264' | 'av1'
+  downloadCodec?: 'any' | 'h264' | 'vp9' | 'av1'
   downloadSound?: 'any' | 'aac' | 'opus'
   downloadAudioFormat?: 'opus' | 'mp3' | 'm4a' | 'best'
   downloadAudioQuality?: number

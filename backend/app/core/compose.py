@@ -89,6 +89,17 @@ def apply_crossfades(project: ComposeProject) -> None:
             lower.fade_out = max(lower.fade_out, span)
 
 
+def track_audible(project: ComposeProject, track) -> bool:
+    """Попадает ли дорожка в сборку: не выключена (M) и не заглушена чужим S.
+
+    Соло действует среди дорожек своего вида: соло звука не прячет картинку.
+    """
+    if track.muted:
+        return False
+    soloed = any(item.solo for item in project.tracks if item.kind == track.kind)
+    return track.solo or not soloed
+
+
 def clips_at(project: ComposeProject, at: float, span: float) -> list[tuple[int, ComposeClip]]:
     """Клипы, попадающие в отрезок ``[at, at+span]``, снизу вверх по слоям.
 
@@ -99,8 +110,19 @@ def clips_at(project: ComposeProject, at: float, span: float) -> list[tuple[int,
     """
     found: list[tuple[int, ComposeClip]] = []
     for layer, track in enumerate(project.tracks):
+        if not track_audible(project, track):
+            continue
+        # Эффекты дорожки идут после своих эффектов клипа. Стабилизатор
+        # дорожке не положен: он готовит копию каждого ролика заранее.
+        extra = [
+            effect.model_copy(deep=True)
+            for effect in track.effects
+            if effect.on and effect.type != "stabilize"
+        ]
         for clip in track.clips:
             if clip.start < at + span and clip.end > at:
+                if extra:
+                    clip = clip.model_copy(update={"effects": [*clip.effects, *extra]})
                 # Уровень дорожки складываем с уровнем клипа здесь, а не
                 # правим сам клип: тогда сборку можно звать сколько угодно раз
                 # подряд, и громкость не будет умножаться сама на себя.

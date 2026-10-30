@@ -9,6 +9,7 @@ import os
 import json
 import re
 import tempfile
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from .. import paths
+from .. import config, paths
 from ..core import binaries, compose, fonts, fsutil, pipeline, trash
 from ..models import (
     ComposeBuildRequest,
@@ -429,6 +430,62 @@ async def stabilize_status(request: StabilizeRequest) -> dict[str, object]:
         stabilize.ready(str(path), settings)
         answer = stabilize.status(str(path), settings)
     return answer
+
+
+#: Самая длинная запись, которую примем: два часа голоса в Opus — около
+#: 150 МБ. Больше — это уже не запись с микрофона, а ошибка.
+_RECORD_LIMIT = 400 * 1024 * 1024
+
+
+@router.post("/record")
+async def record(request: Request) -> dict[str, str]:
+    """Сохраняет запись с микрофона в папку «Записи» рабочей папки.
+
+    Окно пишет звук в WebM (Opus), но у такого файла нет длины в
+    заголовке: браузер не знает её, пока запись идёт, и монтаж увидел бы
+    клип неизвестной длины. Поэтому перекладываем звук в Ogg без
+    перекодирования — длина там считается по последнему отсчёту.
+    """
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "Запись пустая — микрофон ничего не передал")
+    if len(data) > _RECORD_LIMIT:
+        raise HTTPException(413, "Запись слишком длинная")
+
+    folder = Path(config.load().resolved_workspace()) / "Записи"
+    if not fsutil.is_allowed(folder):
+        raise HTTPException(400, "Рабочая папка недоступна — некуда сохранить запись")
+    stamp = time.strftime("Запись %Y-%m-%d %H-%M-%S")
+
+    def write() -> tuple[Path, Path]:
+        folder.mkdir(parents=True, exist_ok=True)
+        raw = folder / f".{stamp}.webm"
+        raw.write_bytes(data)
+        return raw, fsutil.unique_path(folder / f"{stamp}.ogg", reserve=True)
+
+    raw, output = await asyncio.to_thread(write)
+    try:
+        # Сначала без перекодирования; не вышло — пережимаем в Opus.
+        for codec in (["-c:a", "copy"], ["-c:a", "libopus", "-b:a", "128k"]):
+            process = await asyncio.create_subprocess_exec(
+                binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+                "-i", str(raw), "-vn", *codec, "-f", "ogg", str(output),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+                creationflags=binaries.CREATE_NO_WINDOW,
+                env=binaries.subprocess_env(),
+            )
+            _, err = await process.communicate()
+            if process.returncode == 0 and output.exists() and output.stat().st_size > 0:
+                break
+        else:
+            output.unlink(missing_ok=True)
+            detail = err.decode("utf-8", "replace").strip().splitlines()
+            raise HTTPException(500, "Не удалось сохранить запись: " + (detail[-1] if detail else "?"))
+    finally:
+        fsutil.release_path(output)
+        raw.unlink(missing_ok=True)
+    return {"path": str(output)}
 
 
 @router.post("/check")

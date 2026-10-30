@@ -270,6 +270,22 @@ export interface ComposeTrack {
   /** Своя высота дорожки в пикселях; нет — обычная. У каждой своя: звуку
    *  хочется видеть волну подробно, видео — кадры покрупнее. */
   height?: number
+  /** M: дорожка выключена — звук не слышно, картинку не видно. */
+  muted?: boolean
+  /** S: только эта дорожка — остальные дорожки того же вида молчат. */
+  solo?: boolean
+  /** Эффекты на всю дорожку: действуют на каждый клип, что на ней лежит. */
+  effects?: ClipEffect[]
+}
+
+/**
+ * Слышна ли (видна ли) дорожка: не выключена кнопкой M и не заглушена чужим
+ * S. Соло действует внутри своего вида: соло звука не прячет картинку.
+ */
+export function trackAudible(tracks: ComposeTrack[], track: ComposeTrack): boolean {
+  if (track.muted) return false
+  const soloed = tracks.some((item) => item.kind === track.kind && item.solo)
+  return !soloed || Boolean(track.solo)
 }
 
 /**
@@ -791,6 +807,11 @@ interface State extends Saved {
   /** Своя высота дорожки; ``undefined`` — вернуть обычную. */
   setTrackHeight: (id: string, height: number | undefined) => void
   setTrackLevel: (id: string, level: number) => void
+  /** M и S дорожки. */
+  updateTrack: (id: string, patch: Pick<ComposeTrack, 'muted' | 'solo'>) => void
+  /** Дорожка, чьи эффекты открыты в правой колонке (кнопка Fx), или ``null``. */
+  trackFx: string | null
+  setTrackFx: (id: string | null) => void
   /** Переносит клипы на соседние дорожки: ``delta`` — на сколько вниз. */
   shiftTracks: (ids: string[], delta: number) => void
   /** Разводит клипы, если после переноса где-то сошлись больше двух. */
@@ -1354,6 +1375,8 @@ export const useCompose = create<State>((set, get) => ({
     // Заодно помним, что человек выбрал сам: без этого после разрыва группы
     // не понять, какой клип брали в руки, а какой приехал за компанию.
     set({ picked: ids, selected: withGroups(get().tracks, ids) })
+    // Выбрали клип — колонка показывает его, а не эффекты дорожки.
+    if (ids.length && get().trackFx) set({ trackFx: null })
   },
 
   // --- метки отрезка сборки ---------------------------------------------
@@ -1796,6 +1819,20 @@ export const useCompose = create<State>((set, get) => ({
       ),
     }))
     save(get())
+  },
+
+  updateTrack(id, patch) {
+    get().mark()
+    set((state) => ({
+      tracks: state.tracks.map((track) => (track.id === id ? { ...track, ...patch } : track)),
+    }))
+    save(get())
+  },
+
+  trackFx: null,
+  setTrackFx(id) {
+    set({ trackFx: id })
+    if (id) set({ selected: [], picked: [] })
   },
 
   setTrackLevel(id, level) {
@@ -2471,14 +2508,27 @@ export const useCompose = create<State>((set, get) => ({
   addEffect(clipId, type, params) {
     get().mark()
     const clip = get().findClip(clipId)?.clip
-    if (!clip) return
+    if (!clip) {
+      // Эффекты дорожки (кнопка Fx) — тот же список, только у дорожки.
+      changeTrackEffects(clipId, (list) => [...list, { id: nextId(), type, on: true, params }])
+      return
+    }
     const effect: ClipEffect = { id: nextId(), type, on: true, params }
     get().updateClip(clipId, { effects: [...(clip.effects ?? []), effect] })
   },
 
   updateEffect(clipId, effectId, patch) {
     const clip = get().findClip(clipId)?.clip
-    if (!clip) return
+    if (!clip) {
+      changeTrackEffects(clipId, (list) =>
+        list.map((effect) =>
+          effect.id === effectId
+            ? { ...effect, ...patch, params: { ...effect.params, ...(patch.params ?? {}) } }
+            : effect,
+        ),
+      )
+      return
+    }
     get().updateClip(clipId, {
       effects: (clip.effects ?? []).map((effect) =>
         effect.id === effectId
@@ -2491,7 +2541,10 @@ export const useCompose = create<State>((set, get) => ({
   removeEffect(clipId, effectId) {
     get().mark()
     const clip = get().findClip(clipId)?.clip
-    if (!clip) return
+    if (!clip) {
+      changeTrackEffects(clipId, (list) => list.filter((effect) => effect.id !== effectId))
+      return
+    }
     get().updateClip(clipId, {
       effects: (clip.effects ?? []).filter((effect) => effect.id !== effectId),
       anim: withoutPrefix(clip.anim, `fx.${effectId}.`),
@@ -2654,4 +2707,16 @@ export function snap(value: number, points: number[], within: number): number {
     }
   }
   return best
+}
+
+/** Правит список эффектов дорожки (кнопка Fx) и запоминает монтаж. */
+function changeTrackEffects(trackId: string, change: (list: ClipEffect[]) => ClipEffect[]): void {
+  const state = useCompose.getState()
+  if (!state.tracks.some((track) => track.id === trackId)) return
+  useCompose.setState({
+    tracks: state.tracks.map((track) =>
+      track.id === trackId ? { ...track, effects: change(track.effects ?? []) } : track,
+    ),
+  })
+  save(useCompose.getState())
 }

@@ -285,7 +285,7 @@ class DownloadRequest(BaseModel):
     #: Контейнер видео. ``None`` — по прежней настройке «Всегда MP4».
     container: Literal["mp4", "mkv", "webm", "auto"] | None = None
     #: Какой кодек видео брать, если у сайта их несколько. ``any`` — лучший.
-    video_codec: Literal["any", "h264", "av1"] = "any"
+    video_codec: Literal["any", "h264", "vp9", "av1"] = "any"
     #: Какой звук брать к видео. Opus не все программы открывают в MP4.
     audio_codec: Literal["any", "aac", "opus"] = "any"
     #: Битрейт звука при скачивании одного звука, кбит/с. 0 — лучшее.
@@ -604,6 +604,12 @@ class ComposeTrack(ComposeModel):
     #: Уровень всей дорожки: у звука это громкость, у видео — насколько видно
     #: то, что на ней лежит. Умножается на то же самое у каждого клипа.
     level: float = Field(default=1.0, ge=0.0, le=4.0)
+    #: Кнопка M: дорожка выключена — её нет ни в кадре, ни в звуке.
+    muted: bool = False
+    #: Кнопка S: только эта дорожка. Остальные дорожки того же вида молчат.
+    solo: bool = False
+    #: Эффекты на всю дорожку: добавляются к эффектам каждого её клипа.
+    effects: list[ClipEffect] = Field(default_factory=list)
 
 
 class ComposeProject(ComposeModel):

@@ -376,7 +376,9 @@ def build_ytdlp_args(
         # H.264 бывает только до 1080p).
         order = []
         if video_codec != "any":
-            order.append(f"vcodec:{'h264' if video_codec == 'h264' else 'av01'}")
+            # «vcodec:X» у yt-dlp — лучший кодек не лучше X: при «vp9» AV1
+            # уступает VP9, а H.264 остаётся запасным.
+            order.append(f"vcodec:{ {'h264': 'h264', 'vp9': 'vp9'}.get(video_codec, 'av01') }")
         if audio_codec != "any":
             order.append(f"acodec:{audio_codec}")
         if order:
