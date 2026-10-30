@@ -13,6 +13,7 @@ from typing import Any
 
 from ..models import AudioOptions, ExportRequest, Trim, VideoOptions
 from .probe import BITMAP_SUBTITLES, MediaInfo
+from . import fades
 
 #: Расширения контейнеров по кодекам, когда пользователь выбрал «auto».
 _AUDIO_EXT = {
@@ -84,6 +85,9 @@ def build_video_filters(
 
     # Затухания ставим последними: они должны работать по итоговому времени,
     # уже с учётом изменённого темпа.
+    if fades.custom(options.fade_in_curve) or fades.custom(options.fade_out_curve):
+        filters.append(_shaped_fades(options, duration))
+        return filters
     if options.fade_in > 0:
         filters.append(f"fade=t=in:st=0:d={options.fade_in:g}")
     if options.fade_out > 0 and duration and duration > options.fade_out:
@@ -164,12 +168,15 @@ def build_audio_filters(
     # слух, а не «проваливается» в конце, как при линейном затухании. Именно
     # такую кривую по умолчанию рисуют монтажные программы.
     if options.fade_in > 0:
-        filters.append(f"afade=t=in:curve=qsin:st=0:d={options.fade_in:g}")
+        filters.append(
+            f"afade=t=in:curve={fades.afade_curve(options.fade_in_curve, 'in')}:st=0:d={options.fade_in:g}"
+        )
 
     if options.fade_out > 0 and duration and duration > options.fade_out:
         start = max(duration - options.fade_out, 0.0)
         filters.append(
-            f"afade=t=out:curve=qsin:st={start:.3f}:d={options.fade_out:g}"
+            f"afade=t=out:curve={fades.afade_curve(options.fade_out_curve, 'out')}"
+            f":st={start:.3f}:d={options.fade_out:g}"
         )
 
     if options.codec == "opus" and not options.mono and not options.stereo:
@@ -744,3 +751,31 @@ def describe(request: ExportRequest) -> dict[str, Any]:
         parts.append(f"×{request.video.tempo:g}")
     parts.append(f"{request.audio.codec.upper()} {request.audio.bitrate_kbps}k")
     return {"summary": " · ".join(parts)}
+
+
+def _shaped_fades(options: VideoOptions, duration: float | None) -> str:
+    """Появление и уход из чёрного с формой (`core/fades.py`).
+
+    `fade` умеет только прямую линию, поэтому силу кадра считает формула
+    `geq` — и только на кадрах появления и ухода (`enable`), остальные
+    проходят мимо. Чёрный — 16, середина цвета — 128: файл всё равно
+    сохраняется в 8-битном yuv420p.
+    """
+    gain = ["1"]
+    when: list[str] = []
+    if options.fade_in > 0:
+        share = f"T/{options.fade_in:g}"
+        gain.append(f"if(lt(T,{options.fade_in:g}),{fades.expression(options.fade_in_curve or 'linear', share)},1)")
+        when.append(f"lt(t,{options.fade_in:g})")
+    if options.fade_out > 0 and duration and duration > options.fade_out:
+        start = max(duration - options.fade_out, 0.0)
+        left = f"({duration:.3f}-T)/{options.fade_out:g}"
+        curve = fades.expression(options.fade_out_curve or "linear", f"1-{left}")
+        gain.append(f"if(gt(T,{start:.3f}),1-{curve},1)")
+        when.append(f"gt(t,{start:.3f})")
+    g = "*".join(gain)
+    return (
+        "format=yuv420p,"
+        f"geq=lum='16+(lum(X,Y)-16)*{g}':cb='128+(cb(X,Y)-128)*{g}':cr='128+(cr(X,Y)-128)*{g}'"
+        f":enable='{'+'.join(when) or '0'}'"
+    )

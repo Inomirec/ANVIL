@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { magnetOn } from './lib/magnet'
+import type { FadeCurve } from './lib/fades'
 import { effectKind } from './composeEffects'
 import {
   CROP_FIELDS,
@@ -97,6 +98,9 @@ export interface ComposeClip {
   /** Плавное появление и уход звука, в секундах. */
   fadeIn: number
   fadeOut: number
+  /** Форма появления и ухода (`lib/fades.ts`); пусто — как было. */
+  fadeInCurve?: FadeCurve
+  fadeOutCurve?: FadeCurve
   /** Выбросить звук клипа. */
   muted: boolean
   /**

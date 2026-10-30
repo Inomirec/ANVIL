@@ -15,7 +15,8 @@ import { cutTimes, frameCode, useFrames } from '../lib/scenes'
 import type { FileInfo } from '../lib/types'
 import { useStore } from '../store'
 import { useZoomPan } from '../lib/zoomPan'
-import { Timeline, type Fades } from './Timeline'
+import { Timeline, type Fades, type LaneFade } from './Timeline'
+import { fadeInGain, fadeOutGain } from '../lib/fades'
 import { VolumeControl } from './VolumeControl'
 import { IconButton } from './ui'
 
@@ -38,21 +39,15 @@ const UNPLAYABLE =
  * четвертьсинусоидная — та же, что применяется при экспорте, поэтому
  * предпросмотр совпадает с результатом.
  */
-function fadeGain(
-  time: number,
-  from: number,
-  to: number,
-  fadeIn: number,
-  fadeOut: number,
-): number {
+function fadeGain(time: number, from: number, to: number, fade: LaneFade, sound: boolean): number {
   let gain = 1
-  if (fadeIn > 0 && time < from + fadeIn) {
-    gain = Math.min(gain, Math.max((time - from) / fadeIn, 0))
+  if (fade.in > 0 && time < from + fade.in) {
+    gain = Math.min(gain, fadeInGain(fade.inCurve ?? '', (time - from) / fade.in, sound))
   }
-  if (fadeOut > 0 && time > to - fadeOut) {
-    gain = Math.min(gain, Math.max((to - time) / fadeOut, 0))
+  if (fade.out > 0 && time > to - fade.out) {
+    gain = Math.min(gain, fadeOutGain(fade.outCurve ?? '', (to - time) / fade.out, sound))
   }
-  return Math.sin((Math.PI / 2) * Math.min(Math.max(gain, 0), 1))
+  return Math.min(Math.max(gain, 0), 1)
 }
 
 /** Плеер с таймлайном и метками In/Out для видео и аудио. */
@@ -162,9 +157,10 @@ export function MediaEditor({
     (media: HTMLVideoElement | HTMLAudioElement, at: number) => {
       const from = trim.in ?? 0
       const to = trim.out ?? duration ?? 0
-      const audioGain = fadeGain(at, from, to, fades.audio.in, fades.audio.out)
+      // Те же формы, что у обработки: звук и картинка — каждый своей.
+      const audioGain = fadeGain(at, from, to, fades.audio, true)
       media.volume = muted ? 0 : volume * audioGain
-      setDim(1 - fadeGain(at, from, to, fades.video.in, fades.video.out))
+      setDim(1 - fadeGain(at, from, to, fades.video, false))
     },
     [trim.in, trim.out, duration, fades, volume, muted],
   )

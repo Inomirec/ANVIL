@@ -307,11 +307,15 @@ export function ExportPanel({
       ...(streamCopy ? {} : { speed_preset: speedOptions(video.codec)[speed].value, container: shownContainer }),
       fade_in: withTrim ? fades.video.in : 0,
       fade_out: withTrim ? fades.video.out : 0,
+      fade_in_curve: fades.video.inCurve ?? '',
+      fade_out_curve: fades.video.outCurve ?? '',
     },
     audio: {
       ...audio,
       fade_in: withTrim ? fades.audio.in : 0,
       fade_out: withTrim ? fades.audio.out : 0,
+      fade_in_curve: fades.audio.inCurve ?? '',
+      fade_out_curve: fades.audio.outCurve ?? '',
       // Громкость — про открытый файл, к пачке её не тащим.
       volume: withTrim ? trackVolume : 1,
       ...audioTracks(),

@@ -73,6 +73,8 @@ import {
 import { useStore } from '../store'
 import { EFFECTS, effectParams, targetOf } from '../composeEffects'
 import { IconButton } from './ui'
+import { CrossFadeMenu, FadeCurveMenu } from './FadeCurveMenu'
+import { fadeClip, shownCurve } from '../lib/fades'
 
 /** Радиус прилипания и ширина уголка для растягивания, в пикселях. */
 const SNAP_PIXELS = 8
@@ -262,6 +264,12 @@ export function ComposeTimeline({
 
   const [dropAt, setDropAt] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
+  // Выбор формы затухания: у одного клипа или у перехода между двумя.
+  const [fadeMenu, setFadeMenu] = useState<
+    | { x: number; y: number; id: string; side: 'in' | 'out' }
+    | { x: number; y: number; lower: string; upper: string }
+    | null
+  >(null)
   // Меню дорожки: правая кнопка по пустому месту. Отдельной кнопки у дорожки
   // нет — она заняла бы место у самого начала таймлайна, где лежат клипы.
   // Меню дорожки бывает двух видов: по полотну — что положить в это место,
@@ -1434,9 +1442,21 @@ export function ComposeTimeline({
                   }}
                   onMenu={(event) => {
                     event.preventDefault()
+                    // В зоне перехода — выбор его формы, как в монтажных
+                    // программах; в остальном клипе — обычное меню.
+                    const pair = crossfadeAt(track, secondsAt(event.clientX))
+                    if (pair) {
+                      setFadeMenu({ x: event.clientX, y: event.clientY, lower: pair.lower, upper: pair.upper })
+                      return
+                    }
                     const state = useCompose.getState()
                     if (!state.selected.includes(clip.id)) select([clip.id])
                     setMenu({ x: event.clientX, y: event.clientY, id: clip.id })
+                  }}
+                  onFadeMenu={(event, side) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setFadeMenu({ x: event.clientX, y: event.clientY, id: clip.id, side })
                   }}
                 />
               ))}
@@ -1571,6 +1591,8 @@ export function ComposeTimeline({
           onClose={() => setMenu(null)}
         />
       )}
+
+      {fadeMenu && <FadeMenuFor menu={fadeMenu} onClose={() => setFadeMenu(null)} />}
 
       {trackMenu && (
         <TrackMenu
@@ -2519,6 +2541,64 @@ function pick(state: { selected: string[] }, clipId: string): string[] {
  * Считается ровно так же, как на сервере при сборке, поэтому нарисованное
  * совпадает с тем, что окажется в файле.
  */
+/** Переход под секундой ``at``: какой клип уходит и какой появляется. */
+function crossfadeAt(track: ComposeTrack, at: number): { lower: string; upper: string } | null {
+  const clips = [...track.clips].sort((a, b) => a.start - b.start)
+  for (let index = 0; index < clips.length - 1; index++) {
+    const lower = clips[index]
+    const upper = clips[index + 1]
+    const end = Math.min(lower.start + lower.duration, upper.start + upper.duration)
+    if (end > upper.start && at >= upper.start && at <= end) return { lower: lower.id, upper: upper.id }
+  }
+  return null
+}
+
+/** Меню формы: у уголка затухания — столбик, у перехода — сетка. */
+function FadeMenuFor({
+  menu,
+  onClose,
+}: {
+  menu: { x: number; y: number; id: string; side: 'in' | 'out' } | { x: number; y: number; lower: string; upper: string }
+  onClose: () => void
+}) {
+  const state = useCompose.getState()
+  if ('side' in menu) {
+    const found = state.findClip(menu.id)?.clip
+    if (!found) return null
+    const field = menu.side === 'in' ? 'fadeInCurve' : 'fadeOutCurve'
+    return (
+      <FadeCurveMenu
+        at={menu}
+        side={menu.side}
+        current={shownCurve(found[field], menu.side, found.kind === 'audio')}
+        onPick={(curve) => {
+          const now = useCompose.getState()
+          now.mark()
+          now.updateClip(menu.id, { [field]: curve })
+        }}
+        onClose={onClose}
+      />
+    )
+  }
+  const lower = state.findClip(menu.lower)?.clip
+  const upper = state.findClip(menu.upper)?.clip
+  if (!lower || !upper) return null
+  return (
+    <CrossFadeMenu
+      at={menu}
+      out={shownCurve(lower.fadeOutCurve, 'out', lower.kind === 'audio')}
+      into={shownCurve(upper.fadeInCurve, 'in', upper.kind === 'audio')}
+      onPick={(out, into) => {
+        const now = useCompose.getState()
+        now.mark()
+        now.updateClip(menu.lower, { fadeOutCurve: out })
+        now.updateClip(menu.upper, { fadeInCurve: into })
+      }}
+      onClose={onClose}
+    />
+  )
+}
+
 function crossfades(track: ComposeTrack): { from: number; to: number }[] {
   const clips = [...track.clips].sort((a, b) => a.start - b.start)
   const zones: { from: number; to: number }[] = []
@@ -2761,6 +2841,7 @@ function ClipBox({
   onMute,
   onLevel,
   onMenu,
+  onFadeMenu,
 }: {
   clip: ComposeClip
   /** Уровень дорожки: волна звука рисуется с ним. */
@@ -2772,6 +2853,8 @@ function ClipBox({
   onMute: () => void
   onLevel: (top: number, height: number) => void
   onMenu: (event: React.MouseEvent) => void
+  /** Правая кнопка на уголке затухания — выбор его формы. */
+  onFadeMenu: (event: React.MouseEvent, side: 'in' | 'out') => void
 }) {
   const sound = clip.kind === 'audio'
   const solid = clip.kind === 'color'
@@ -2988,17 +3071,18 @@ function ClipBox({
         />
       )}
 
-      {/* Затухания: затемнённые треугольники по краям, как в монтажках. */}
+      {/* Затухания: затемнение над кривой, как в монтажках. Кривая — его
+          форма (правая кнопка на уголке). */}
       {clip.fadeIn > 0 && (
         <div
           className="pointer-events-none absolute inset-y-0 left-0 bg-black/55"
-          style={{ width: fadeInWidth, clipPath: 'polygon(0 0, 100% 0, 0 100%)' }}
+          style={{ width: fadeInWidth, clipPath: fadeClip(clip.fadeInCurve, 'in', sound) }}
         />
       )}
       {clip.fadeOut > 0 && (
         <div
           className="pointer-events-none absolute inset-y-0 right-0 bg-black/55"
-          style={{ width: fadeOutWidth, clipPath: 'polygon(100% 0, 100% 100%, 0 0)' }}
+          style={{ width: fadeOutWidth, clipPath: fadeClip(clip.fadeOutCurve, 'out', sound) }}
         />
       )}
 
@@ -3147,22 +3231,26 @@ function ClipBox({
           <div
             className="absolute left-0 top-0 cursor-nwse-resize"
             style={{ width: corner, height: corner }}
-            title="Потяните вправо — плавное появление"
+            title="Потяните вправо — плавное появление. Правая кнопка — его форма"
             onMouseDown={(event) => {
+              if (event.button !== 0) return
               event.stopPropagation()
               onGrab(event, 'fadeIn')
             }}
+            onContextMenu={(event) => onFadeMenu(event, 'in')}
           >
             <div className="m-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
           </div>
           <div
             className="absolute right-0 top-0 cursor-nesw-resize"
             style={{ width: corner, height: corner }}
-            title="Потяните влево — плавный уход"
+            title="Потяните влево — плавный уход. Правая кнопка — его форма"
             onMouseDown={(event) => {
+              if (event.button !== 0) return
               event.stopPropagation()
               onGrab(event, 'fadeOut')
             }}
+            onContextMenu={(event) => onFadeMenu(event, 'out')}
           >
             <div className="ml-auto mr-1 mt-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
           </div>

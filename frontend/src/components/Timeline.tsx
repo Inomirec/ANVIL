@@ -5,6 +5,8 @@ import { timecode } from '../lib/format'
 import type { FilmstripInfo, SceneInfo } from '../lib/types'
 import { SceneStrip } from './SceneStrip'
 import { IconButton } from './ui'
+import { FadeCurveMenu } from './FadeCurveMenu'
+import { fadeClip, shownCurve, type FadeCurve } from '../lib/fades'
 
 type Drag =
   | { kind: 'playhead' }
@@ -19,10 +21,18 @@ type Drag =
 
 export type Lane = 'video' | 'audio'
 
-/** Затухания по дорожкам, в секундах. */
+/** Затухание одной дорожки: длины в секундах и формы (`lib/fades.ts`). */
+export interface LaneFade {
+  in: number
+  out: number
+  inCurve?: FadeCurve
+  outCurve?: FadeCurve
+}
+
+/** Затухания по дорожкам. */
 export interface Fades {
-  video: { in: number; out: number }
-  audio: { in: number; out: number }
+  video: LaneFade
+  audio: LaneFade
 }
 
 /** Радиус прилипания и радиус захвата метки, в пикселях. */
@@ -109,6 +119,8 @@ export function Timeline({
   const trackRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<Drag>(null)
   const [hover, setHover] = useState<number | null>(null)
+  // Меню формы затухания — по правой кнопке на уголке.
+  const [fadeMenu, setFadeMenu] = useState<{ x: number; y: number; lane: Lane; side: 'in' | 'out' } | null>(null)
   const [zoom, setZoom] = useState(1)
   // Ширина дорожки в пикселях: ленте по сценам нужно знать, сколько плиток
   // помещается.
@@ -438,6 +450,28 @@ export function Timeline({
             onPointerMove={(event) => setHover(timeAt(event.clientX))}
             onPointerLeave={() => setHover(null)}
           >
+            {fadeMenu && onFadesChange && (
+              <FadeCurveMenu
+                at={fadeMenu}
+                side={fadeMenu.side}
+                current={shownCurve(
+                  activeFades[fadeMenu.lane][fadeMenu.side === 'in' ? 'inCurve' : 'outCurve'],
+                  fadeMenu.side,
+                  fadeMenu.lane === 'audio',
+                )}
+                onPick={(curve) =>
+                  onFadesChange({
+                    ...activeFades,
+                    [fadeMenu.lane]: {
+                      ...activeFades[fadeMenu.lane],
+                      [fadeMenu.side === 'in' ? 'inCurve' : 'outCurve']: curve,
+                    },
+                  })
+                }
+                onClose={() => setFadeMenu(null)}
+              />
+            )}
+
             {/* Дорожка видео */}
             {showStrip && (
               <TrackLane
@@ -448,6 +482,7 @@ export function Timeline({
                 trimSpan={trimSpan}
                 editable={Boolean(onFadesChange)}
                 onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'video', side })}
+                onFadeMenu={(event, side) => setFadeMenu({ x: event.clientX, y: event.clientY, lane: 'video', side })}
               >
                 {framesOff ? (
                   <div className="h-full w-full bg-surface-3/40" />
@@ -470,9 +505,11 @@ export function Timeline({
                 label="Звук"
                 selection={selection}
                 fade={activeFades.audio}
+                sound
                 trimSpan={trimSpan}
                 editable={Boolean(onFadesChange)}
                 onFadeDown={(event, side) => startDrag(event, { kind: 'fade', lane: 'audio', side })}
+                onFadeMenu={(event, side) => setFadeMenu({ x: event.clientX, y: event.clientY, lane: 'audio', side })}
                 volume={onVolumeChange ? (volume ?? 1) : undefined}
                 onVolumeDown={(event) => {
                   const lane = (event.currentTarget as HTMLElement).closest('[data-lane]')
@@ -574,6 +611,8 @@ function TrackLane({
   trimSpan,
   editable,
   onFadeDown,
+  onFadeMenu,
+  sound = false,
   volume,
   onVolumeDown,
   children,
@@ -581,10 +620,14 @@ function TrackLane({
   height: number
   label: string
   selection: { from: number; to: number }
-  fade: { in: number; out: number }
+  fade: LaneFade
   trimSpan: number
   editable: boolean
   onFadeDown: (event: React.PointerEvent, side: 'in' | 'out') => void
+  /** Правая кнопка на уголке — выбор формы затухания. */
+  onFadeMenu: (event: React.MouseEvent, side: 'in' | 'out') => void
+  /** Дорожка звука: у неё другая форма по умолчанию. */
+  sound?: boolean
   /** Громкость дорожки. undefined — линии громкости у этой дорожки нет. */
   volume?: number
   onVolumeDown?: (event: React.PointerEvent) => void
@@ -657,7 +700,7 @@ function TrackLane({
           style={{
             left: `${selection.from * 100}%`,
             width: `${fadeInWidth * 100}%`,
-            clipPath: 'polygon(0 0, 100% 0, 0 100%)',
+            clipPath: fadeClip(fade.inCurve, 'in', sound),
           }}
         />
       )}
@@ -667,7 +710,7 @@ function TrackLane({
           style={{
             left: `${(selection.to - fadeOutWidth) * 100}%`,
             width: `${fadeOutWidth * 100}%`,
-            clipPath: 'polygon(100% 0, 100% 100%, 0 0)',
+            clipPath: fadeClip(fade.outCurve, 'out', sound),
           }}
         />
       )}
@@ -676,16 +719,18 @@ function TrackLane({
         <>
           <FadeGrip
             side="in"
-            title={`Затухание в начале: ${fade.in.toFixed(2)} с. Тяните вправо.`}
+            title={`Затухание в начале: ${fade.in.toFixed(2)} с. Тяните вправо, правая кнопка — форма.`}
             left={selection.from + fadeInWidth}
             onPointerDown={(event) => onFadeDown(event, 'in')}
+            onContextMenu={(event) => onFadeMenu(event, 'in')}
             active={fade.in > 0}
           />
           <FadeGrip
             side="out"
-            title={`Затухание в конце: ${fade.out.toFixed(2)} с. Тяните влево.`}
+            title={`Затухание в конце: ${fade.out.toFixed(2)} с. Тяните влево, правая кнопка — форма.`}
             left={selection.to - fadeOutWidth}
             onPointerDown={(event) => onFadeDown(event, 'out')}
+            onContextMenu={(event) => onFadeMenu(event, 'out')}
             active={fade.out > 0}
           />
         </>
@@ -704,12 +749,14 @@ function FadeGrip({
   side,
   left,
   onPointerDown,
+  onContextMenu,
   title,
   active,
 }: {
   side: 'in' | 'out'
   left: number
   onPointerDown: (event: React.PointerEvent) => void
+  onContextMenu: (event: React.MouseEvent) => void
   title: string
   active: boolean
 }) {
@@ -721,7 +768,19 @@ function FadeGrip({
         left: `${left * 100}%`,
         transform: side === 'in' ? 'none' : 'translateX(-100%)',
       }}
-      onPointerDown={onPointerDown}
+      onPointerDown={(event) => {
+        // Правая кнопка — меню формы, а не перетаскивание и не игла.
+        if (event.button !== 0) {
+          event.stopPropagation()
+          return
+        }
+        onPointerDown(event)
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onContextMenu(event)
+      }}
     >
       <span
         className={`absolute top-[4px] h-2.5 w-2.5 rotate-45 rounded-[2px] border transition-all group-hover:scale-125 ${

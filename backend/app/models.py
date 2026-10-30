@@ -14,6 +14,8 @@ VideoCodec = Literal[
 AudioCodec = Literal["opus", "aac", "mp3", "flac", "copy", "none"]
 ImageFormat = Literal["avif", "webp", "jpg", "png", "ico"]
 Container = Literal["mp4", "webm", "mkv", "auto"]
+#: Форма появления и ухода; пусто — как было до выбора форм.
+FadeCurve = Literal["", "linear", "fast", "slow", "smooth", "sharp"]
 
 
 class Trim(BaseModel):
@@ -53,6 +55,9 @@ class AudioOptions(BaseModel):
     loudnorm_lra: float = 11.0
     fade_in: float = Field(default=0.0, ge=0, le=30)
     fade_out: float = Field(default=0.0, ge=0, le=30)
+    #: Форма появления и ухода (`core/fades.py`); пусто — как раньше.
+    fade_in_curve: FadeCurve = ""
+    fade_out_curve: FadeCurve = ""
     #: Привести к моно (заметно экономит вес для речи).
     mono: bool = False
     #: Свести многоканальный звук (5.1, 7.1) в обычное стерео. Монтажные
@@ -102,6 +107,9 @@ class VideoOptions(BaseModel):
     #: Плавное появление из чёрного и уход в чёрный, в секундах.
     fade_in: float = Field(default=0.0, ge=0, le=30)
     fade_out: float = Field(default=0.0, ge=0, le=30)
+    #: Форма появления и ухода (`core/fades.py`); пусто — как раньше.
+    fade_in_curve: FadeCurve = ""
+    fade_out_curve: FadeCurve = ""
     #: Убрать видеодорожку целиком (получить только звук).
     strip_video: bool = False
 
@@ -461,6 +469,9 @@ class ComposeClip(ComposeModel):
     #: Плавное появление и уход звука, в секундах.
     fade_in: float = Field(default=0.0, ge=0, le=30)
     fade_out: float = Field(default=0.0, ge=0, le=30)
+    #: Форма появления и ухода (`core/fades.py`); пусто — как раньше.
+    fade_in_curve: FadeCurve = ""
+    fade_out_curve: FadeCurve = ""
     #: Выбросить звук у этого клипа. Нужно, когда под видео кладут музыку и
     #: родная дорожка ролика только мешает.
     muted: bool = False

@@ -35,7 +35,7 @@ from pathlib import Path
 
 from .. import paths
 from ..models import ComposeClip, ComposeProject
-from . import anim, binaries, effects, encode, fonts, fsutil, stabilize
+from . import anim, binaries, effects, encode, fades, fonts, fsutil, stabilize
 from .probe import moves as probe_moves
 from .probe import probe
 
@@ -957,16 +957,21 @@ def frame_alpha(clip: ComposeClip, moment: float) -> float:
     правильно. Поэтому для кадра считаем прозрачность прямо: где игла — такая
     и видимость.
     """
-    alpha = anim.value_at(clip, "opacity", moment - clip.start)
+    return max(0.0, min(1.0, anim.value_at(clip, "opacity", moment - clip.start) * fade_gain(clip, moment)))
+
+
+def fade_gain(clip: ComposeClip, moment: float) -> float:
+    """Видимость от появления и ухода в мгновение ``moment``, с их формой."""
+    gain = 1.0
     if clip.fade_in > 0:
         passed = moment - clip.start
         if passed < clip.fade_in:
-            alpha *= max(0.0, min(1.0, passed / clip.fade_in))
+            gain *= fades.gain_in(clip.fade_in_curve, passed / clip.fade_in)
     if clip.fade_out > 0:
         left = clip.end - moment
         if left < clip.fade_out:
-            alpha *= max(0.0, min(1.0, left / clip.fade_out))
-    return max(0.0, min(1.0, alpha))
+            gain *= fades.gain_out(clip.fade_out_curve, left / clip.fade_out)
+    return max(0.0, min(1.0, gain))
 
 
 def video_fades(
@@ -997,6 +1002,27 @@ def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: float = 
     """
     skip = max(0.0, at - clip.start)
     parts: list[str] = []
+
+    if fades.custom(clip.fade_in_curve) or fades.custom(clip.fade_out_curve):
+        # Форму, кроме линейной, `fade` не рисует: видимость вместе с
+        # непрозрачностью шлём на каждый кадр командой, как ключи.
+        rate = max(fps, 1)
+        lines: list[tuple[float, str]] = []
+        last = ""
+        for index in range(max(1, int(math.ceil(take * rate)) + 1)):
+            moment = index / rate
+            local = skip + moment
+            value = (
+                f"{min(1.0, max(0.0, anim.value_at(clip, 'opacity', local))) * fade_gain(clip, clip.start + local):.3f}"
+            )
+            if value != last:
+                lines.append((moment, f"colorchannelmixer@{tag} aa {value}"))
+                last = value
+        first = lines[0][1].rsplit(" ", 1)[-1]
+        return (
+            ",format=yuva420p,"
+            f"sendcmd=f={effects.command_file(lines)},colorchannelmixer@{tag}=aa={first}"
+        )
 
     if clip.fade_in - skip > MIN_FADE:
         parts.append(f"fade=t=in:st=0:d={clip.fade_in - skip:.3f}:alpha=1")
@@ -1079,14 +1105,16 @@ def audio_filter(clip: ComposeClip, at: float, offset: float, take: float) -> st
     skip = max(0.0, at - clip.start)
 
     if clip.fade_in - skip > MIN_FADE:
-        parts.append(f"afade=t=in:curve=qsin:st=0:d={clip.fade_in - skip:.3f}")
+        parts.append(
+            f"afade=t=in:curve={fades.afade_curve(clip.fade_in_curve, 'in')}:st=0:d={clip.fade_in - skip:.3f}"
+        )
 
     if clip.fade_out > MIN_FADE:
         # Начало ухода в координатах читаемого куска.
         starts = (clip.duration - skip) - clip.fade_out
         if starts < take:
             parts.append(
-                f"afade=t=out:curve=qsin:st={max(starts, 0.0):.3f}"
+                f"afade=t=out:curve={fades.afade_curve(clip.fade_out_curve, 'out')}:st={max(starts, 0.0):.3f}"
                 f":d={min(clip.fade_out, clip.duration):.3f}"
             )
 
