@@ -286,6 +286,7 @@ export function SliderNumber({
   aside,
   readout,
   entryLimits,
+  shown,
 }: {
   /** Подпись; у подписанного сверху ползунка это может быть и кнопка. */
   label: React.ReactNode
@@ -311,11 +312,18 @@ export function SliderNumber({
   readout?: React.ReactNode
   /** Пределы набранного числа, если они шире шкалы. */
   entryLimits?: [number, number]
+  /**
+   * Какое число показывать в поле и как набранное перевести обратно — для
+   * перевёрнутой шкалы (качество: вправо лучше, а число у кодека меньше).
+   * Пределы `entryLimits` — в значениях шкалы.
+   */
+  shown?: { to: (value: number) => number; from: (number: number) => number }
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const apply = () => {
     if (draft === null) return
-    const number = Number(draft.replace(',', '.'))
+    const typed = Number(draft.replace(',', '.'))
+    const number = shown ? shown.from(typed) : typed
     const [low, high] = entryLimits ?? [min, max]
     if (Number.isFinite(number)) onChange(Math.min(high, Math.max(low, number)))
     setDraft(null)
@@ -369,7 +377,11 @@ export function SliderNumber({
               key={index}
               type="button"
               onClick={() => onChange(mark.value)}
-              title={mark.hint ? (readout ? mark.hint : `${mark.hint} — ${mark.value}${unit ? ' ' + unit : ''}`) : readout ? `Поставить «${mark.label}»` : `Поставить ${mark.value}${unit ? ' ' + unit : ''}`}
+              title={(() => {
+                const number = Math.round((shown ? shown.to(mark.value) : mark.value) * 10) / 10
+                if (mark.hint) return readout ? mark.hint : `${mark.hint} — ${number}${unit ? ' ' + unit : ''}`
+                return readout ? `Поставить «${mark.label}»` : `Поставить ${number}${unit ? ' ' + unit : ''}`
+              })()}
               className={`absolute top-0 whitespace-nowrap text-[9.5px] leading-none transition-colors ${
                 edge === 'middle' ? '-translate-x-1/2' : edge === 'end' ? '-translate-x-full' : ''
               } ${near ? 'text-accent-soft' : 'text-ink-faint hover:text-ink-dim'}`}
@@ -399,7 +411,7 @@ export function SliderNumber({
       }`}
     >
       <input
-        value={draft ?? String(Math.round(value * 10) / 10)}
+        value={draft ?? String(Math.round((shown ? shown.to(value) : value) * 10) / 10)}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={apply}
         onKeyDown={(event) => {

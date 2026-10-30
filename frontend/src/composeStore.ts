@@ -355,8 +355,11 @@ export function trackNumber(tracks: ComposeTrack[], id: string): number {
 /** Больше дорожек человеку не нужно, а таймлайн перестаёт помещаться. */
 export const MAX_TRACKS = 6
 
-/** Пределы размера клипа в кадре и его места. */
-export const MIN_SIZE = 0.05
+/**
+ * Пределы размера клипа в кадре и его места. Нижний — тысячная доля кадра,
+ * точка-другая: прежние 5% не давали сделать заливку тоньше 64 точек.
+ */
+export const MIN_SIZE = 0.001
 export const MAX_SIZE = 4
 export const MIN_PLACE = -1
 export const MAX_PLACE = 2
@@ -2262,7 +2265,7 @@ export const useCompose = create<State>((set, get) => ({
     const state = get()
     const picture = state.selected
       .map((id) => state.findClip(id)?.clip)
-      .find((clip) => clip && (clip.kind === 'video' || clip.kind === 'image'))
+      .find((clip) => clip && (clip.kind === 'video' || clip.kind === 'image' || clip.kind === 'color'))
     set({
       animFocus: group,
       cropping: group === 'crop' && picture ? picture.id : null,

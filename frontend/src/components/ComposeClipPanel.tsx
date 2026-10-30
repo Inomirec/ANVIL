@@ -531,7 +531,7 @@ function CropCard({ clip }: { clip: ComposeClip }) {
  * Эффекты клипа можно оставить только внутри маски или только снаружи —
  * так размывают лицо, не заводя второй слой.
  */
-function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) {
+export function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) {
   const updateClip = useCompose((state) => state.updateClip)
   const mark = useCompose((state) => state.mark)
   const masking = useCompose((state) => state.masking)

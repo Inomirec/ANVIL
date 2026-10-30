@@ -430,7 +430,8 @@ def scaled_for_preview(clip: ComposeClip, factor: float) -> ComposeClip:
 
 
 def has_mask(clip: ComposeClip) -> bool:
-    return clip.kind in {"video", "image"} and clip.mask is not None and clip.mask.on
+    """Маска у картинки, ролика или заливки — заливке она даёт сложную форму."""
+    return clip.kind in {"video", "image", "color"} and clip.mask is not None and clip.mask.on
 
 
 def needs_graph(clip: ComposeClip) -> bool:

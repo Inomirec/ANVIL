@@ -2,9 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ChevronDown,
   Columns2,
-  Film,
   FolderOpen,
   Loader2,
+  Move,
+  MoveHorizontal,
+  MoveVertical,
   Save,
   Play,
   RotateCw,
@@ -33,6 +35,7 @@ import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid } from './ComposeFrameBox'
 import { PreviewBar, useGridChoice } from './PreviewBar'
+import { setMoveAxis, useMoveAxis } from '../lib/moveAxis'
 import { ComposeCropBox } from './ComposeCropBox'
 import { ComposeDelogoBox, shownDelogos } from './ComposeDelogoBox'
 import { ComposeMaskBox } from './ComposeMaskBox'
@@ -56,7 +59,7 @@ import { ComposeRecordFolder } from './ComposeRecordFolder'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { PREVIEW_QUALITIES, useComposePlayer, type PreviewQuality } from '../hooks/useComposePlayer'
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder'
-import { Button, Dropdown, Empty, IconButton, QuietHints, Section, Segmented, SideColumn, Toggle } from './ui'
+import { Button, Dropdown, IconButton, QuietHints, Section, Segmented, SideColumn, Toggle } from './ui'
 
 /** Имя готового файла, если поле оставили пустым. */
 const DEFAULT_NAME = 'Project'
@@ -359,6 +362,7 @@ export function ComposeTab() {
   // выбирается списком рядом. Выключенная сетка помнит свой вид: включил —
   // вернулась та же.
   const gridChoice = useGridChoice('sgh.composeGrid')
+  const axis = useMoveAxis()
   const grid = gridChoice.shown
   const [snapping, setSnapping] = useState(false)
   // Увеличительное стекло над кадром: во сколько раз и насколько сдвинут.
@@ -914,7 +918,10 @@ export function ComposeTab() {
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div
-            className={`stage relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-2.5 ${noStraySelection.className}`}
+            // `overflow-clip`, а не `hidden`: обрезанный так блок нельзя
+            // прокрутить, а браузер прокручивал его к курсору в надписи, и
+            // кадр уезжал, пока в ней печатают.
+            className={`stage relative flex min-h-0 min-w-0 flex-1 flex-col overflow-clip p-2.5 ${noStraySelection.className}`}
             onMouseDownCapture={noStraySelection.onMouseDownCapture}
             onDragStart={noStraySelection.onDragStart}
             onWheel={(event) => {
@@ -998,6 +1005,22 @@ export function ComposeTab() {
                 onSnap={() => void grabFrame()}
                 snapping={snapping}
               >
+                {/* Замок направления: двигать клип и надпись во все стороны,
+                    только по горизонтали или только по вертикали. */}
+                <IconButton
+                  className="h-6 w-6"
+                  title={
+                    axis === 'x'
+                      ? 'Клипы двигаются только по горизонтали. Нажмите — только по вертикали'
+                      : axis === 'y'
+                        ? 'Клипы двигаются только по вертикали. Нажмите — во все стороны'
+                        : 'Клипы двигаются во все стороны. Нажмите — только по горизонтали'
+                  }
+                  active={axis !== 'both'}
+                  onClick={() => setMoveAxis(axis === 'both' ? 'x' : axis === 'x' ? 'y' : 'both')}
+                >
+                  {axis === 'x' ? <MoveHorizontal size={13} /> : axis === 'y' ? <MoveVertical size={13} /> : <Move size={13} />}
+                </IconButton>
                 <IconButton
                   className="h-6 w-6"
                   title="Сравнить: слева кадр без эффектов, справа — с ними. Удобно подбирать цвет и другие эффекты. Работает на остановленном кадре"
@@ -1049,13 +1072,8 @@ export function ComposeTab() {
               }`}
               style={{ containerType: 'size' }}
             >
-            {!clips ? (
-              <Empty
-                icon={<Film size={44} />}
-                title="Перетащите файлы из медиатеки"
-                hint="Картинки, видео и звук ложатся на дорожки внизу. Картинку можно растянуть за край — столько она и будет висеть на экране. Клип режется клавишей S под иглой, удаляется — Delete."
-              />
-            ) : (
+            {/* Пустой проект — пустая сцена, без подсказок посередине. */}
+            {!clips ? null : (
               <div
                 ref={frameBox}
                 // Чёрный фон и рамка принадлежат самому кадру, а не месту под
@@ -1087,11 +1105,18 @@ export function ComposeTab() {
                   сетка, и рамка клипа. Точка увеличения та, где было колесо,
                   поэтому нужное место остаётся под курсором. */}
               <div
-                className="absolute inset-0 overflow-hidden bg-black shadow-xl ring-1 ring-line"
+                className="absolute inset-0"
                 style={{
                   transform: `translate(${pan.x}px, ${pan.y}px) scale(${view})`,
                 }}
               >
+                {/* Обрезается по краю кадра только сама картинка. Рамки клипов
+                    и надпись лежат поверх и выходят на сцену: за краем кадра
+                    их видно и за них можно взяться, а в файле лишнее всё равно
+                    обрежется. Прежде всё лежало в одном обрезанном блоке —
+                    рамки за краем пропадали, а надпись, в которой печатают,
+                    прокручивала его и сдвигала кадр. */}
+                <div className="absolute inset-0 overflow-clip bg-black shadow-xl ring-1 ring-line">
                 {/* Пока смотрим — играет собранный кусок, иначе показываем
                     кадр под иглой. Снаружи разницы нет: то же окно. Видео два
                     и играют по очереди: следующий кусок уже загружен во
@@ -1101,7 +1126,7 @@ export function ComposeTab() {
                   <video
                     key={index}
                     ref={ref}
-                    className={`absolute inset-0 h-full w-full object-contain ${
+                    className={`absolute inset-0 h-full w-full object-fill ${
                       player.playing && player.shown === index ? '' : 'pointer-events-none opacity-0'
                     }`}
                     muted
@@ -1112,7 +1137,10 @@ export function ComposeTab() {
                   />
                 ))}
                 {!player.playing && frameUrl && (
-                  <img src={frameUrl} alt="" className="h-full w-full object-contain" />
+                  // Во весь кадр без полей: размер картинки чётный и чуть
+                  // расходится с формой кадра, и при вписывании снизу
+                  // оставалась чёрная полоса, которой в файле нет.
+                  <img src={frameUrl} alt="" className="h-full w-full object-fill" />
                 )}
                 {/* Сравнение: левая половина — тот же кадр без эффектов. */}
                 {!player.playing && compare && frameUrl && (
@@ -1121,7 +1149,7 @@ export function ComposeTab() {
                       <img
                         src={rawUrl}
                         alt=""
-                        className="absolute inset-0 h-full w-full object-contain"
+                        className="absolute inset-0 h-full w-full object-fill"
                         style={{ clipPath: 'inset(0 50% 0 0)' }}
                       />
                     )}
@@ -1149,6 +1177,7 @@ export function ComposeTab() {
                     размер прямо в кадре. Пока клип не выбран, рамки нет —
                     иначе она мешала бы просто смотреть. */}
                 <ComposeGrid kind={grid} />
+                </div>
 
                 {/* Рамки получают клип таким, каким он стоит под иглой: у
                     анимированного место и размер берутся из ключей. */}

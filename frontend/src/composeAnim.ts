@@ -96,7 +96,8 @@ export function groupsOf(clip: ComposeClip): AnimGroup[] {
   if (clip.kind === 'text') groups.push({ id: 'fontSize', label: 'Размер текста', fields: ['fontSize'] })
   if (clip.kind !== 'audio') groups.push({ id: 'opacity', label: 'Непрозрачность', fields: ['opacity'] })
   if (visual) groups.push({ id: 'crop', label: 'Обрезка', fields: CROP_FIELDS, auto: true })
-  if (visual && clip.mask) {
+  // Маска — и у заливки: так ей дают сложную форму.
+  if ((visual || clip.kind === 'color') && clip.mask) {
     // У своей формы по ключам меняются и сами точки — форма может меняться.
     const fields = clip.mask.shape === 'custom' ? [...MASK_FIELDS, POINTS] : MASK_FIELDS
     groups.push({ id: 'mask', label: 'Маска', fields, auto: true })

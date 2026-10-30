@@ -260,7 +260,9 @@ export function bitrateNormal(codec: string, frame: Frame): number {
 
 export function bitrateRange(codec: string, frame: Frame): { min: number; max: number } {
   const marks = bitrateMarks(codec, frame)
-  return { min: round250(marks[0].value / 2), max: Math.ceil((marks[2].value * 1.5) / 500) * 500 }
+  // Внизу шкалы — 250 кбит/с: прежние «половина от S» (у 1080p — 2250) не
+  // давали собрать лёгкий файл, и его несли сжимать в медиатеку.
+  return { min: 250, max: Math.ceil((marks[2].value * 1.5) / 500) * 500 }
 }
 
 /**
@@ -541,12 +543,12 @@ export function ComposeRenderPanel({
           <SliderNumber
             stacked
             label={modeButton}
-            unit=""
-            readout={
-              <span className="shrink-0 text-[12px] text-ink" title={`crf ${value.crf}: меньше число — лучше картинка`}>
-                {qualityWord(value.videoCodec, value.crf)}
-              </span>
-            }
+            // Число качества у кодека — его и показываем, и набирают его же:
+            // меньше число — лучше картинка. Слово («низкое») ничего не
+            // говорило, и вписать нужное было нельзя.
+            unit="crf"
+            shown={{ to: flip, from: flip }}
+            entryLimits={[flip(value.videoCodec === 'av1_svt' ? 63 : 51), flip(0)]}
             value={flip(value.crf)}
             min={scale.best}
             max={scale.worst}

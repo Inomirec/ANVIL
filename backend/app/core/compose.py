@@ -249,6 +249,19 @@ def _frames_span(take: float, fps: float) -> str:
     return f"{(frames + 0.5) / fps:.6f}"
 
 
+def _frames_trim(offset: float, take: float, fps: float) -> str:
+    """Слой клипа — ровно до кадра, на котором клип кончается.
+
+    `fps` в конце цепочки клипа на последнем кадре входа выпускал ещё один:
+    клип стоял на экране на кадр дольше. На стыке двух надписей кадр шли обе
+    разом, а заливка под второй (обычный цвет, без этой беды) уже сменилась.
+    Кадры считаем от места клипа в куске — так же, как ставит его `setpts`:
+    конец одного клипа и начало следующего попадают на один и тот же кадр.
+    """
+    frames = round((offset + take) * fps) - round(offset * fps)
+    return f"trim=end_frame={max(1, frames)},"
+
+
 def _even_near(value: float) -> int:
     """То же, но к ближайшему чётному, а не всегда вниз.
 
@@ -924,6 +937,13 @@ async def _ink_shift(clip: ComposeClip) -> float:
     return shift
 
 
+def _image_size(path: str) -> tuple[int, int]:
+    """Ширина и высота PNG — из его заголовка, без ffprobe."""
+    with open(path, "rb") as handle:
+        head = handle.read(24)
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
 def text_still(clip: ComposeClip) -> bool:
     """Надпись не меняется по ходу клипа — её можно нарисовать один раз.
 
@@ -1020,6 +1040,15 @@ async def prepare_fills(
             if clip.kind == "text" and text_still(clip):
                 clip.text_image = str(await _render_text(clip, frame_w, frame_h))
             # Маски — тоже картинки, рисуются здесь же и по той же причине.
+            # У заливки нет файла — её «картинка» та, что ляжет в кадр: по
+            # её размеру маска и считается.
+            if clip.kind == "color" and effects.has_mask(clip):
+                if clip.fill_image:
+                    clip.source_width, clip.source_height = _image_size(clip.fill_image)
+                else:
+                    clip.source_width, clip.source_height = (
+                        clip_box(clip, frame_w, frame_h) if is_placed(clip) else (frame_w, frame_h)
+                    )
             if effects.has_mask(clip) and clip.source_width:
                 if effects.points_animated(clip):
                     clip.mask_image = str(await _render_mask_sequence(clip, project.fps))
@@ -1324,7 +1353,10 @@ def build_segment(
 
         if clip.kind == "text" and clip.text_image:
             # Неподвижную надпись нарисовали заранее — повторяем картинку.
-            inputs += ["-loop", "1", "-t", _frames_span(take, fps), "-i", clip.text_image]
+            # С частотой кадров монтажа: по умолчанию картинка повторяется
+            # 25 раз в секунду, и в монтаже на 30 её последний кадр
+            # задерживался на лишний — на стыке две надписи стояли разом.
+            inputs += ["-loop", "1", "-framerate", rate(fps), "-t", _frames_span(take, fps), "-i", clip.text_image]
         elif clip.kind == "text":
             # Надпись живёт на прозрачном слое размером с кадр: масштабировать
             # готовые буквы нельзя — они замылятся, поэтому рисуем их сразу в
@@ -1339,7 +1371,7 @@ def build_segment(
         elif clip.kind == "color" and clip.fill_image:
             # Заливку со скруглением, рамкой и тенью нарисовали заранее —
             # здесь она обычная картинка, повторяемая весь клип.
-            inputs += ["-loop", "1", "-t", _frames_span(take, fps), "-i", clip.fill_image]
+            inputs += ["-loop", "1", "-framerate", rate(fps), "-t", _frames_span(take, fps), "-i", clip.fill_image]
         elif clip.kind == "color":
             # Заливку рисует сам ffmpeg — файла у такого клипа нет. Сразу в
             # нужном размере: масштабировать сплошной цвет незачем.
@@ -1387,7 +1419,7 @@ def build_segment(
             timing = effects.Timing(
                 skip=max(0.0, at - clip.start), take=take, fps=fps, tag=f"k{index}"
             )
-            if clip.kind in {"video", "image"} and effects.needs_graph(clip):
+            if clip.kind in {"video", "image", "color"} and effects.needs_graph(clip):
                 shape = ""
                 if effects.has_mask(clip) and clip.mask_image:
                     masks.append((clip.mask_image, max(0.0, at - clip.start)))
@@ -1428,7 +1460,7 @@ def build_segment(
                     f"[ffg{index}];"
                     f"[fbg{index}][ffg{index}]overlay={spot}:format=auto,"
                     f"format=yuva420p,setsar=1,fps={rate(fps)}{fades},"
-                    f"setpts={_place_in_time(offset)}[v{index}]"
+                    f"{_frames_trim(offset, take, fps)}setpts={_place_in_time(offset)}[v{index}]"
                 )
             else:
                 # Эффекты — до вписывания в кадр: они работают с самим файлом.
@@ -1440,7 +1472,7 @@ def build_segment(
                 chain.append(
                     f"{pre_label}{pre_chain}{placement}"
                     f"{fades},"
-                    f"setpts={_place_in_time(offset)}[v{index}]"
+                    f"{_frames_trim(offset, take, fps)}setpts={_place_in_time(offset)}[v{index}]"
                 )
             video_labels.append((f"[v{index}]", clip))
 

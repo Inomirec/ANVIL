@@ -486,11 +486,27 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     load(index, first, offset)
     const target = element(index)
     try {
-      await target?.play()
+      try {
+        await target?.play()
+      } catch (problem) {
+        // Плеер не открыл кусок («no supported sources»): файл куска мог
+        // пропасть или прийти битым. Один раз пробуем открыть его заново,
+        // и только потом говорим об ошибке.
+        if ((problem as Error).name !== 'NotSupportedError' || !target) throw problem
+        delete target.dataset.chunk
+        target.removeAttribute('src')
+        target.load()
+        load(index, first, offset)
+        await target.play()
+      }
     } catch (problem) {
       if (mine === run.current) {
         setPreparing(false)
-        setError((problem as Error).message)
+        setError(
+          (problem as Error).name === 'NotSupportedError'
+            ? 'Не удалось открыть кусок просмотра. Нажмите «Смотреть» ещё раз — он соберётся заново'
+            : (problem as Error).message,
+        )
       }
       return
     }

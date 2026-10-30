@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { useHandles } from '../lib/handles'
 import { magnetOn } from '../lib/magnet'
+import { moveAxis } from '../lib/moveAxis'
+import { shownAt } from '../composeAnim'
 import { BoxOutline } from './BoxOutline'
 import {
   clampPlace,
@@ -50,6 +52,37 @@ export const GRIDS: { value: GridKind; label: string; lines: number[] }[] = [
 export function guidesOf(kind: GridKind): number[] {
   const grid = GRIDS.find((item) => item.value === kind)
   return [...new Set([0, 0.5, 1, ...(grid?.lines ?? [])])]
+}
+
+/**
+ * Видимые края и середины других клипов под иглой — к ним тоже липнет.
+ * Края — у видимой части: у обрезанного клипа это края того, что осталось.
+ * Надписи не в счёт: их размер знает только окно.
+ */
+export function clipGuides(skip: string): { x: number[]; y: number[] } {
+  const state = useCompose.getState()
+  const at = state.playhead
+  const x: number[] = []
+  const y: number[] = []
+  for (const track of state.tracks) {
+    if (track.kind !== 'video' || track.muted) continue
+    for (const item of track.clips) {
+      if (item.id === skip || item.kind === 'text' || at < item.start || at >= item.start + item.duration) continue
+      const shown = shownAt(item, at)
+      const { w, h } = clipRect(shown, state.width, state.height)
+      const cl = shown.cropLeft ?? 0
+      const ct = shown.cropTop ?? 0
+      const cr = shown.cropRight ?? 0
+      const cb = shown.cropBottom ?? 0
+      const left = shown.x - w / 2 + w * cl
+      const right = shown.x + w / 2 - w * cr
+      const top = shown.y - h / 2 + h * ct
+      const bottom = shown.y + h / 2 - h * cb
+      x.push(left, (left + right) / 2, right)
+      y.push(top, (top + bottom) / 2, bottom)
+    }
+  }
+  return { x, y }
 }
 
 /** Насколько близко надо подвести, чтобы прилипло. Доля кадра. */
@@ -178,21 +211,27 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       if (!current) return
       const state = useCompose.getState()
       const guides = guidesOf(grid)
+      // К сетке и краям кадра — и к соседним клипам, по каждой оси свои.
+      const others = clipGuides(clip.id)
+      const guidesX = [...guides, ...others.x]
+      const guidesY = [...guides, ...others.y]
       const area = box.current?.parentElement?.getBoundingClientRect()
       if (!area) return
 
       if (current.kind === 'move') {
         // Прилипают и края клипа, и его середина: выравнивают то по краю
         // кадра, то по его центру, и заранее не угадать, что человеку нужно.
-        const shiftX = stick(
+        // Замок направления оставляет на месте запертую ось.
+        const axis = moveAxis()
+        const shiftX = axis === 'y' ? 0 : stick(
           [current.vx - current.w / 2, current.vx, current.vx + current.w / 2],
           (event.clientX - current.fromX) / current.frameW,
-          guides,
+          guidesX,
         )
-        const shiftY = stick(
+        const shiftY = axis === 'x' ? 0 : stick(
           [current.vy - current.h / 2, current.vy, current.vy + current.h / 2],
           (event.clientY - current.fromY) / current.frameH,
-          guides,
+          guidesY,
         )
         state.placeClip(
           clip.id,
@@ -211,8 +250,8 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
         // попасть в её линию на глаз почти невозможно, а подогнать размер под
         // разметку хочется чаще всего.
         const shape = current.ratio || 1
-        const stuckX = atX + stick([atX], 0, guides)
-        const stuckY = atY + stick([atY], 0, guides)
+        const stuckX = atX + stick([atX], 0, guidesX)
+        const stuckY = atY + stick([atY], 0, guidesY)
         const w = Math.max(
           MIN_SIZE,
           Math.max(Math.abs(stuckX - current.anchorX), Math.abs(stuckY - current.anchorY) / shape),
@@ -241,7 +280,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
       // Край тянет одну сторону: с этого мгновения у клипа своя форма, и
       // высоту надо хранить отдельно. Противоположный край не двигается.
       if (current.side === 'x') {
-        const edge = atX + stick([atX], 0, guides)
+        const edge = atX + stick([atX], 0, guidesX)
         const size = Math.max(MIN_SIZE, Math.abs(edge - current.anchor))
         const right = edge >= current.anchor ? 1 : -1
         state.placeClip(
@@ -249,7 +288,7 @@ export function ComposeFrameBox({ clip, grid }: { clip: ComposeClip; grid: GridK
           clampPlace({ size, sizeY: tall, x: current.anchor + (right * size) / 2 }),
         )
       } else {
-        const edge = atY + stick([atY], 0, guides)
+        const edge = atY + stick([atY], 0, guidesY)
         const sizeY = Math.max(MIN_SIZE, Math.abs(edge - current.anchor))
         const down = edge >= current.anchor ? 1 : -1
         state.placeClip(

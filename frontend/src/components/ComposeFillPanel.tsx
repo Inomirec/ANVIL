@@ -2,6 +2,7 @@ import { PlaceFields } from './ComposeAnimUi'
 import { useState } from 'react'
 import { EFFECT_PIXELS, effectDefaults, useCompose, type ComposeClip } from '../composeStore'
 import { ColorSquare, EffectSection, SliderNumber } from './ComposeTextPanel'
+import { MaskCard } from './ComposeClipPanel'
 
 /**
  * Настройки заливки — в правой колонке, пока заливка выделена.
@@ -177,6 +178,9 @@ export function ComposeFillPanel({ clip }: { clip: ComposeClip }) {
           />
         </div>
       </EffectSection>
+
+      {/* Маска даёт заливке сложную форму: овал, свой контур по точкам. */}
+      <MaskCard clip={clip} mask={clip.mask ?? null} />
     </div>
   )
 }

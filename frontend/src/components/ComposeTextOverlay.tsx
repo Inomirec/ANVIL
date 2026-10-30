@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { fitQuotesInPlace } from '../lib/quotes'
 import { TEXT_DEFAULTS, useCompose, type ComposeClip } from '../composeStore'
-import { guidesOf, stick, type GridKind } from './ComposeFrameBox'
+import { clipGuides, guidesOf, stick, type GridKind } from './ComposeFrameBox'
+import { moveAxis } from '../lib/moveAxis'
 
 /**
  * Надпись прямо на экране просмотра: её печатают и двигают на месте.
@@ -248,12 +249,18 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
             ? [held.x - width, held.x - width / 2, held.x]
             : [held.x - width / 2, held.x, held.x + width / 2]
       const guides = guidesOf(grid)
-      const shiftX = stick(across, (event.clientX - held.fromX) / area.width, guides)
-      const shiftY = stick(
-        [held.y - height / 2, held.y, held.y + height / 2],
-        (event.clientY - held.fromY) / area.height,
-        guides,
-      )
+      const others = clipGuides(clip.id)
+      const axis = moveAxis()
+      const shiftX =
+        axis === 'y' ? 0 : stick(across, (event.clientX - held.fromX) / area.width, [...guides, ...others.x])
+      const shiftY =
+        axis === 'x'
+          ? 0
+          : stick(
+              [held.y - height / 2, held.y, held.y + height / 2],
+              (event.clientY - held.fromY) / area.height,
+              [...guides, ...others.y],
+            )
       // Через ключи: у надписи с часиками положения правка ляжет в ключ
       // под иглой.
       useCompose.getState().applyValues(clip.id, {
