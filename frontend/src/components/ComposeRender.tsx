@@ -492,10 +492,10 @@ export function ComposeRenderPanel({
       </div>
     </Section>
 
-    {/* Видео и звук — одним разделом, как «Кодеки» в медиатеке: свернул —
+    {/* Видео и звук — одним разделом, как «Ручные настройки» в медиатеке: свернул —
         исчезло всё разом, а в колонке на одну строку заголовка меньше. */}
     <Section
-      title="Кодеки"
+      title="Ручные настройки"
       id="compose.codecs"
       summary={`${
         value.audioOnly ? 'без видео' : VIDEO_CODECS.find((item) => item.value === value.videoCodec)?.label ?? value.videoCodec

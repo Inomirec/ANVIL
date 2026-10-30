@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import Callable
 
-_bring_to_front: Callable[[], None] | None = None
+_bring_to_front: Callable[[], bool] | None = None
 
 
-def register(callback: Callable[[], None]) -> None:
+def register(callback: Callable[[], bool]) -> None:
     """Запоминает, как показать окно. Зовётся при его создании."""
     global _bring_to_front
     _bring_to_front = callback
@@ -28,5 +28,5 @@ def show() -> bool:
     """Поднимает окно на передний план. False — показывать нечего."""
     if _bring_to_front is None:
         return False
-    _bring_to_front()
-    return True
+    # False — окна уже нет (копия застряла на выходе и сейчас завершится).
+    return _bring_to_front() is not False

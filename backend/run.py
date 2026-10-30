@@ -137,9 +137,20 @@ def show_running_instance(host: str, port: int) -> bool:
         return False
 
 
-def bring_to_front(window) -> None:
-    """Разворачивает окно и кладёт его поверх остальных."""
+def bring_to_front(window) -> bool:
+    """Разворачивает окно и кладёт его поверх остальных.
+
+    Окно уже закрыто, а процесс почему-то жив — значит, эта копия застряла на
+    выходе и только держит порт: новый запуск видит «уже запущено» и ничего
+    не открывает. Такая копия завершается сама, а вторая получает «нет» и
+    открывает программу как обычно.
+    """
     log = logging.getLogger("sigame-helper")
+    form = getattr(window, "native", None)
+    if sys.platform == "win32" and form is not None and bool(getattr(form, "IsDisposed", False)):
+        log.warning("окно уже закрыто, а программа не завершилась — завершаю её")
+        threading.Timer(0.5, lambda: os._exit(0)).start()
+        return False
     with contextlib.suppress(Exception):
         window.restore()
     with contextlib.suppress(Exception):
@@ -161,6 +172,7 @@ def bring_to_front(window) -> None:
         log.info("окно поднято по просьбе второй копии")
     except Exception:
         log.warning("не удалось поднять окно", exc_info=True)
+    return True
 
 
 def wait_until_up(host: str, port: int, timeout: float = 20.0) -> bool:
@@ -195,6 +207,8 @@ def run_server(host: str, port: int, *, log_level: str = "info"):
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="uvicorn", daemon=True)
     thread.start()
+    # Выходу нужно дождаться сервера — держим поток при нём.
+    server.sgh_thread = thread  # type: ignore[attr-defined]
     return server
 
 
@@ -535,9 +549,17 @@ def main() -> int:
     # затрёт чужие изменения. Показываем уже открытое окно и выходим.
     if not args.headless and running_instance(args.host, args.port):
         print("SiGame Helper уже запущен — показываю его окно.")
-        if not show_running_instance(args.host, args.port):
+        if show_running_instance(args.host, args.port):
+            return 0
+        # Окна у прежней копии нет: она застряла на выходе и сейчас
+        # завершается сама. Ждём, пока освободит порт, и открываемся.
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and running_instance(args.host, args.port):
+            time.sleep(0.3)
+        if running_instance(args.host, args.port):
             print("Окно не отвечает. Возможно, программа запущена без окна.")
-        return 0
+            return 0
+        print("Прежняя копия завершилась — открываю программу заново.")
 
     # Данные живут в папке программы. Прежние версии держали их в профиле
     # пользователя — переносим один раз, когда старая копия уже закрыта.
@@ -584,6 +606,17 @@ def main() -> int:
         server.should_exit = True
         with contextlib.suppress(Exception):
             time.sleep(0.5)
+    if args.window:
+        # Окно закрыто — процесс обязан уйти. Обычный выход ждёт все фоновые
+        # потоки, и один зависший (запрос к сайту, чтение потока) держал
+        # процесс живым с занятым портом: следующий запуск видел «уже
+        # запущено» и не открывал ничего. Даём серверу пару секунд закончить
+        # работу — остановить кодировщики и дописать журнал, — и выходим.
+        thread = getattr(server, "sgh_thread", None)
+        if thread is not None:
+            thread.join(timeout=5)
+        logging.shutdown()
+        os._exit(0)
     return 0
 
 

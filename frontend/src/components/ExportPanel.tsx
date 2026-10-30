@@ -858,7 +858,7 @@ function ManualSection({
 
   return (
     <Section
-      title="Кодеки"
+      title="Ручные настройки"
       id="export.manual"
       defaultFolded
       summary={`${known?.label ?? codec} · ${audioSummary}`}
