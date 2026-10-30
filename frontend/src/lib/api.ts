@@ -126,6 +126,8 @@ export const api = {
   composeFindNear: (folder: string, sources: string[]) =>
     post<{ found: Record<string, string> }>('/api/compose/find-near', { folder, sources }),
   reveal: (path: string) => post<{ ok: boolean }>('/api/settings/reveal', { path }),
+  /** Поиск по тексту ошибки в браузере человека. */
+  searchWeb: (query: string) => post<{ ok: boolean }>('/api/settings/search-web', { query }),
 
   library: (params: { root?: string; kind?: string; search?: string; recursive?: boolean }) => {
     const query = new URLSearchParams()
@@ -143,10 +145,12 @@ export const api = {
       `/api/library/waveform?path=${encodeURIComponent(path)}` +
         (buckets ? `&buckets=${Math.round(buckets)}` : ''),
     ),
-  filmstrip: (path: string, frames?: number) =>
-    request<FilmstripInfo>(`/api/library/filmstrip?path=${encodeURIComponent(path)}${frames ? `&frames=${frames}` : ''}`),
-  scenes: (path: string, large = false) =>
-    request<SceneInfo>(`/api/library/scenes?path=${encodeURIComponent(path)}${large ? '&large=1' : ''}`),
+  filmstrip: (path: string, frames?: number, height?: number) =>
+    request<FilmstripInfo>(
+      `/api/library/filmstrip?path=${encodeURIComponent(path)}${frames ? `&frames=${frames}` : ''}${height ? `&height=${height}` : ''}`,
+    ),
+  scenes: (path: string, size: 'small' | 'normal' | 'large' = 'normal') =>
+    request<SceneInfo>(`/api/library/scenes?path=${encodeURIComponent(path)}&size=${size}`),
   deleteFile: (path: string) => post<{ ok: boolean }>('/api/library/delete', { path }),
   renameFile: (path: string, newName: string) =>
     post<{ ok: boolean; path: string }>('/api/library/rename', { path, new_name: newName }),

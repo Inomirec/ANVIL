@@ -15,6 +15,7 @@ import {
   Tags,
   Trash2,
   X,
+  ZoomIn,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
@@ -24,7 +25,7 @@ import { useStore } from '../store'
 import { Choice } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
 import { LinkPreview } from './LinkPreview'
-import { Button, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
+import { Button, MarkIcons, Modal, QuietHints, Section, Segmented, Toggle } from './ui'
 
 /**
  * Обработка пресетом сразу после скачивания — выключена. Качество и кодек
@@ -37,6 +38,22 @@ import { Button, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
 const PRESETS_AFTER_DOWNLOAD = false
 
 type Container = 'mp4' | 'mkv' | 'webm' | 'auto'
+type Sound = 'any' | 'aac' | 'opus'
+
+const SOUNDS: { value: Sound; label: string; title: string }[] = [
+  { value: 'any', label: 'Лучший', title: 'Звук, который сайт отдаёт к видео. В MP4 — AAC, в MKV и WebM обычно Opus' },
+  { value: 'aac', label: 'AAC', title: 'Открывается везде, в том числе в монтажных программах и старых плеерах' },
+  { value: 'opus', label: 'Opus', title: 'Чуть лучше звучит при том же весе, но старые программы и монтажные его не всегда открывают' },
+]
+
+/** Битрейт при скачивании одного звука. «Лучшее» — сколько даёт сайт. */
+const AUDIO_QUALITIES = [
+  { value: '0', label: 'Лучшее', title: 'Сколько даёт сайт, без потерь при перекодировании' },
+  { value: '320', label: '320 кбит/с' },
+  { value: '192', label: '192 кбит/с' },
+  { value: '128', label: '128 кбит/с' },
+  { value: '96', label: '96 кбит/с' },
+]
 type Codec = 'any' | 'h264' | 'av1'
 
 /** Предел качества при скачивании. Больше исходника сайт всё равно не даст. */
@@ -58,7 +75,11 @@ const CONTAINERS: { value: Container; label: string; title: string }[] = [
 ]
 
 const CODECS: { value: Codec; label: string; title: string }[] = [
-  { value: 'any', label: 'Лучший', title: 'Лучшее качество, какое есть у сайта. У YouTube это обычно AV1' },
+  {
+    value: 'any',
+    label: 'Лучший',
+    title: 'Самое большое разрешение, каким бы кодеком оно ни было. У YouTube это обычно AV1, у части роликов — VP9 (бывает крупнее AV1, если тот есть только в меньшем размере), у других сайтов — чаще всего H.264',
+  },
   {
     value: 'h264',
     label: 'H.264',
@@ -109,7 +130,13 @@ export function DownloadPanel() {
   const [processSubfolder, setProcessSubfolder] = useState(() => loadPrefs().downloadSubfolder ?? true)
   // H.264 в WebM не кладётся — тогда собираем в MP4.
   const shownContainer: Container = container === 'webm' && codec === 'h264' ? 'mp4' : container
-  const [audioFormat, setAudioFormat] = useState<'opus' | 'mp3' | 'm4a' | 'best'>('opus')
+  const [audioFormat, setAudioFormat] = useState<'opus' | 'mp3' | 'm4a' | 'best'>(
+    () => loadPrefs().downloadAudioFormat ?? 'opus',
+  )
+  const [audioQuality, setAudioQuality] = useState(() => loadPrefs().downloadAudioQuality ?? 0)
+  const [sound, setSound] = useState<Sound>(() => loadPrefs().downloadSound ?? 'any')
+  // Увеличенная картинка поста — чтобы разглядеть, прежде чем выбрать.
+  const [zoomed, setZoomed] = useState<string | null>(null)
   const [autoPreset, setAutoPreset] = useState('')
   const [busy, setBusy] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -283,6 +310,8 @@ export function DownloadPanel() {
   const downloadOptions = {
     container: shownContainer,
     video_codec: codec,
+    audio_codec: sound,
+    audio_quality: audioFormat === 'best' ? 0 : audioQuality,
     keep_original: keepOriginal,
     process_subfolder: processSubfolder,
   }
@@ -495,6 +524,17 @@ export function DownloadPanel() {
                   <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[10px] font-semibold">
                     {item.index}
                   </span>
+                  <span
+                    role="button"
+                    title="Увеличить"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setZoomed(item.url)
+                    }}
+                    className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded bg-black/70 text-white/80 hover:bg-black/90 hover:text-white"
+                  >
+                    <ZoomIn size={13} />
+                  </span>
                 </button>
               )
             })}
@@ -530,17 +570,32 @@ export function DownloadPanel() {
           </Section>
 
           {mode === 'audio' ? (
-            <Section title="Формат звука">
+            <Section title="Звук">
               <Segmented
                 value={audioFormat}
-                onChange={setAudioFormat}
+                onChange={(value) => {
+                  setAudioFormat(value)
+                  savePrefs({ downloadAudioFormat: value })
+                }}
                 options={[
                   { value: 'opus', label: 'Opus', title: 'Минимальный вес' },
                   { value: 'mp3', label: 'MP3', title: 'Совместимость со всем' },
                   { value: 'm4a', label: 'M4A', title: 'AAC в контейнере M4A' },
-                  { value: 'best', label: 'Авто', title: 'Оставить формат источника' },
+                  { value: 'best', label: 'Авто', title: 'Оставить формат источника — без перекодирования' },
                 ]}
               />
+              {audioFormat !== 'best' && (
+                <Choice
+                  label="Качество"
+                  hint="Битрейт звука после перевода в выбранный формат. Выше, чем отдаёт сайт, лучше не станет"
+                  value={String(audioQuality)}
+                  options={AUDIO_QUALITIES}
+                  onChange={(value) => {
+                    setAudioQuality(Number(value))
+                    savePrefs({ downloadAudioQuality: Number(value) })
+                  }}
+                />
+              )}
             </Section>
           ) : mode !== 'images' ? (
             <Section
@@ -584,6 +639,17 @@ export function DownloadPanel() {
                     savePrefs({ downloadCodec: value })
                   }}
                   options={CODECS}
+                />
+              </div>
+              <div>
+                <span className="label">Звук</span>
+                <Segmented<Sound>
+                  value={sound}
+                  onChange={(value) => {
+                    setSound(value)
+                    savePrefs({ downloadSound: value })
+                  }}
+                  options={SOUNDS}
                 />
               </div>
             </Section>
@@ -720,6 +786,17 @@ export function DownloadPanel() {
           await refreshSettings()
         }}
       />
+
+      <Modal open={Boolean(zoomed)} onClose={() => setZoomed(null)} title="Картинка поста" wide>
+        {zoomed && (
+          <img
+            src={zoomed}
+            alt=""
+            referrerPolicy="no-referrer"
+            className="mx-auto max-h-[70vh] max-w-full object-contain"
+          />
+        )}
+      </Modal>
 
       <LinkPreview
         url={previewUrl ?? ''}

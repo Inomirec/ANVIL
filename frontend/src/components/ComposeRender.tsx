@@ -492,17 +492,16 @@ export function ComposeRenderPanel({
       </div>
     </Section>
 
+    {/* Видео и звук — одним разделом, как «Кодеки» в медиатеке: свернул —
+        исчезло всё разом, а в колонке на одну строку заголовка меньше. */}
     <Section
-      title="Видео"
-      id="compose.video"
-      summary={
-        value.audioOnly
-          ? 'нет'
-          : `${VIDEO_CODECS.find((item) => item.value === value.videoCodec)?.label ?? value.videoCodec} · ${
-              byBitrate ? `${value.bitrateKbps} кбит/с` : qualityWord(value.videoCodec, value.crf)
-            }`
-      }
+      title="Кодеки"
+      id="compose.codecs"
+      summary={`${
+        value.audioOnly ? 'без видео' : VIDEO_CODECS.find((item) => item.value === value.videoCodec)?.label ?? value.videoCodec
+      } · ${sound.value === 'none' ? 'без звука' : sound.label}`}
     >
+      <span className="label">Видео</span>
       {/* «Нет» — собрать один звук: так же, как «Нет» у звука. */}
       <Segmented
         columns={4}
@@ -588,17 +587,8 @@ export function ComposeRenderPanel({
           />
         </div>
       )}
-    </Section>
 
-    <Section
-      title="Звук"
-      id="compose.audio"
-      summary={
-        sound.value === 'none'
-          ? 'нет'
-          : `${sound.label}${sound.max > 0 ? ` · ${value.audioBitrateKbps} кбит/с` : ''}`
-      }
-    >
+      <span className="label pt-1">Звук</span>
       <Segmented
         columns={value.audioOnly ? 4 : 5}
         value={sound.value}

@@ -615,9 +615,9 @@ function MaskCard({ clip, mask }: { clip: ComposeClip; mask: ClipMask | null }) 
           unit="%"
           reset={15}
           marks={[
-            { value: 0, label: 'резко' },
-            { value: 15, label: 'обычно' },
-            { value: 50, label: 'мягко' },
+            { value: 0, label: 'X', hint: 'резко' },
+            { value: 15, label: 'M', hint: 'обычно' },
+            { value: 50, label: 'H', hint: 'мягко' },
           ]}
           // Мягкость — часть ключей маски: часики у карточки.
           onChange={(next) => applyValues(clip.id, { 'mask.feather': next / 100 })}
@@ -794,7 +794,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                     step={param.step}
                     unit={param.unit ?? ''}
                     reset={Number(param.default)}
-                    marks={param.marks?.map(({ value, label }) => ({ value, label }))}
+                    marks={param.marks}
                     aside={<AnimClock clip={owner} group={field} />}
                     onChange={(next) => applyValues(clipId, { [field]: next })}
                   />
@@ -812,7 +812,7 @@ function EffectCard({ clipId, effect }: { clipId: string; effect: ClipEffect }) 
                 step={param.step}
                 unit={param.unit ?? ''}
                 reset={Number(param.default)}
-                marks={param.marks?.map(({ value, label }) => ({ value, label }))}
+                marks={param.marks}
                 onChange={(next) => updateEffect(clipId, effect.id, { params: { [param.key]: next } })}
               />
               </div>

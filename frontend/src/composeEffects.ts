@@ -32,8 +32,12 @@ export interface EffectParam {
   step?: number
   unit?: string
   default: number | string
-  /** Рекомендованные значения — подписи под шкалой. */
-  marks?: { value: number; label: string }[]
+  /**
+   * Рекомендованные значения — подписи под шкалой. Буквами, как в ручных
+   * настройках (L/M/H, S/M/L, X — нет), слово — в подсказке: словами
+   * подписи шли лесенкой в два ряда и занимали вдвое больше места.
+   */
+  marks?: { value: number; label: string; hint?: string }[]
   /** Может меняться по ключам — рядом с ползунком часики. Тот же список на
    *  сервере (``ANIMATABLE`` в ``core/effects.py``). */
   animatable?: boolean
@@ -56,10 +60,10 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Яркость, контраст, насыщенность и теплота цвета',
     params: [
-      { animatable: true, key: 'brightness', label: 'Яркость', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'темнее' }, { value: 0, label: '0' }, { value: 40, label: 'светлее' }] },
-      { animatable: true, key: 'contrast', label: 'Контраст', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'мягче' }, { value: 0, label: '0' }, { value: 30, label: 'сочнее' }] },
-      { animatable: true, key: 'saturation', label: 'Насыщенность', min: -100, max: 100, default: 0, marks: [{ value: -60, label: 'бледнее' }, { value: 0, label: '0' }, { value: 40, label: 'ярче' }] },
-      { animatable: true, key: 'temperature', label: 'Теплее / холоднее', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'холоднее' }, { value: 0, label: '0' }, { value: 40, label: 'теплее' }] },
+      { animatable: true, key: 'brightness', label: 'Яркость', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'L', hint: 'темнее' }, { value: 0, label: 'X', hint: 'как есть' }, { value: 40, label: 'H', hint: 'светлее' }] },
+      { animatable: true, key: 'contrast', label: 'Контраст', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'L', hint: 'мягче' }, { value: 0, label: 'X', hint: 'как есть' }, { value: 30, label: 'H', hint: 'сочнее' }] },
+      { animatable: true, key: 'saturation', label: 'Насыщенность', min: -100, max: 100, default: 0, marks: [{ value: -60, label: 'L', hint: 'бледнее' }, { value: 0, label: 'X', hint: 'как есть' }, { value: 40, label: 'H', hint: 'ярче' }] },
+      { animatable: true, key: 'temperature', label: 'Теплее / холоднее', min: -100, max: 100, default: 0, marks: [{ value: -40, label: 'L', hint: 'холоднее' }, { value: 0, label: 'X', hint: 'как есть' }, { value: 40, label: 'H', hint: 'теплее' }] },
     ],
   },
   {
@@ -92,7 +96,7 @@ export const EFFECTS: EffectKind[] = [
         fileTypes: ['LUT (*.cube)'],
         hint: 'Трёхмерный LUT в формате .cube',
       },
-      { key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'наполовину' }, { value: 100, label: 'полностью' }] },
+      { key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'M', hint: 'наполовину' }, { value: 100, label: 'H', hint: 'полностью' }] },
     ],
   },
   {
@@ -100,28 +104,28 @@ export const EFFECTS: EffectKind[] = [
     name: 'Чёрно-белое',
     target: 'video',
     hint: 'Убрать цвет — целиком или частично',
-    params: [{ animatable: true, key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'наполовину' }, { value: 100, label: 'полностью' }] }],
+    params: [{ animatable: true, key: 'strength', label: 'Сила', min: 0, max: 100, unit: '%', default: 100, marks: [{ value: 50, label: 'M', hint: 'наполовину' }, { value: 100, label: 'H', hint: 'полностью' }] }],
   },
   {
     type: 'blur',
     name: 'Размытие',
     target: 'video',
     hint: 'Размыть весь клип целиком',
-    params: [{ animatable: true, key: 'strength', label: 'Сила', min: 1, max: 80, default: 10, marks: [{ value: 5, label: 'чуть' }, { value: 22, label: 'заметно' }, { value: 50, label: 'сильно' }] }],
+    params: [{ animatable: true, key: 'strength', label: 'Сила', min: 1, max: 80, default: 10, marks: [{ value: 5, label: 'L', hint: 'чуть' }, { value: 22, label: 'M', hint: 'заметно' }, { value: 50, label: 'H', hint: 'сильно' }] }],
   },
   {
     type: 'denoise',
     name: 'Шумоподавление',
     target: 'video',
     hint: 'Убрать зерно с тёмной съёмки. Сильное — замыливает мелкие детали',
-    params: [{ key: 'strength', label: 'Сила', min: 1, max: 12, step: 0.5, default: 5, marks: [{ value: 2.5, label: 'слабо' }, { value: 5, label: 'обычно' }, { value: 9, label: 'сильно' }] }],
+    params: [{ key: 'strength', label: 'Сила', min: 1, max: 12, step: 0.5, default: 5, marks: [{ value: 2.5, label: 'L', hint: 'слабо' }, { value: 5, label: 'M', hint: 'обычно' }, { value: 9, label: 'H', hint: 'сильно' }] }],
   },
   {
     type: 'pixelate',
     name: 'Пикселизация',
     target: 'video',
     hint: 'Крупные квадраты вместо картинки',
-    params: [{ animatable: true, key: 'size', label: 'Размер квадрата', min: 2, max: 80, unit: 'px', default: 30, marks: [{ value: 6, label: 'мелко' }, { value: 30, label: 'обычно' }, { value: 70, label: 'крупно' }] }],
+    params: [{ animatable: true, key: 'size', label: 'Размер квадрата', min: 2, max: 80, unit: 'px', default: 30, marks: [{ value: 6, label: 'S', hint: 'мелко' }, { value: 30, label: 'M', hint: 'обычно' }, { value: 70, label: 'L', hint: 'крупно' }] }],
   },
   {
     type: 'chromakey',
@@ -130,8 +134,8 @@ export const EFFECTS: EffectKind[] = [
     hint: 'Сделать прозрачным фон одного цвета — зелёный или синий экран',
     params: [
       { key: 'color', label: 'Цвет фона', kind: 'color', default: '#00ff00' },
-      { key: 'similarity', label: 'Насколько похожий цвет убирать', min: 1, max: 60, default: 20, marks: [{ value: 6, label: 'строго' }, { value: 20, label: 'обычно' }, { value: 40, label: 'широко' }] },
-      { key: 'blend', label: 'Мягкость края', min: 0, max: 40, default: 5, marks: [{ value: 0, label: 'резко' }, { value: 12, label: 'мягко' }, { value: 30, label: 'размыто' }] },
+      { key: 'similarity', label: 'Насколько похожий цвет убирать', min: 1, max: 60, default: 20, marks: [{ value: 6, label: 'L', hint: 'строго' }, { value: 20, label: 'M', hint: 'обычно' }, { value: 40, label: 'H', hint: 'широко' }] },
+      { key: 'blend', label: 'Мягкость края', min: 0, max: 40, default: 5, marks: [{ value: 0, label: 'X', hint: 'резко' }, { value: 12, label: 'M', hint: 'мягко' }, { value: 30, label: 'H', hint: 'размыто' }] },
     ],
   },
   {
@@ -140,8 +144,8 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Вместо чёрных полос по бокам — та же картинка, растянутая и размытая',
     params: [
-      { key: 'strength', label: 'Размытие', min: 5, max: 80, default: 32, marks: [{ value: 12, label: 'легко' }, { value: 32, label: 'обычно' }, { value: 60, label: 'сильно' }] },
-      { key: 'dim', label: 'Затемнение', min: 0, max: 80, unit: '%', default: 20, marks: [{ value: 0, label: 'нет' }, { value: 20, label: 'обычно' }, { value: 50, label: 'сильно' }] },
+      { key: 'strength', label: 'Размытие', min: 5, max: 80, default: 32, marks: [{ value: 12, label: 'L', hint: 'легко' }, { value: 32, label: 'M', hint: 'обычно' }, { value: 60, label: 'H', hint: 'сильно' }] },
+      { key: 'dim', label: 'Затемнение', min: 0, max: 80, unit: '%', default: 20, marks: [{ value: 0, label: 'X', hint: 'нет' }, { value: 20, label: 'M', hint: 'обычно' }, { value: 50, label: 'H', hint: 'сильно' }] },
     ],
   },
   {
@@ -170,7 +174,7 @@ export const EFFECTS: EffectKind[] = [
         max: 10,
         default: 8,
         hint: 'Чем выше, тем резче тряска, которую программа ищет. Меняется долго: ролик изучается заново',
-        marks: [{ value: 2, label: 'чуть' }, { value: 5, label: 'средне' }, { value: 8, label: 'обычно' }, { value: 10, label: 'очень' }],
+        marks: [{ value: 2, label: 'L', hint: 'чуть' }, { value: 5, label: 'M', hint: 'средне' }, { value: 8, label: 'H', hint: 'обычно' }, { value: 10, label: 'H+', hint: 'очень' }],
       },
       {
         key: 'smoothing',
@@ -179,7 +183,7 @@ export const EFFECTS: EffectKind[] = [
         max: 60,
         default: 18,
         hint: 'Сколько кадров сглаживать. Мало — камера двигается как была, только без мелкой дрожи; много — плывёт плавно',
-        marks: [{ value: 5, label: 'слабо' }, { value: 18, label: 'обычно' }, { value: 35, label: 'плавно' }, { value: 55, label: 'очень' }],
+        marks: [{ value: 5, label: 'L', hint: 'слабо' }, { value: 18, label: 'M', hint: 'обычно' }, { value: 35, label: 'H', hint: 'плавно' }, { value: 55, label: 'H+', hint: 'очень' }],
       },
       {
         key: 'tripod',
@@ -207,7 +211,7 @@ export const EFFECTS: EffectKind[] = [
         unit: '%',
         default: 0,
         hint: 'Дополнительно к приближению выше — если по краям всё ещё что-то видно',
-        marks: [{ value: 0, label: 'нет' }, { value: 5, label: '+5%' }, { value: 15, label: '+15%' }],
+        marks: [{ value: 0, label: 'X', hint: 'нет' }, { value: 5, label: 'M', hint: '+5%' }, { value: 15, label: 'H', hint: '+15%' }],
       },
       {
         key: 'maxAngle',
@@ -218,7 +222,7 @@ export const EFFECTS: EffectKind[] = [
         unit: '°',
         default: 3,
         hint: 'Насколько можно наклонять кадр, выравнивая его. Если картинку «водит» и гнёт — уменьшите',
-        marks: [{ value: 0, label: 'не наклонять' }, { value: 3, label: 'обычно' }, { value: 15, label: 'без предела' }],
+        marks: [{ value: 0, label: 'X', hint: 'не наклонять' }, { value: 3, label: 'M', hint: 'обычно' }, { value: 15, label: 'H', hint: 'без предела' }],
       },
       {
         key: 'keepEdges',
@@ -234,21 +238,21 @@ export const EFFECTS: EffectKind[] = [
     name: 'Усиление громкости',
     target: 'audio',
     hint: 'Сделать этот клип громче. Шторка на клипе только приглушает, а усиление всей дорожки задевает и остальные клипы на ней',
-    params: [{ key: 'db', label: 'Насколько громче', min: 0, max: 20, step: 0.5, unit: 'дБ', default: 6, marks: [{ value: 3, label: 'чуть' }, { value: 6, label: 'заметно' }, { value: 12, label: 'сильно' }] }],
+    params: [{ key: 'db', label: 'Насколько громче', min: 0, max: 20, step: 0.5, unit: 'дБ', default: 6, marks: [{ value: 3, label: 'L', hint: 'чуть' }, { value: 6, label: 'M', hint: 'заметно' }, { value: 12, label: 'H', hint: 'сильно' }] }],
   },
   {
     type: 'voice_denoise',
     name: 'Шумоподавление голоса',
     target: 'audio',
     hint: 'Убрать гул и шипение из записи с микрофона',
-    params: [{ key: 'strength', label: 'Сила', min: 1, max: 40, unit: 'дБ', default: 15, marks: [{ value: 5, label: 'слабо' }, { value: 15, label: 'обычно' }, { value: 30, label: 'сильно' }] }],
+    params: [{ key: 'strength', label: 'Сила', min: 1, max: 40, unit: 'дБ', default: 15, marks: [{ value: 5, label: 'L', hint: 'слабо' }, { value: 15, label: 'M', hint: 'обычно' }, { value: 30, label: 'H', hint: 'сильно' }] }],
   },
   {
     type: 'leveler',
     name: 'Выравнивание громкости',
     target: 'audio',
     hint: 'Тихие места громче, громкие тише — внутри этого клипа',
-    params: [{ key: 'strength', label: 'Насколько подтягивать тихое', min: 1, max: 30, default: 12, marks: [{ value: 4, label: 'слегка' }, { value: 12, label: 'обычно' }, { value: 22, label: 'сильно' }] }],
+    params: [{ key: 'strength', label: 'Насколько подтягивать тихое', min: 1, max: 30, default: 12, marks: [{ value: 4, label: 'L', hint: 'слегка' }, { value: 12, label: 'M', hint: 'обычно' }, { value: 22, label: 'H', hint: 'сильно' }] }],
   },
   {
     type: 'echo',
@@ -256,8 +260,8 @@ export const EFFECTS: EffectKind[] = [
     target: 'audio',
     hint: 'Повтор звука с задержкой',
     params: [
-      { key: 'delay', label: 'Задержка', min: 20, max: 1500, step: 10, unit: 'мс', default: 300, marks: [{ value: 150, label: 'комната' }, { value: 500, label: 'зал' }, { value: 1100, label: 'горы' }] },
-      { key: 'decay', label: 'Громкость повтора', min: 5, max: 90, unit: '%', default: 40, marks: [{ value: 20, label: 'тихо' }, { value: 40, label: 'обычно' }, { value: 70, label: 'громко' }] },
+      { key: 'delay', label: 'Задержка', min: 20, max: 1500, step: 10, unit: 'мс', default: 300, marks: [{ value: 150, label: 'S', hint: 'комната' }, { value: 500, label: 'M', hint: 'зал' }, { value: 1100, label: 'L', hint: 'горы' }] },
+      { key: 'decay', label: 'Громкость повтора', min: 5, max: 90, unit: '%', default: 40, marks: [{ value: 20, label: 'L', hint: 'тихо' }, { value: 40, label: 'M', hint: 'обычно' }, { value: 70, label: 'H', hint: 'громко' }] },
     ],
   },
 ]

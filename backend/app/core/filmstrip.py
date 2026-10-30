@@ -32,18 +32,19 @@ class Filmstrip:
     frames: int
     tile_width: int
     tile_height: int
+    duration: float = 0.0
 
 
 def cache_dir() -> Path:
     return data_dir() / "filmstrips"
 
 
-def _cache_path(source: Path, frames: int) -> Path:
+def _cache_path(source: Path, frames: int, height: int = TILE_HEIGHT) -> Path:
     try:
         stat = source.stat()
-        signature = f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{frames}|{TILE_HEIGHT}"
+        signature = f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{frames}|{height}"
     except OSError:
-        signature = f"{source}|{frames}"
+        signature = f"{source}|{frames}|{height}"
     return cache_dir() / f"{hashlib.sha1(signature.encode('utf-8')).hexdigest()}.jpg"
 
 
@@ -51,10 +52,14 @@ def _meta_path(sprite: Path) -> Path:
     return sprite.with_suffix(".txt")
 
 
-async def build(source: Path, frames: int = DEFAULT_FRAMES) -> Filmstrip | None:
-    """Готовит (или достаёт из кэша) ленту кадров для видеофайла."""
+async def build(source: Path, frames: int = DEFAULT_FRAMES, height: int = TILE_HEIGHT) -> Filmstrip | None:
+    """Готовит (или достаёт из кэша) ленту кадров для видеофайла.
+
+    ``height`` — высота кадра: 36 для «Низкого качества», 72 — обычная.
+    """
     frames = max(4, min(frames, MAX_FRAMES))
-    sprite = _cache_path(source, frames)
+    height = 36 if height < 54 else TILE_HEIGHT
+    sprite = _cache_path(source, frames, height)
     meta = _meta_path(sprite)
 
     if sprite.exists() and meta.exists():
@@ -75,7 +80,7 @@ async def build(source: Path, frames: int = DEFAULT_FRAMES) -> Filmstrip | None:
             return None
 
         aspect = video.width / video.height
-        tile_width = max(2, int(round(TILE_HEIGHT * aspect / 2)) * 2)
+        tile_width = max(2, int(round(height * aspect / 2)) * 2)
 
         # Раскладываем кадры равномерно по всей длительности.
         rate = frames / info.duration
@@ -93,7 +98,7 @@ async def build(source: Path, frames: int = DEFAULT_FRAMES) -> Filmstrip | None:
             "-i", str(source),
             "-an", "-sn",
             "-vf",
-            f"fps={rate:.6f},scale={tile_width}:{TILE_HEIGHT}:flags=fast_bilinear,"
+            f"fps={rate:.6f},scale={tile_width}:{height}:flags=fast_bilinear,"
             f"tile={frames}x1:padding=0:margin=0",
             "-frames:v", "1",
             "-q:v", "4",
@@ -114,17 +119,19 @@ async def build(source: Path, frames: int = DEFAULT_FRAMES) -> Filmstrip | None:
             # пробуем ещё раз с тем количеством, которое реально помещается.
             message = err.decode("utf-8", "replace")[:200]
             if frames > 8:
-                return await build(source, frames // 2)
+                return await build(source, frames // 2, height)
             raise RuntimeError(message or "ffmpeg не смог собрать ленту кадров")
 
-        meta.write_text(f"{frames} {tile_width} {TILE_HEIGHT}", encoding="utf-8")
-        return Filmstrip(sprite, frames, tile_width, TILE_HEIGHT)
+        meta.write_text(f"{frames} {tile_width} {height} {info.duration}", encoding="utf-8")
+        return Filmstrip(sprite, frames, tile_width, height, info.duration)
 
 
-def _read_meta(meta: Path) -> tuple[int, int, int] | None:
+def _read_meta(meta: Path) -> tuple[int, int, int, float] | None:
+    # Прежние записи без длины ролика — как будто их нет: лента соберётся
+    # заново, уже с длиной.
     try:
         parts = meta.read_text("utf-8").split()
-        return int(parts[0]), int(parts[1]), int(parts[2])
+        return int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3])
     except (OSError, ValueError, IndexError):
         return None
 

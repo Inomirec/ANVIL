@@ -286,6 +286,10 @@ class DownloadRequest(BaseModel):
     container: Literal["mp4", "mkv", "webm", "auto"] | None = None
     #: Какой кодек видео брать, если у сайта их несколько. ``any`` — лучший.
     video_codec: Literal["any", "h264", "av1"] = "any"
+    #: Какой звук брать к видео. Opus не все программы открывают в MP4.
+    audio_codec: Literal["any", "aac", "opus"] = "any"
+    #: Битрейт звука при скачивании одного звука, кбит/с. 0 — лучшее.
+    audio_quality: int = Field(default=0, ge=0, le=512)
     #: После обработки пресетом: оставить ли скачанный оригинал. Нет — он
     #: уходит в корзину, когда сжатый файл готов.
     keep_original: bool = True

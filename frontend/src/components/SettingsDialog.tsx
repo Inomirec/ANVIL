@@ -689,7 +689,10 @@ function CookiesField() {
  */
 function TimelineFrames() {
   const [mode, setMode] = useState(() => loadPrefs().timelineFrames ?? 'scenes')
-  const [quality, setQuality] = useState(() => loadPrefs().timelineQuality ?? 'normal')
+  // Прежнее «normal» значило обычные кадры — то же, что теперь «хорошее».
+  const [quality, setQuality] = useState<'low' | 'high'>(() =>
+    loadPrefs().timelineQuality === 'low' ? 'low' : 'high',
+  )
   return (
     <div className="space-y-2">
       <Segmented<'scenes' | 'sparse' | 'off'>
@@ -713,15 +716,15 @@ function TimelineFrames() {
         ]}
       />
       {mode !== 'off' && (
-        <Segmented<'normal' | 'high'>
+        <Segmented<'low' | 'high'>
           value={quality}
           onChange={(value) => {
             setQuality(value)
             savePrefs({ timelineQuality: value })
           }}
           options={[
-            { value: 'normal', label: 'Плохое качество', title: 'Мелкие кадры: быстрее готовятся и меньше весят' },
-            { value: 'high', label: 'Хорошее качество', title: 'Кадры крупнее и чётче. По склейкам их выйдет меньше, а готовятся они дольше' },
+            { value: 'low', label: 'Низкое качество', title: 'Кадры вдвое мельче дорожки: мягче на вид, зато готовятся быстрее и почти не занимают памяти' },
+            { value: 'high', label: 'Хорошее качество', title: 'Кадры во всю высоту дорожки, на растянутой дорожке в монтаже — ещё крупнее' },
           ]}
         />
       )}

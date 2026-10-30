@@ -556,21 +556,54 @@ def submit_download(request: DownloadRequest, item: DownloadItem) -> Job:
     async def runner(ctx: JobContext) -> None:
         mode = request.mode
         if mode == "auto":
-            mode = "images" if download.looks_like_gallery(url) else "video"
+            images = download.looks_like_gallery(url) or download.looks_like_image(url)
+            mode = "images" if images else "video"
+        if mode in {"video", "audio"} and download.looks_like_image(url):
+            # Иначе yt-dlp честно «скачивал видео» из картинки: выходил ролик с
+            # чёрным экраном, а со звуком — непонятная ошибка ffprobe.
+            raise RuntimeError(
+                "По ссылке картинка, а не видео. Выберите вверху «Кадры» или «Авто» "
+                "и скачайте её снова."
+            )
         # «Картинки» по ссылке на видео — это его превью: галерей на
         # видеохостинге не бывает, и gallery-dl ответил бы ошибкой.
         if mode == "images" and download.looks_like_video(url):
             mode = "thumbnail"
-        extra = {"container": request.container, "video_codec": request.video_codec}
+        extra = {
+            "container": request.container,
+            "video_codec": request.video_codec,
+            "audio_codec": request.audio_codec,
+            "audio_quality": request.audio_quality,
+        }
 
         files: list[Path] = []
         if mode == "thumbnail":
             files = await download.run_ytdlp(ctx, url, target, mode="thumbnail")
         elif mode == "images":
             try:
-                files = await download.run_gallery_dl(
-                    ctx, url, target, selection=request.selection
-                )
+                try:
+                    files = await download.run_gallery_dl(
+                        ctx, url, target, selection=request.selection
+                    )
+                except RuntimeError as exc:
+                    # Сайт gallery-dl не знает (Pikabu и подобные) — берём
+                    # картинки со страницы сами и качаем их прямыми ссылками.
+                    pictures = (
+                        await asyncio.to_thread(download.page_images, url)
+                        if "unsupported url" in str(exc).lower()
+                        else []
+                    )
+                    if request.selection:
+                        pictures = [
+                            picture for index, picture in enumerate(pictures, start=1)
+                            if index in request.selection
+                        ]
+                    if not pictures:
+                        raise
+                    ctx.log(f"Сайт gallery-dl не знает — беру картинки со страницы: {len(pictures)}")
+                    files = []
+                    for picture in pictures:
+                        files += await download.run_gallery_dl(ctx, picture, target)
             except RuntimeError as exc:
                 if request.mode != "auto":
                     raise

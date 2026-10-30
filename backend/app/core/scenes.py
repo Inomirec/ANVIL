@@ -38,6 +38,17 @@ COLUMNS = 32
 #: Больше кадров не берём: сетка стала бы слишком тяжёлой.
 MAX_FRAMES = 1500
 
+#: Мелкие кадры — «Низкое качество» в настройках: вдвое ниже дорожки,
+#: заметно мягче и в разы легче.
+SMALL_HEIGHT = 36
+
+#: Размеры кадров по имени: высота плитки и сколько кадров не больше.
+SIZES = {
+    "small": (SMALL_HEIGHT, MAX_FRAMES),
+    "normal": (TILE_HEIGHT, MAX_FRAMES),
+    "large": (LARGE_HEIGHT, LARGE_FRAMES),
+}
+
 #: Насколько кадр должен отличаться от предыдущего, чтобы считаться склейкой.
 THRESHOLD = 0.3
 
@@ -127,13 +138,14 @@ async def _run(args: list[str]) -> tuple[int, str]:
     return process.returncode or 0, err.decode("utf-8", "replace")
 
 
-async def build(source: Path, large: bool = False) -> Scenes | None:
+async def build(source: Path, size: str = "normal") -> Scenes | None:
     """Находит склейки и собирает сетку кадров (или берёт из кэша).
 
-    ``large`` — кадры покрупнее, для растянутой дорожки.
+    ``size`` — ``small``, ``normal`` или ``large`` (`SIZES`): мелкие для
+    «Низкого качества», крупные — для растянутой дорожки.
     """
-    tile_height = LARGE_HEIGHT if large else TILE_HEIGHT
-    limit = LARGE_FRAMES if large else MAX_FRAMES
+    tile_height, limit = SIZES.get(size, SIZES["normal"])
+    large = size == "large"
     sprite = cache_dir() / f"{_key(source, tile_height)}.jpg"
     ready = _load(sprite)
     if ready:

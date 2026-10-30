@@ -4,12 +4,14 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Copy,
   Download,
   FolderOpen,
   Columns2,
   Image as ImageIcon,
   Loader2,
   ScrollText,
+  Search,
   PanelBottomClose,
   PanelBottomOpen,
   Trash2,
@@ -20,7 +22,7 @@ import { fileName, humanSize, plural, savings, shrinkRatio } from '../lib/format
 import type { Job } from '../lib/types'
 import { useStore } from '../store'
 import { CompareModal } from './CompareModal'
-import { Button, IconButton, Modal } from './ui'
+import { IconButton, Modal } from './ui'
 
 //: Сколько строк очереди показываем разом.
 const ROW_LIMIT = 200
@@ -30,6 +32,8 @@ const ROWS_SHOWN = 3
 const HEAD_HEIGHT = 42
 const LIST_PADDING = 16
 const ROW_GAP = 4
+/** Высота пустой очереди — под одну строку «здесь пусто». */
+const EMPTY_HEIGHT = 56
 //: Куда упирается раскрытая панель, когда строк много.
 const FULL_HEIGHT = 290
 
@@ -111,11 +115,14 @@ export function JobQueue() {
     return () => watch.disconnect()
   }, [open, shown.length, expanded])
 
-  // Пока ничего не измерено (первая отрисовка, пустая очередь) — прежняя
-  // высота: пустая панель с надписью должна выглядеть как раньше.
+  // Пустая очередь раскрывается ровно под надпись «пусто», а не на весь
+  // предел: смотреть там не на что. Пока строки не измерены (первая
+  // отрисовка) — предел, чтобы они не мелькнули обрезанными.
   const height = !open
     ? HEAD_HEIGHT
-    : Math.min(FULL_HEIGHT, listHeight ? listHeight + HEAD_HEIGHT + LIST_PADDING : FULL_HEIGHT)
+    : !shown.length
+      ? HEAD_HEIGHT + EMPTY_HEIGHT
+      : Math.min(FULL_HEIGHT, listHeight ? listHeight + HEAD_HEIGHT + LIST_PADDING : FULL_HEIGHT)
 
   return (
     <div
@@ -225,7 +232,7 @@ export function JobQueue() {
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
             {ordered.length === 0 && (
-              <p className="px-3 py-8 text-center text-[12px] text-ink-faint">
+              <p className="px-3 py-2.5 text-center text-[12px] text-ink-faint">
                 Очередь пуста. Обработанные файлы появятся здесь.
               </p>
             )}
@@ -342,7 +349,12 @@ const JobRow = memo(function JobRow({
         <span className="shrink-0 text-ink-faint">{kindIcon}</span>
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[12.5px]">{job.title}</p>
+          {/* У скачанного — имя готового файла, а не ссылка: по ссылке на
+              картинку «.jpg» в конце строки выглядел как имя результата,
+              хотя качали видео или звук. Ссылка — в подсказке. */}
+          <p className="truncate text-[12.5px]" title={job.kind === 'download' ? job.source ?? job.title : undefined}>
+            {job.kind === 'download' && job.status === 'done' && job.output ? fileName(job.output) : job.title}
+          </p>
           <p className="truncate text-[11px] text-ink-faint">
             {job.status === 'error'
               ? // В строке очереди помещается одна строка — берём первую фразу
@@ -505,14 +517,6 @@ function ErrorsModal({
 }) {
   const toast = useStore((state) => state.toast)
 
-  const asText = jobs
-    .map((job) =>
-      [job.source ?? job.title, job.hint, job.error ?? 'причина неизвестна']
-        .filter(Boolean)
-        .join('\n\n'),
-    )
-    .join('\n\n———\n\n')
-
   return (
     <Modal open={open} onClose={onClose} title={`Не удалось обработать: ${jobs.length}`} wide>
       <div className="space-y-2">
@@ -534,45 +538,67 @@ function ErrorsModal({
                 )}
                 <ErrorText hint={job.hint} text={job.error} />
               </div>
-              {job.source && (
-                <IconButton
-                  className="h-7 w-7 shrink-0"
-                  title="Показать в проводнике"
-                  onClick={async () => {
-                    try {
-                      await api.reveal(job.source!)
-                    } catch (error) {
-                      toast((error as Error).message, 'error')
-                    }
-                  }}
-                >
-                  <FolderOpen size={13} />
-                </IconButton>
+              {/* Файла при ошибке обычно нет — показывать в проводнике
+                  нечего. Зато ошибку можно скопировать или сразу поискать. */}
+              {job.error && (
+                <>
+                  <IconButton
+                    className="h-7 w-7 shrink-0"
+                    title="Скопировать текст ошибки"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(job.error ?? '')
+                        toast('Ошибка скопирована', 'ok')
+                      } catch {
+                        toast('Не удалось скопировать', 'error')
+                      }
+                    }}
+                  >
+                    <Copy size={13} />
+                  </IconButton>
+                  <IconButton
+                    className="h-7 w-7 shrink-0"
+                    title="Найти эту ошибку в интернете — откроется браузер"
+                    onClick={async () => {
+                      try {
+                        await api.searchWeb(searchQuery(job))
+                      } catch (error) {
+                        toast((error as Error).message, 'error')
+                      }
+                    }}
+                  >
+                    <Search size={13} />
+                  </IconButton>
+                </>
               )}
             </div>
           </div>
         ))}
       </div>
 
-      {jobs.length > 0 && (
-        <div className="mt-3 flex justify-end">
-          <Button
-            tone="ghost"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(asText)
-                toast('Список скопирован', 'ok')
-              } catch {
-                toast('Не удалось скопировать список', 'error')
-              }
-            }}
-          >
-            Скопировать список
-          </Button>
-        </div>
-      )}
     </Modal>
   )
+}
+
+/**
+ * Что искать в интернете: первая содержательная строка ошибки, без ссылок и
+ * путей — они у каждого свои и только мешают поиску. Спереди — чья это
+ * ошибка: так поиск находит обсуждения нужной программы.
+ */
+function searchQuery(job: Job): string {
+  const lines = (job.error ?? '')
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/[A-Za-z]:[\\/][^\s'"]*/g, '')
+        .replace(/'[^']*[\\/][^']*'/g, '')
+        .trim(),
+    )
+    .filter((line) => line.length > 6)
+  const line = lines.find((item) => /error|ошибк|invalid|unable|failed|not /i.test(item)) ?? lines[0] ?? ''
+  const tool = job.kind === 'download' ? 'yt-dlp' : 'ffmpeg'
+  return `${tool} ${line}`.slice(0, 300)
 }
 
 function JobLog({ job }: { job: Job }) {

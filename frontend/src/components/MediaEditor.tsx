@@ -11,9 +11,8 @@ import {
 } from 'lucide-react'
 import { api, mediaUrl } from '../lib/api'
 import { humanSize, timecode } from '../lib/format'
-import { loadPrefs, onPrefs } from '../lib/prefs'
-import { cutTimes, frameCode, useScenes } from '../lib/scenes'
-import type { FileInfo, FilmstripInfo } from '../lib/types'
+import { cutTimes, frameCode, useFrames } from '../lib/scenes'
+import type { FileInfo } from '../lib/types'
 import { useStore } from '../store'
 import { useZoomPan } from '../lib/zoomPan'
 import { Timeline, type Fades } from './Timeline'
@@ -86,8 +85,6 @@ export function MediaEditor({
   const [error, setError] = useState<string | null>(null)
   const [peaks, setPeaks] = useState<number[] | null>(null)
   const [peaksLoading, setPeaksLoading] = useState(false)
-  const [strip, setStrip] = useState<FilmstripInfo | null>(null)
-  const [stripLoading, setStripLoading] = useState(false)
   const [grabbing, setGrabbing] = useState(false)
   // Насколько затемнить картинку прямо сейчас — показываем затухание вживую.
   const [dim, setDim] = useState(0)
@@ -96,19 +93,6 @@ export function MediaEditor({
   const revealQueue = useStore((state) => state.revealQueue)
 
   const isVideo = file.kind === 'video'
-  // Кадры на дорожке видео: по склейкам, редко или никак — и их качество.
-  // Настройка в окне настроек, меняется на ходу.
-  const [frames, setFrames] = useState(() => ({
-    mode: loadPrefs().timelineFrames ?? 'scenes',
-    large: loadPrefs().timelineQuality === 'high',
-  }))
-  useEffect(
-    () =>
-      onPrefs(() =>
-        setFrames({ mode: loadPrefs().timelineFrames ?? 'scenes', large: loadPrefs().timelineQuality === 'high' }),
-      ),
-    [],
-  )
   // Колесо над кадром приближает его, зажатое колесо таскает: мелкую надпись
   // или край кадра иначе не разглядеть. На готовый файл не влияет.
   const zoom = useZoomPan(file.path, isVideo ? 8 : 1, isVideo ? 0.4 : 1)
@@ -172,34 +156,6 @@ export function MediaEditor({
       cancelled = true
     }
   }, [file.path, file.media?.hasAudio])
-
-  // Лента кадров для верхней дорожки — её тоже готовит и кэширует бэкенд.
-  // Равномерная лента дешёвая (читаются только опорные кадры) и показывается,
-  // пока кадры по склейкам ещё считаются; при «Без кадров» её нет вовсе.
-  useEffect(() => {
-    if (file.kind !== 'video' || frames.mode === 'off') {
-      setStrip(null)
-      setStripLoading(false)
-      return
-    }
-    let cancelled = false
-    setStrip(null)
-    setStripLoading(true)
-    api
-      .filmstrip(file.path, frames.mode === 'sparse' && frames.large ? 80 : undefined)
-      .then((data) => {
-        if (!cancelled) setStrip(data)
-      })
-      .catch(() => {
-        if (!cancelled) setStrip(null)
-      })
-      .finally(() => {
-        if (!cancelled) setStripLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [file.path, file.kind, frames.mode, frames.large])
 
   /** Держит громкость и затемнение в соответствии с нарисованными затуханиями. */
   const applyFades = useCallback(
@@ -267,7 +223,8 @@ export function MediaEditor({
   )
 
   // Склейки ролика: Shift со стрелкой шагает к соседней смене сцены.
-  const scenes = useScenes(isVideo ? file.path : null, isVideo && frames.mode === 'scenes', frames.large)
+  // Кадры на дорожке — по настройке «Кадры на таймлайне», общей с монтажом.
+  const { frames: scenes, mode: framesMode } = useFrames(isVideo ? file.path : null, isVideo)
   const toScene = useCallback(
     (forward: boolean) => {
       const media = mediaRef.current
@@ -627,7 +584,7 @@ export function MediaEditor({
 
       <Timeline
         toolbar={{ left, center, right }}
-        framesOff={frames.mode === 'off'}
+        framesOff={framesMode === 'off'}
         duration={duration}
         currentTime={time}
         inPoint={trim.in}
@@ -637,8 +594,7 @@ export function MediaEditor({
         onChangeOut={(value) => onTrimChange({ ...trim, out: value })}
         peaks={peaks}
         peaksLoading={peaksLoading}
-        strip={strip}
-        stripLoading={stripLoading}
+        stripLoading={isVideo && framesMode !== 'off' && !scenes}
         scenes={scenes}
         fps={isVideo ? fps : undefined}
         hasVideo={isVideo}

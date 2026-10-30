@@ -11,6 +11,8 @@ const PREFS_KEY = 'sgh.exportPrefs'
 export interface Prefs {
   use_gpu?: boolean
   max_height?: number
+  /** Высота на второй кнопке разрешения — последняя выбранная из списка. */
+  listHeight?: number
   loudnorm?: boolean
   mono?: boolean
   stereo?: boolean
@@ -43,12 +45,15 @@ export interface Prefs {
    * редко (только опорные кадры — быстро) или без кадров.
    */
   timelineFrames?: 'scenes' | 'sparse' | 'off'
-  /** Кадры покрупнее и чётче — для широкого окна. */
-  timelineQuality?: 'normal' | 'high'
+  /** Качество кадров: «low» — мелкие и мягкие, иначе обычные (на высокой дорожке крупнее). */
+  timelineQuality?: 'low' | 'normal' | 'high'
   /** Загрузка: качество, формат файла, кодек и что делать после пресета. */
   downloadHeight?: number
   downloadContainer?: 'mp4' | 'mkv' | 'webm' | 'auto'
   downloadCodec?: 'any' | 'h264' | 'av1'
+  downloadSound?: 'any' | 'aac' | 'opus'
+  downloadAudioFormat?: 'opus' | 'mp3' | 'm4a' | 'best'
+  downloadAudioQuality?: number
   downloadKeepOriginal?: boolean
   downloadSubfolder?: boolean
   /** Качество предпросмотра в окне разметки — высота кадра. */

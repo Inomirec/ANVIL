@@ -320,6 +320,8 @@ export interface FilmstripInfo {
   frames: number
   tileWidth: number
   tileHeight: number
+  /** Длина ролика — по ней каждой плитке ставится её время. */
+  duration?: number
 }
 
 export interface ResolvedLink {

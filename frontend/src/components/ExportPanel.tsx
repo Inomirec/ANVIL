@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, AudioLines, FileX2, FolderInput, Headphones, Play, Speaker, Terminal, Zap } from 'lucide-react'
+import { ArrowLeftRight, AudioLines, ChevronDown, FileX2, FolderInput, Headphones, Play, Speaker, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
@@ -21,7 +21,7 @@ import type { TrimState } from './MediaEditor'
 import type { Fades } from './Timeline'
 import { SliderNumber } from './ComposeTextPanel'
 import { initialTracks, TracksSection, type TrackChoice } from './TracksSection'
-import { Button, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
+import { Button, Dropdown, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
 
 const DEFAULT_VIDEO: VideoOptions = {
   codec: 'av1_svt',
@@ -161,6 +161,11 @@ export function ExportPanel({
   })
   const [streamCopy, setStreamCopy] = useState(false)
   const [suffix, setSuffix] = useState('_sig')
+  // Высота, которая стоит на второй кнопке разрешения: последняя выбранная.
+  const [listHeight, setListHeight] = useState(() => {
+    const prefs = loadPrefs()
+    return prefs.listHeight || prefs.max_height || 720
+  })
   // Своя приписка из настроек важнее приписки пресета.
   const fixedSuffix = useStore((state) => state.settings?.export.file_suffix ?? '')
   // Скорость и контейнер выбирает человек, пресет их не трогает: пресет
@@ -428,14 +433,14 @@ export function ExportPanel({
           : height === sourceHeight
             ? `Исходник и так ${sourceHeight}p — разрешение останется прежним`
             : `Исходник ${sourceHeight}p — увеличивать его до ${height}p программа не станет, останется ${sourceHeight}p`
-  const resolutions = [
-    { value: '0', label: 'Оригинал' },
-    { value: '2160', label: '4K' },
-    { value: '1440', label: '1440p' },
-    { value: '1080', label: '1080p' },
-    { value: '720', label: '720p' },
-    { value: '480', label: '480p' },
-  ].map((item) => ({ ...item, title: resolutionHint(Number(item.value)) }))
+  // Высоты кадра — с запасом во все промежутки до 4K: размер выбирают и под
+  // пак, и под нейросети, и под совсем мелкий предпросмотр.
+  const resolutions = [2160, 1440, 1080, 900, 720, 540, 480, 360, 240, 144].map((value) => ({
+    value: String(value),
+    label: value === 2160 ? '2160p (4K)' : `${value}p`,
+    title: resolutionHint(value),
+  }))
+  const summaryResolution = video.max_height ? `${video.max_height}p` : 'Оригинал'
 
   return (
     <QuietHints>
@@ -445,17 +450,57 @@ export function ExportPanel({
           <Section
             title="Разрешение"
             id="export.resolution"
-            summary={resolutions.find((item) => item.value === String(video.max_height))?.label}
+            summary={summaryResolution}
           >
-            <Segmented
-              columns={3}
-              value={String(video.max_height)}
-              onChange={(value) => {
-                setVideo({ ...video, max_height: Number(value) })
-                savePrefs({ max_height: Number(value) })
-              }}
-              options={resolutions}
-            />
+            {/* Две кнопки: «Оригинал» и высота со списком рядом. Нажатие по
+                высоте ставит её, стрелка открывает список всех высот. */}
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1">
+              <button
+                type="button"
+                title={resolutionHint(0)}
+                onClick={() => {
+                  setVideo({ ...video, max_height: 0 })
+                  savePrefs({ max_height: 0 })
+                }}
+                className={`rounded-lg px-1 py-1.5 text-[12px] font-medium transition-colors ${
+                  video.max_height === 0 ? 'bg-surface-3 text-ink shadow-sm' : 'text-ink-faint hover:text-ink-dim'
+                }`}
+              >
+                Оригинал
+              </button>
+              <div
+                className={`flex items-center rounded-lg transition-colors ${
+                  video.max_height ? 'bg-surface-3 text-ink shadow-sm' : 'text-ink-faint'
+                }`}
+              >
+                <button
+                  type="button"
+                  title={resolutionHint(listHeight)}
+                  onClick={() => {
+                    setVideo({ ...video, max_height: listHeight })
+                    savePrefs({ max_height: listHeight })
+                  }}
+                  className="min-w-0 flex-1 py-1.5 pl-2 text-[12px] font-medium tabular-nums hover:text-ink-dim"
+                >
+                  {listHeight}p
+                </button>
+                <Dropdown
+                  value={String(listHeight)}
+                  align="right"
+                  title="Все высоты кадра"
+                  options={resolutions}
+                  onChange={(value) => {
+                    const height = Number(value)
+                    setListHeight(height)
+                    setVideo({ ...video, max_height: height })
+                    savePrefs({ max_height: height, listHeight: height })
+                  }}
+                  className="flex h-7 w-6 shrink-0 items-center justify-center hover:text-ink"
+                >
+                  <ChevronDown size={13} />
+                </Dropdown>
+              </div>
+            </div>
           </Section>
         )}
 
@@ -813,7 +858,7 @@ function ManualSection({
 
   return (
     <Section
-      title="Настроить вручную"
+      title="Кодеки"
       id="export.manual"
       defaultFolded
       summary={`${known?.label ?? codec} · ${audioSummary}`}

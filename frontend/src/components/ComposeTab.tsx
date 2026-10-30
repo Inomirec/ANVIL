@@ -31,7 +31,7 @@ import {
   type ComposeTrack,
 } from '../composeStore'
 import { useStore } from '../store'
-import { ComposeTimeline, heightOf, RULER_HEIGHT, TOOLBAR_HEIGHT } from './ComposeTimeline'
+import { ComposeTimeline } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeCropBox } from './ComposeCropBox'
 import { ComposeMaskBox } from './ComposeMaskBox'
@@ -169,6 +169,13 @@ function zoomTargets(state: { tracks: ComposeTrack[]; playhead: number }): Compo
  * Сверху окно просмотра, снизу таймлайн, справа свойства выбранного клипа.
  * Файлы берутся из той же медиатеки слева — их перетаскивают на дорожку.
  */
+/** Высота таймлайна: обычная, пределы и где она запоминается. */
+const TIMELINE_DEFAULT = 300
+const TIMELINE_MIN = 140
+/** Окну просмотра оставляем хотя бы столько, сколько бы ни тянули таймлайн. */
+const VIEWER_MIN = 260
+const TIMELINE_HEIGHT_KEY = 'sgh.timelineHeight'
+
 export function ComposeTab() {
   const width = useCompose((state) => state.width)
   const height = useCompose((state) => state.height)
@@ -189,7 +196,6 @@ export function ComposeTab() {
   const addClip = useCompose((state) => state.addClip)
   const addPair = useCompose((state) => state.addPair)
   const clearAll = useCompose((state) => state.clearAll)
-  const compact = useCompose((state) => state.compact)
   const masterVolume = useCompose((state) => state.masterVolume)
   const loudnorm = useCompose((state) => state.loudnorm)
   const setLoudnorm = useCompose((state) => state.setLoudnorm)
@@ -646,16 +652,47 @@ export function ComposeTab() {
     }
   }
 
-  // Высота таймлайна растёт вместе с числом дорожек, но до предела: кадр в
-  // окне просмотра важнее, и отдавать ему меньше половины окна нельзя. Сжатые
-  // дорожки занимают втрое меньше — ради этого их и сжимают.
-  const timelineHeight = Math.min(
-    380,
-    TOOLBAR_HEIGHT +
-      RULER_HEIGHT +
-      12 +
-      tracks.reduce((sum, track) => sum + heightOf(track, compact), 0),
-  )
+  // Высоту таймлайна задаёт человек: тянет за верхний край, и она
+  // запоминается. Число дорожек и их высота её не меняют — лишние дорожки
+  // прокручиваются внутри. Прежде таймлайн рос с каждой новой дорожкой и
+  // ломал уже настроенный вид.
+  const [timelineHeight, setTimelineHeight] = useState(() => {
+    const saved = Number(localStorage.getItem(TIMELINE_HEIGHT_KEY))
+    return Number.isFinite(saved) && saved > 0 ? saved : TIMELINE_DEFAULT
+  })
+  // Окно сжали — таймлайн не должен съесть окно просмотра целиком.
+  const [windowHeight, setWindowHeight] = useState(window.innerHeight)
+  useEffect(() => {
+    const onResize = () => setWindowHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  const timelineMax = Math.max(TIMELINE_MIN, windowHeight - VIEWER_MIN)
+  const shownTimeline = Math.min(Math.max(timelineHeight, TIMELINE_MIN), timelineMax)
+  const resizeTimeline = (event: React.MouseEvent) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const from = event.clientY
+    const was = shownTimeline
+    let next = was
+    const move = (moving: MouseEvent) => {
+      next = Math.min(Math.max(was - (moving.clientY - from), TIMELINE_MIN), timelineMax)
+      setTimelineHeight(next)
+    }
+    const drop = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', drop)
+      document.body.style.cursor = ''
+      try {
+        localStorage.setItem(TIMELINE_HEIGHT_KEY, String(Math.round(next)))
+      } catch {
+        // Без памяти высота проживёт до перезапуска.
+      }
+    }
+    document.body.style.cursor = 'ns-resize'
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', drop)
+  }
 
   // Клип, который сейчас двигают по кадру: рамка появляется, когда среди
   // выбранного ровно одна картинка и она в этот момент видна. Звук в счёт не
@@ -782,7 +819,7 @@ export function ComposeTab() {
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div
-            className={`flex min-h-0 min-w-0 flex-1 stage flex-col overflow-hidden p-4 ${noStraySelection.className}`}
+            className={`stage relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 ${noStraySelection.className}`}
             onMouseDownCapture={noStraySelection.onMouseDownCapture}
             onDragStart={noStraySelection.onDragStart}
             onWheel={(event) => {
@@ -845,10 +882,12 @@ export function ComposeTab() {
             }}
           >
             {/* Панель над кадром: сетка, приближение, качество и снимок.
-                Поверх картинки её ставить нельзя — кнопка посреди кадра
-                закрывает собой то, ради чего окно и нужно. */}
+                Маленькой плашкой поверх сцены, а не своей строкой: строка
+                отнимала у кадра высоту, и сверху кадра оставалось много
+                пустого места, а снизу — почти ничего. Кадр может заходить
+                под плашку; плашка небольшая и стоит у самого верха. */}
             {clips > 0 && (
-              <div className="mb-2 flex shrink-0 flex-wrap items-center justify-center gap-1.5">
+              <div className="absolute inset-x-0 top-1.5 z-20 mx-auto flex w-fit items-center gap-0.5 rounded-lg bg-surface/85 px-1 py-0.5 ring-1 ring-line-soft backdrop-blur">
                 {/* Увеличительное стекло: сколько сейчас и выбор кратности.
                     Нажатие на число возвращает обычный размер. */}
                 <div className="flex items-center">
@@ -859,7 +898,7 @@ export function ComposeTab() {
                       setPan({ x: 0, y: 0 })
                     }}
                     title="Увеличение экрана просмотра — на готовый файл не влияет. Колесо приближает, зажатое колесо таскает кадр. Нажмите, чтобы вернуть обычный размер."
-                    className={`inline-flex h-8 items-center rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors ${
+                    className={`inline-flex h-6 items-center rounded-md px-1.5 font-mono text-[10.5px] tabular-nums transition-colors ${
                       view !== 1
                         ? 'bg-accent/20 text-accent-soft hover:bg-accent/30'
                         : 'text-ink-faint hover:text-ink'
@@ -870,7 +909,7 @@ export function ComposeTab() {
                   <Dropdown
                     value={String(view)}
                     title="Насколько увеличить экран"
-                    className="flex h-8 w-4 items-center justify-center text-ink-faint hover:text-ink"
+                    className="flex h-6 w-3.5 items-center justify-center text-ink-faint hover:text-ink"
                     options={VIEWS.map((item) => ({
                       value: String(item),
                       label: `Экран ${Math.round(item * 100)}%`,
@@ -880,7 +919,7 @@ export function ComposeTab() {
                       setPan({ x: 0, y: 0 })
                     }}
                   >
-                    <ChevronDown size={12} />
+                    <ChevronDown size={11} />
                   </Dropdown>
                 </div>
 
@@ -889,6 +928,7 @@ export function ComposeTab() {
                     Кнопка включает и выключает, список рядом меняет вид. */}
                 <div className="flex items-center">
                   <IconButton
+                    className="h-6 w-6"
                     title="Сетка поверх кадра. К её линиям, к краям кадра и к его середине клип прилипает, когда его двигают."
                     active={gridOn}
                     onClick={() => {
@@ -898,7 +938,7 @@ export function ComposeTab() {
                       })
                     }}
                   >
-                    <Grid3x3 size={14} />
+                    <Grid3x3 size={13} />
                   </IconButton>
                   {/* Галочка рядом со значком: сам список нужен редко, а
                       место занимал бы постоянно, поэтому от него оставлена
@@ -906,7 +946,7 @@ export function ComposeTab() {
                   <Dropdown
                     value={gridKind}
                     title="Какая сетка"
-                    className="flex h-8 w-4 items-center justify-center text-ink-faint hover:text-ink"
+                    className="flex h-6 w-3.5 items-center justify-center text-ink-faint hover:text-ink"
                     options={GRIDS.filter((item) => item.value !== 'none')}
                     onChange={(value) => {
                       setGridKind(value)
@@ -915,14 +955,14 @@ export function ComposeTab() {
                       localStorage.setItem('sgh.composeGridOn', '1')
                     }}
                   >
-                    <ChevronDown size={12} />
+                    <ChevronDown size={11} />
                   </Dropdown>
                 </div>
 
                 <Dropdown
                   value={String(player.quality)}
                   title="Качество просмотра. На готовый файл не влияет — только на то, что видно здесь."
-                  className="flex h-8 items-center gap-1.5 rounded-lg border border-line-soft bg-surface-2 px-2 text-[11px] text-ink-dim hover:text-ink"
+                  className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[10.5px] text-ink-dim hover:bg-surface-3 hover:text-ink"
                   options={[
                     { value: 'auto', label: 'Качество просмотра: авто' },
                     // Выше качества самого проекта просмотр не собирается,
@@ -940,15 +980,16 @@ export function ComposeTab() {
                   {player.quality === 'auto'
                     ? 'авто'
                     : `${custom ? player.quality : Math.min(player.quality, quality)}p`}
-                  <ChevronDown size={12} className="text-ink-faint" />
+                  <ChevronDown size={11} className="text-ink-faint" />
                 </Dropdown>
 
                 <IconButton
+                  className="h-6 w-6"
                   title="Сохранить кадр картинкой"
                   onClick={() => void grabFrame()}
                   disabled={snapping}
                 >
-                  <Camera size={14} />
+                  <Camera size={13} />
                 </IconButton>
               </div>
             )}
@@ -1073,11 +1114,21 @@ export function ComposeTab() {
           />
         </div>
 
-        {/* Таймлайн */}
+        {/* Таймлайн. Верхний край тянут мышью — так человек сам решает,
+            сколько дорожек видно разом. */}
         <div
-          className="shrink-0 border-t border-line-soft bg-surface"
-          style={{ height: timelineHeight }}
+          className="relative shrink-0 border-t border-line-soft bg-surface"
+          style={{ height: shownTimeline }}
         >
+          <div
+            onMouseDown={resizeTimeline}
+            onDoubleClick={() => {
+              setTimelineHeight(TIMELINE_DEFAULT)
+              localStorage.removeItem(TIMELINE_HEIGHT_KEY)
+            }}
+            title="Потяните, чтобы сделать таймлайн выше или ниже. Двойное нажатие — обычная высота"
+            className="absolute inset-x-0 -top-1 z-30 h-2 cursor-ns-resize hover:bg-accent/30"
+          />
           <ComposeTimeline
             adding={adding !== null}
             player={player}

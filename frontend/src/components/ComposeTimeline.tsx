@@ -32,7 +32,7 @@ import { usePreviewReady } from '../hooks/useComposePlayer'
 import { setMagnet, useMagnet } from '../lib/magnet'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
-import { cutTimes, frameCode, scenesOf, useScenes } from '../lib/scenes'
+import { cutTimes, frameCode, scenesOf, useFrames } from '../lib/scenes'
 import { EASES, groupOf, hasKeys, hasPlaceKeys, KEY_NEAR, keyTimes, valueAt } from '../composeAnim'
 import { KeyBar } from './ComposeAnimUi'
 import { SceneStrip } from './SceneStrip'
@@ -2422,7 +2422,8 @@ function ClipBox({
   // Кадры по сценам: первая плитка каждой сцены — её первый кадр, ровно
   // там, где на клипе склейка.
   // Растянутой дорожке — кадры покрупнее: мелкие на ней мылятся.
-  const scenes = useScenes(clip.source, detailed && clip.kind === 'video', height > 110)
+  // Как и сколько — по настройке «Кадры на таймлайне», общей с медиатекой.
+  const { frames: scenes } = useFrames(clip.source, detailed && clip.kind === 'video', height > 110)
   const peaks = useWave(clip.source, detailed && sound, clip.sourceDuration || clip.duration)
   const thumb = `/api/library/thumbnail?path=${encodeURIComponent(clip.source)}`
   // Чьи ключи показывать — группа, выбранная в колонке справа.

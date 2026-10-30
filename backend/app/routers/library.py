@@ -192,7 +192,9 @@ async def thumbnail(path: str) -> FileResponse:
 
 
 @router.get("/filmstrip")
-async def video_filmstrip(path: str, frames: int = filmstrip.DEFAULT_FRAMES) -> dict[str, Any]:
+async def video_filmstrip(
+    path: str, frames: int = filmstrip.DEFAULT_FRAMES, height: int = filmstrip.TILE_HEIGHT
+) -> dict[str, Any]:
     """Лента кадров для видеодорожки таймлайна."""
     try:
         target = fsutil.safe_path(path)
@@ -203,29 +205,34 @@ async def video_filmstrip(path: str, frames: int = filmstrip.DEFAULT_FRAMES) -> 
         raise HTTPException(400, "Лента кадров есть только у видео")
 
     try:
-        strip = await filmstrip.build(target, frames)
+        strip = await filmstrip.build(target, frames, height)
     except (RuntimeError, OSError) as exc:
         raise HTTPException(500, f"Не удалось собрать ленту кадров: {exc}") from exc
     if not strip:
         raise HTTPException(404, "У файла нет видеодорожки")
 
     return {
-        "url": f"/api/library/filmstrip/image?path={quote(str(target))}&frames={strip.frames}",
+        "url": f"/api/library/filmstrip/image?path={quote(str(target))}&frames={strip.frames}&height={strip.tile_height}",
         "frames": strip.frames,
+        # Лента без склеек рисуется так же, как по сценам: каждой плитке —
+        # время, а для этого нужна длина ролика.
+        "duration": strip.duration,
         "tileWidth": strip.tile_width,
         "tileHeight": strip.tile_height,
     }
 
 
 @router.get("/filmstrip/image")
-async def video_filmstrip_image(path: str, frames: int = filmstrip.DEFAULT_FRAMES) -> FileResponse:
+async def video_filmstrip_image(
+    path: str, frames: int = filmstrip.DEFAULT_FRAMES, height: int = filmstrip.TILE_HEIGHT
+) -> FileResponse:
     """Сам спрайт с кадрами (одна картинка на всю дорожку)."""
     try:
         target = fsutil.safe_path(path)
     except (PermissionError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
 
-    strip = await filmstrip.build(target, frames)
+    strip = await filmstrip.build(target, frames, height)
     if not strip:
         raise HTTPException(404, "Лента кадров недоступна")
     return FileResponse(
@@ -236,7 +243,7 @@ async def video_filmstrip_image(path: str, frames: int = filmstrip.DEFAULT_FRAME
 
 
 @router.get("/scenes")
-async def video_scenes(path: str, large: bool = False) -> dict[str, Any]:
+async def video_scenes(path: str, large: bool = False, size: str = "") -> dict[str, Any]:
     """Склейки ролика и кадры по сценам — для ленты на клипе и шага по сценам."""
     try:
         target = fsutil.safe_path(path)
@@ -244,8 +251,9 @@ async def video_scenes(path: str, large: bool = False) -> dict[str, Any]:
         raise HTTPException(404, str(exc)) from exc
     if fsutil.media_kind(target) != "video":
         raise HTTPException(400, "Сцены есть только у видео")
+    size = size if size in scenes.SIZES else ("large" if large else "normal")
     try:
-        found = await scenes.build(target, large)
+        found = await scenes.build(target, size)
     except (RuntimeError, OSError) as exc:
         raise HTTPException(500, f"Не удалось найти сцены: {exc}") from exc
     if not found:
@@ -253,18 +261,19 @@ async def video_scenes(path: str, large: bool = False) -> dict[str, Any]:
     return {
         **found.as_json(),
         # Имя картинки меняется вместе с файлом — старую браузер не возьмёт.
-        "url": f"/api/library/scenes/image?path={quote(str(target))}&large={int(large)}&v={found.sprite.stem[:12]}",
+        "url": f"/api/library/scenes/image?path={quote(str(target))}&size={size}&v={found.sprite.stem[:12]}",
     }
 
 
 @router.get("/scenes/image")
-async def video_scenes_image(path: str, large: int = 0) -> FileResponse:
+async def video_scenes_image(path: str, large: int = 0, size: str = "") -> FileResponse:
     """Сетка кадров по сценам одной картинкой."""
     try:
         target = fsutil.safe_path(path)
     except (PermissionError, FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
-    found = scenes.cached(target, scenes.LARGE_HEIGHT if large else scenes.TILE_HEIGHT)
+    size = size if size in scenes.SIZES else ("large" if large else "normal")
+    found = scenes.cached(target, scenes.SIZES[size][0])
     if not found:
         raise HTTPException(404, "Кадры ещё не готовы")
     return FileResponse(

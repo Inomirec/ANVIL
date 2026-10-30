@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from .. import config
 from ..core import binaries, download, fsutil
@@ -162,6 +163,26 @@ async def pick_file(payload: PickFileRequest) -> dict[str, Any]:
     if not result:
         return {"supported": True, "path": None}
     return {"supported": True, "path": str(result[0])}
+
+
+class WebSearchRequest(BaseModel):
+    """Что искать в интернете — текст ошибки."""
+
+    query: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/search-web")
+async def search_web(payload: WebSearchRequest) -> dict[str, bool]:
+    """Открывает поиск по тексту ошибки в браузере человека.
+
+    Адрес собираем здесь, а не берём со страницы: так сервер открывает
+    только поиск и ничего больше.
+    """
+    from urllib.parse import quote_plus
+
+    url = "https://www.google.com/search?q=" + quote_plus(payload.query)
+    await asyncio.to_thread(webbrowser.open, url)
+    return {"ok": True}
 
 
 @router.post("/reveal")

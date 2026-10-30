@@ -33,3 +33,29 @@ export const noStraySelection = {
     event.preventDefault()
   },
 }
+
+/**
+ * Ползунки по всей программе. Если на странице уже что-то выделено (двойное
+ * нажатие по подписи рядом), нажатие по ползунку браузер принимает за начало
+ * перетаскивания этого выделения: ползунок не едет, а курсор становится
+ * перечёркнутым кругом. Поэтому перед нажатием на ползунок выделение
+ * снимаем, а перетаскивание, начатое с ползунка, отменяем.
+ */
+export function guardSliders(): void {
+  const isSlider = (target: EventTarget | null) =>
+    target instanceof HTMLInputElement && target.type === 'range'
+  document.addEventListener(
+    'mousedown',
+    (event) => {
+      if (isSlider(event.target)) window.getSelection()?.removeAllRanges()
+    },
+    true,
+  )
+  document.addEventListener(
+    'dragstart',
+    (event) => {
+      if (isSlider(event.target)) event.preventDefault()
+    },
+    true,
+  )
+}

@@ -67,6 +67,69 @@ def looks_like_gallery(url: str) -> bool:
     return any(host == item or host.endswith("." + item) for item in _GALLERY_HOSTS)
 
 
+#: Расширения прямых ссылок на картинку.
+_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp")
+
+
+def looks_like_image(url: str) -> bool:
+    """Прямая ссылка на картинку: путь кончается её расширением."""
+    try:
+        return urlparse(url).path.lower().endswith(_IMAGE_EXT)
+    except ValueError:
+        return False
+
+
+def page_images(url: str) -> list[str]:
+    """Картинки страницы в полном размере — для сайтов, которых не знает gallery-dl.
+
+    Смотрим по порядку, где сайты их обычно указывают: крупная версия у самой
+    картинки (``data-large-image``), описание для поисковиков (``ImageObject``
+    с ``contentUrl``) и, если ничего этого нет, картинка для превью в соцсетях
+    (``og:image``) — она бывает уменьшенной, поэтому последней. Синхронно —
+    звать из отдельного потока.
+    """
+    import html
+    import json as jsonlib
+    import re
+    import urllib.request
+    from urllib.parse import urljoin
+
+    from .certs import ipv4_opener
+
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"})
+    try:
+        with ipv4_opener().open(request, timeout=15) as response:
+            page = response.read(3_000_000).decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return []
+
+    found: list[str] = []
+
+    def add(raw: str) -> None:
+        link = urljoin(url, html.unescape(raw.strip()))
+        if link not in found and looks_like_image(link):
+            found.append(link)
+
+    for match in re.finditer(r'data-large-image=["\']([^"\']+)', page, re.IGNORECASE):
+        add(match.group(1))
+    if not found:
+        for match in re.finditer(r'"contentUrl"\s*:\s*("(?:[^"\\]|\\.)*")', page):
+            try:
+                add(jsonlib.loads(match.group(1)))
+            except ValueError:
+                continue
+    if not found:
+        for name in ("og:image", "twitter:image"):
+            for pattern in (
+                rf'<meta[^>]+(?:property|name)=["\']{name}["\'][^>]*content=["\']([^"\']+)',
+                rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']{name}["\']',
+            ):
+                match = re.search(pattern, page, re.IGNORECASE)
+                if match:
+                    add(match.group(1))
+    return found
+
+
 def looks_like_video(url: str) -> bool:
     """Сайт, на котором картинок-галерей не бывает вовсе."""
     host = host_of(url)
@@ -229,6 +292,8 @@ def build_ytdlp_args(
     section: tuple[float | None, float | None] | None = None,
     container: str | None = None,
     video_codec: str = "any",
+    audio_codec: str = "any",
+    audio_quality: int = 0,
 ) -> list[str]:
     """Аргументы yt-dlp для одной ссылки.
 
@@ -298,22 +363,31 @@ def build_ytdlp_args(
         args += ["-f", "bestaudio/best", "-x"]
         if audio_format != "best":
             args += ["--audio-format", audio_format]
-        args += ["--audio-quality", "0"]
+        # Битрейт действует, только когда звук перекодируется в выбранный
+        # формат; «как у сайта» берёт звук как есть.
+        args += ["--audio-quality", f"{audio_quality}K" if audio_quality else "0"]
         if settings.embed_metadata:
             args += ["--embed-metadata", "--embed-thumbnail"]
     else:
         height_filter = f"[height<={max_height}]" if max_height else ""
+        # Кодеки — предпочтение, а не требование: если у ролика такого нет,
+        # скачается лучшее, что есть. Кодек видео важнее разрешения: «H.264»
+        # значит H.264, даже если в AV1 у сайта есть кадр крупнее (у YouTube
+        # H.264 бывает только до 1080p).
+        order = []
         if video_codec != "any":
-            # Кодек — предпочтение, а не требование: если у ролика его нет,
-            # скачается лучшее, что есть. Важнее разрешения: «H.264» значит
-            # H.264, даже если в AV1 у сайта есть кадр крупнее (у YouTube
-            # H.264 бывает только до 1080p).
-            args += ["-S", f"vcodec:{'h264' if video_codec == 'h264' else 'av01'},res"]
+            order.append(f"vcodec:{'h264' if video_codec == 'h264' else 'av01'}")
+        if audio_codec != "any":
+            order.append(f"acodec:{audio_codec}")
+        if order:
+            args += ["-S", ",".join([*order, "res"])]
         if container == "mp4":
             # Дорожки, которые штатно живут в MP4 (H.264/AV1 + AAC), — гарантия
-            # того, что файл откроется во встроенном плеере со звуком.
+            # того, что файл откроется во встроенном плеере со звуком. Звук
+            # выбран руками — берём его, куда бы сайт его ни положил.
+            audio = "ba" if audio_codec != "any" else "ba[ext=m4a]"
             selector = (
-                f"bv*[ext=mp4]{height_filter}+ba[ext=m4a]/"
+                f"bv*[ext=mp4]{height_filter}+{audio}/"
                 f"bv*{height_filter}+ba/b{height_filter}/b"
             )
             args += ["-f", selector, "--merge-output-format", "mp4"]
@@ -377,6 +451,8 @@ async def run_ytdlp(
     section: tuple[float | None, float | None] | None = None,
     container: str | None = None,
     video_codec: str = "any",
+    audio_codec: str = "any",
+    audio_quality: int = 0,
 ) -> list[Path]:
     """Скачивает ссылку через yt-dlp, отдавая прогресс в задачу."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -394,6 +470,7 @@ async def run_ytdlp(
         mode=mode, max_height=max_height,
         audio_format=audio_format, print_file=print_file,
         section=section, container=container, video_codec=video_codec,
+        audio_codec=audio_codec, audio_quality=audio_quality,
     )
     # Пишем команду целиком, а не только ссылку: когда что-то не качается,
     # первый вопрос — с какими флагами запустился загрузчик. Без этой строки
@@ -552,9 +629,27 @@ def explain_failure(text: str) -> str:
         )
 
     if "unsupported url" in low and "gallery-dl" in low:
+        import re
+
+        found = re.search(r"https?://\S+?(?=['\"\s]|$)", text)
+        if found and looks_like_video(found.group(0)):
+            return (
+                "Это ссылка на видео, а не на пост с картинками.\n"
+                "Выберите вверху «Видео» вместо «Кадров» и попробуйте снова.\n\n"
+                + text
+            )
         return (
-            "Это ссылка на видео, а не на пост с картинками.\n"
-            "Выберите режим «Видео» вместо «Картинки» и попробуйте снова.\n\n"
+            "Этот сайт программа разбирать не умеет, и главной картинки на "
+            "странице не нашлось.\n\n"
+            "Что делать: откройте картинку на сайте, нажмите по ней правой "
+            "кнопкой → «Копировать адрес изображения» и вставьте эту ссылку.\n\n"
+            + text
+        )
+
+    if "unable to obtain file audio codec" in low:
+        return (
+            "В скачанном файле нет звука — вытащить его не из чего. Скорее "
+            "всего, по ссылке картинка или видео без звуковой дорожки.\n\n"
             + text
         )
 
@@ -773,6 +868,14 @@ async def probe_gallery(url: str) -> list[dict[str, Any]]:
     out, err = await process.communicate()
     if process.returncode != 0 and not out:
         message = err.decode("utf-8", "replace").strip()
+        if "unsupported url" in message.lower() and not looks_like_video(url):
+            # Сайт gallery-dl не знает — берём картинки со страницы сами.
+            pictures = await asyncio.to_thread(page_images, url)
+            if pictures:
+                return [
+                    {"index": index, "url": picture, "extension": Path(urlparse(picture).path).suffix.lstrip(".")}
+                    for index, picture in enumerate(pictures, start=1)
+                ]
         raise RuntimeError(
             explain_failure(message.splitlines()[-1])
             if message
