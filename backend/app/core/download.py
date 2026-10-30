@@ -267,6 +267,27 @@ def _mark(seconds: float | None, fallback: str) -> str:
     return f"{total // 60}-{total % 60:02d}"
 
 
+#: Приписка к имени файла у выбранного руками кодека видео.
+_CODEC_MARKS = {"h264": "H.264", "vp9": "VP9", "av1": "AV1"}
+
+
+def codec_template(template: str, video_codec: str) -> str:
+    """Дописывает в шаблон имени выбранный кодек видео.
+
+    Иначе один ролик в «Лучшем» и в H.264 метил в один файл: yt-dlp считал
+    второй уже скачанным и не качал ничего, а если первый был открыт в
+    программе — падал на «Отказано в доступе», пытаясь его заменить. С
+    припиской рядом лежат оба варианта. «Лучший» остаётся без приписки.
+    """
+    mark = _CODEC_MARKS.get(video_codec)
+    if not mark:
+        return template
+    tail = ".%(ext)s"
+    if template.endswith(tail):
+        return template[: -len(tail)] + f" ({mark})" + tail
+    return template + f" ({mark})"
+
+
 def section_template(template: str, start: float | None, end: float | None) -> str:
     """Дописывает в шаблон имени границы отрезка.
 
@@ -279,6 +300,11 @@ def section_template(template: str, start: float | None, end: float | None) -> s
     if template.endswith(tail):
         return template[: -len(tail)] + mark + tail
     return template + mark
+
+
+def _name_template(template: str, mode: str, video_codec: str) -> str:
+    """Шаблон имени с припиской кодека — только у видео (`codec_template`)."""
+    return codec_template(template, video_codec) if mode == "video" else template
 
 
 def build_ytdlp_args(
@@ -331,9 +357,9 @@ def build_ytdlp_args(
         "--concurrent-fragments", "4",
         "-P", str(output_dir),
         "-o", (
-            section_template(settings.filename_template, *section)
+            section_template(_name_template(settings.filename_template, mode, video_codec), *section)
             if section
-            else settings.filename_template
+            else _name_template(settings.filename_template, mode, video_codec)
         ),
         # Итоговые пути пишем в отдельный файл, чтобы не мешать их с прогрессом.
         "--print-to-file", "after_move:filepath", str(print_file),

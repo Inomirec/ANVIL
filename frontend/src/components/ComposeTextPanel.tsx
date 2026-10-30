@@ -12,6 +12,8 @@ import {
   Star,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { fitQuotes } from '../lib/quotes'
+import { useFace } from './ComposeTextOverlay'
 import { ColorButton } from './ColorPicker'
 import {
   EFFECT_PIXELS,
@@ -527,7 +529,16 @@ export function SizeField({
  * Поле для текста: маленькое, растёт вместе с текстом и упирается в предел —
  * дальше обычная прокрутка, чтобы длинная надпись не заняла всю колонку.
  */
-function TextBox({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function TextBox({
+  value,
+  quotes,
+  onChange,
+}: {
+  value: string
+  /** Кавычки, которых нет в шрифте (`fitQuotes`). */
+  quotes?: Record<string, string>
+  onChange: (value: string) => void
+}) {
   const area = useRef<HTMLTextAreaElement>(null)
   // Высоту подгоняем до отрисовки, иначе поле на миг мигало бы прежней.
   useLayoutEffect(() => {
@@ -541,7 +552,17 @@ function TextBox({ value, onChange }: { value: string; onChange: (value: string)
       ref={area}
       rows={1}
       value={value}
-      onChange={(event) => onChange(event.target.value)}
+      onChange={(event) => {
+        const node = event.target
+        const fitted = fitQuotes(node.value, quotes)
+        if (fitted !== node.value) {
+          // Замена знак на знак — курсор ставим туда же, где он был.
+          const [start, end] = [node.selectionStart, node.selectionEnd]
+          node.value = fitted
+          node.setSelectionRange(start, end)
+        }
+        onChange(fitted)
+      }}
       onFocus={() => useCompose.getState().mark()}
       placeholder="Что написать"
       className="field block w-full resize-none overflow-y-auto leading-snug"
@@ -581,6 +602,7 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
   const px = (share: number) => Math.round(share * height * 10) / 10
   const fraction = (pixels: number) => pixels / height
   const family = fonts?.find((item) => item.name === v.font)
+  const face = useFace(v.font, v.bold, v.italic)
   const stock = effectDefaults(height)
 
   return (
@@ -592,6 +614,7 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
 
       <TextBox
         value={v.text}
+        quotes={face?.quotes}
         onChange={(text) => put({ text, name: text.split('\n')[0] || 'Текст' })}
       />
 
@@ -657,9 +680,11 @@ export function ComposeTextPanel({ clip }: { clip: ComposeClip }) {
               label="Толщина"
               value={px(v.stroke)}
               min={0.5}
-              max={6}
+              max={8}
               step={0.5}
               unit="px"
+              // Набрать можно и толще шкалы — для крупных букв.
+              entryLimits={[0.5, 40]}
               reset={EFFECT_PIXELS.stroke}
               onChange={(value) => put({ stroke: fraction(value) })}
             />

@@ -1082,7 +1082,7 @@ export function ComposeTimeline({
             )}
           </IconButton>
           <IconButton className="h-7 w-7"
-            title="Повторять по кругу"
+            title="Повторять по кругу. Если отмечен отрезок (I и O), повторяется он: просмотр, дошедший до его конца, возвращается к началу отрезка"
             onClick={() => player.setLoop(!player.loop)}
             active={player.loop}
           >

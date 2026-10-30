@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { inkBounds, useFace } from './ComposeTextOverlay'
+import { fitQuotesInPlace } from '../lib/quotes'
 
 /**
  * Надпись на картинке. Место — середина букв по высоте и точка выравнивания
@@ -280,14 +281,15 @@ function TextItem({
   }, [chosen])
 
   // Где сами буквы: по ним ставится середина и рисуется подложка.
-  const [ink, setInk] = useState({ shift: 0, top: 0, bottom: 0 })
+  const [ink, setInk] = useState({ shift: 0, top: 0, bottom: 0, side: 0 })
   useLayoutEffect(() => {
     if (!field.current) return
     const next = inkBounds(field.current, mark.text)
     if (
       Math.abs(next.shift - ink.shift) > 0.05 ||
       Math.abs(next.top - ink.top) > 0.05 ||
-      Math.abs(next.bottom - ink.bottom) > 0.05
+      Math.abs(next.bottom - ink.bottom) > 0.05 ||
+      Math.abs(next.side - ink.side) > 0.05
     ) {
       setInk(next)
     }
@@ -371,8 +373,8 @@ function TextItem({
           aria-hidden
           className="pointer-events-none absolute"
           style={{
-            left: pad,
-            right: pad,
+            left: pad + ink.side,
+            right: pad - ink.side,
             top: pad + ink.top,
             height: Math.max(0, ink.bottom - ink.top) + 2 * px(v.boxPad),
             background: withAlpha(v.boxColor, v.boxAlpha),
@@ -418,7 +420,10 @@ function TextItem({
           // Клавиши редактора (Delete, Ctrl+Z) — тексту, а не картинке.
           event.stopPropagation()
         }}
-        onInput={(event) => onChange({ text: (event.currentTarget as HTMLDivElement).innerText })}
+        onInput={(event) => {
+          fitQuotesInPlace(event.currentTarget as HTMLDivElement, face?.quotes)
+          onChange({ text: (event.currentTarget as HTMLDivElement).innerText })
+        }}
       />
     </div>
   )

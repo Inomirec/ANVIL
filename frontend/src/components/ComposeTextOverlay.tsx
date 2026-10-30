@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { fitQuotesInPlace } from '../lib/quotes'
 import { TEXT_DEFAULTS, useCompose, type ComposeClip } from '../composeStore'
 import { guidesOf, stick, type GridKind } from './ComposeFrameBox'
 
@@ -58,9 +59,11 @@ function ringStroke(width: number, colour: string): string[] {
 }
 
 /** Шрифт, загруженный из того же файла, что берёт сборка. */
-interface LoadedFace {
+export interface LoadedFace {
   family: string
   lineHeight: number
+  /** Каких прямых кавычек в шрифте нет и чем их заменить (`fitQuotes`). */
+  quotes: Record<string, string>
 }
 
 /** Уже загруженные файлы шрифтов: один файл грузится один раз. */
@@ -76,7 +79,7 @@ function loadFace(name: string, bold: boolean, italic: boolean): Promise<LoadedF
       const loaded = await new FontFace(family, `url(${face.url})`).load()
       document.fonts.add(loaded)
     }
-    return { family, lineHeight: face.lineHeight }
+    return { family, lineHeight: face.lineHeight, quotes: face.quotes ?? {} }
   })
   // Не вышло — забываем, чтобы при следующей попытке спросить заново.
   promise.catch(() => faces.delete(wanted))
@@ -135,8 +138,11 @@ export function inkShift(element: HTMLElement, text: string): number {
  * шрифта: у шрифтов, где буквы сидят в строке низко (Pribambas), подложка по
  * строке выходила с большим выступом сверху.
  */
-export function inkBounds(element: HTMLElement, text: string): { shift: number; top: number; bottom: number } {
-  const none = { shift: 0, top: 0, bottom: 0 }
+export function inkBounds(
+  element: HTMLElement,
+  text: string,
+): { shift: number; top: number; bottom: number; side: number } {
+  const none = { shift: 0, top: 0, bottom: 0, side: 0 }
   const style = getComputedStyle(element)
   const size = parseFloat(style.fontSize)
   const line = parseFloat(style.lineHeight)
@@ -154,7 +160,22 @@ export function inkBounds(element: HTMLElement, text: string): { shift: number; 
   const baseline = (line - (ascent + descent)) / 2 + ascent
   const top = baseline - first.actualBoundingBoxAscent
   const bottom = baseline + (lines.length - 1) * line + last.actualBoundingBoxDescent
-  return { shift: (line * lines.length) / 2 - (top + bottom) / 2, top, bottom }
+  // Вбок буквы выступают из своих ячеек по-разному с двух сторон (у
+  // Pribambas «Т» уходит влево), а подложка стоит по ячейкам. На сколько
+  // середина букв правее середины ячеек — на столько сдвинуть подложку;
+  // сборка меряет то же самое (`compose._ink_shift`).
+  const measured = lines.map((item) => ruler!.measureText(item || ' '))
+  const wide = Math.max(...measured.map((item) => item.width))
+  const align = style.textAlign
+  let left = Infinity
+  let right = -Infinity
+  for (const item of measured) {
+    const start = align === 'center' ? (wide - item.width) / 2 : align === 'right' ? wide - item.width : 0
+    left = Math.min(left, start - item.actualBoundingBoxLeft)
+    right = Math.max(right, start + item.actualBoundingBoxRight)
+  }
+  const side = Number.isFinite(left) ? (left + right - wide) / 2 : 0
+  return { shift: (line * lines.length) / 2 - (top + bottom) / 2, top, bottom, side }
 }
 
 export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: GridKind }) {
@@ -176,7 +197,7 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
 
   // Сдвиг до середины букв — меряем после каждой отрисовки: он зависит от
   // текста, шрифта и размера, а шрифт приходит не сразу.
-  const [ink, setInk] = useState({ shift: 0, top: 0, bottom: 0 })
+  const [ink, setInk] = useState({ shift: 0, top: 0, bottom: 0, side: 0 })
   const lift = ink.shift
   useLayoutEffect(() => {
     if (!field.current) return
@@ -184,7 +205,8 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
     if (
       Math.abs(next.shift - ink.shift) > 0.05 ||
       Math.abs(next.top - ink.top) > 0.05 ||
-      Math.abs(next.bottom - ink.bottom) > 0.05
+      Math.abs(next.bottom - ink.bottom) > 0.05 ||
+      Math.abs(next.side - ink.side) > 0.05
     ) {
       setInk(next)
     }
@@ -316,8 +338,8 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
           aria-hidden
           className="pointer-events-none absolute"
           style={{
-            left: FRAME_PAD,
-            right: FRAME_PAD,
+            left: FRAME_PAD + ink.side,
+            right: FRAME_PAD - ink.side,
             top: FRAME_PAD + ink.top,
             height: `calc(${Math.max(0, ink.bottom - ink.top)}px + 2 * ${share(v.boxPad)})`,
             background: withAlpha(v.boxColor, v.boxAlpha),
@@ -373,6 +395,9 @@ export function ComposeTextOverlay({ clip, grid }: { clip: ComposeClip; grid: Gr
           if (event.key === 'Escape') (event.target as HTMLElement).blur()
         }}
         onInput={(event) => {
+          // Кавычки, которых нет в шрифте, — сразу парными: иначе в окне они
+          // видны чужим шрифтом, а в готовом кадре пропадают.
+          fitQuotesInPlace(event.currentTarget as HTMLDivElement, face?.quotes)
           const text = (event.currentTarget as HTMLDivElement).innerText
           useCompose.getState().updateClip(clip.id, {
             text,

@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown, MoreHorizontal, X, type LucideIcon } from 'lucide-react'
 
 /* Мелкие переиспользуемые элементы интерфейса. */
@@ -567,7 +568,11 @@ export function Dropdown<T extends string>({
       >
         {children}
       </button>
-      {open && (
+      {/* Список — в корне страницы, а не рядом с кнопкой: у плашки над
+          кадром полупрозрачный размытый фон, а внутри такого блока
+          «прилипший к окну» список меряется от самого блока и уезжал
+          в сторону — казалось, что кнопка не работает. */}
+      {open && createPortal(
         <div
           ref={list}
           className="fixed z-50 min-w-[150px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
@@ -599,7 +604,8 @@ export function Dropdown<T extends string>({
               )}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   )

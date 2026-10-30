@@ -458,6 +458,8 @@ async def _apply_edits(source: Path, options: ImageOptions, info: MediaInfo | No
         if not mark.text.strip():
             continue
         clip = _text_clip(mark, index, width, height)
+        if clip.box:
+            clip.box_shift = await compose._ink_shift(clip)
         if compose.text_layered(clip):
             chain = compose.text_layers(clip, width, height).removesuffix(",format=yuva420p") + ",format=rgba"
         else:

@@ -229,7 +229,7 @@ export const api = {
   composeBuild: (payload: unknown) => post<Job>('/api/compose/build', payload),
   /** Какой файл шрифта возьмёт сборка и его шаг строк — для живой надписи. */
   fontFace: (name: string, bold: boolean, italic: boolean) =>
-    request<{ key: string; url: string; lineHeight: number }>(
+    request<{ key: string; url: string; lineHeight: number; quotes?: Record<string, string> }>(
       `/api/compose/fonts/face?${new URLSearchParams({
         name,
         bold: String(bold),

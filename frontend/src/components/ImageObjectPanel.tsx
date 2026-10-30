@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AlignCenter, AlignLeft, AlignRight, Bold, Italic } from 'lucide-react'
 import { api } from '../lib/api'
+import { fitQuotes } from '../lib/quotes'
+import { useFace } from './ComposeTextOverlay'
 import type { Rect } from '../lib/types'
 import {
   ColorSquare,
@@ -95,7 +97,15 @@ const Title = ({ children }: { children: React.ReactNode }) => (
 )
 
 /** Поле для текста: растёт вместе с текстом до предела, дальше — прокрутка. */
-function TextBox({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function TextBox({
+  value,
+  quotes,
+  onChange,
+}: {
+  value: string
+  quotes?: Record<string, string>
+  onChange: (value: string) => void
+}) {
   const area = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
     const node = area.current
@@ -108,7 +118,17 @@ function TextBox({ value, onChange }: { value: string; onChange: (value: string)
       ref={area}
       rows={1}
       value={value}
-      onChange={(event) => onChange(event.target.value)}
+      onChange={(event) => {
+        // Кавычки, которых нет в шрифте, — парными (`fitQuotes`).
+        const node = event.target
+        const fitted = fitQuotes(node.value, quotes)
+        if (fitted !== node.value) {
+          const [start, end] = [node.selectionStart, node.selectionEnd]
+          node.value = fitted
+          node.setSelectionRange(start, end)
+        }
+        onChange(fitted)
+      }}
       placeholder="Что написать"
       className="field block w-full resize-none overflow-y-auto leading-snug"
       style={{ maxHeight: 168 }}
@@ -145,11 +165,16 @@ export function ImageTextPanel({
   const v = fullMark(mark)
   const put = (patch: Partial<ImageTextMark>) => {
     touch()
+    // Обводка растёт и уменьшается вместе с буквами, как в монтаже.
+    if (patch.size && patch.stroke === undefined && v.size > 0 && patch.size !== v.size) {
+      patch = { ...patch, stroke: Math.round(v.stroke * (patch.size / v.size) * 10) / 10 }
+    }
     onChange(patch)
     // Вид запоминается для следующей надписи — как раньше на панели.
     if (!('x' in patch) && !('y' in patch) && !('text' in patch)) saveTextStyle({ ...v, ...patch })
   }
   const family = fonts?.find((item) => item.name === v.font)
+  const face = useFace(v.font, v.bold, v.italic)
   // Обычные толщина и сдвиги — от кегля, как в монтаже от высоты кадра.
   const stock = Math.max(1, Math.round(v.size / 16))
 
@@ -172,7 +197,7 @@ export function ImageTextPanel({
         />
       </Row>
 
-      <TextBox value={v.text} onChange={(text) => put({ text })} />
+      <TextBox value={v.text} quotes={face?.quotes} onChange={(text) => put({ text })} />
 
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">

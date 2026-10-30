@@ -393,6 +393,8 @@ async def font_face(name: str, bold: bool = False, italic: bool = False) -> dict
             + urllib.parse.urlencode({"name": name, "bold": str(bold).lower(), "italic": str(italic).lower()})
         ),
         "lineHeight": round(ratio, 4),
+        # Каких прямых кавычек нет в шрифте и чем их заменит сборка.
+        "quotes": await asyncio.to_thread(fonts.quote_swaps, path),
     }
 
 

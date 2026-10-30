@@ -232,3 +232,95 @@ def line_height(path: str) -> float:
         pass
     _line_heights[path] = ratio
     return ratio
+
+
+_cmaps: dict[str, frozenset[int]] = {}
+
+
+def _codepoints(path: str) -> frozenset[int]:
+    """Какие знаки есть в шрифте — по таблице `cmap` самого файла.
+
+    Читаем подтаблицы формата 4 (основные знаки) и 12 (все остальные).
+    Сломанный файл — пустое множество: тогда ничего и не подменяем.
+    """
+    if path in _cmaps:
+        return _cmaps[path]
+    found: set[int] = set()
+    try:
+        data = Path(path).read_bytes()
+        base = struct.unpack(">I", data[12:16])[0] if data[:4] == b"ttcf" else 0
+        count = struct.unpack(">H", data[base + 4 : base + 6])[0]
+        cmap = 0
+        for index in range(count):
+            entry = base + 12 + index * 16
+            if data[entry : entry + 4] == b"cmap":
+                cmap = struct.unpack(">I", data[entry + 8 : entry + 12])[0]
+        subtables = struct.unpack(">H", data[cmap + 2 : cmap + 4])[0]
+        for index in range(subtables):
+            platform, _, offset = struct.unpack(">HHI", data[cmap + 4 + index * 8 : cmap + 12 + index * 8])
+            if platform not in (0, 3):
+                continue
+            at = cmap + offset
+            kind = struct.unpack(">H", data[at : at + 2])[0]
+            if kind == 4:
+                pairs = struct.unpack(">H", data[at + 6 : at + 8])[0] // 2
+                ends = at + 14
+                starts = ends + pairs * 2 + 2
+                for pair in range(pairs):
+                    end = struct.unpack(">H", data[ends + pair * 2 : ends + pair * 2 + 2])[0]
+                    start = struct.unpack(">H", data[starts + pair * 2 : starts + pair * 2 + 2])[0]
+                    if start != 0xFFFF:
+                        found.update(range(start, end + 1))
+            elif kind == 12:
+                groups = struct.unpack(">I", data[at + 12 : at + 16])[0]
+                for group in range(groups):
+                    start, end, _ = struct.unpack(">III", data[at + 16 + group * 12 : at + 28 + group * 12])
+                    found.update(range(start, min(end, start + 0x10000) + 1))
+    except (OSError, struct.error, IndexError):
+        found = set()
+    _cmaps[path] = frozenset(found)
+    return _cmaps[path]
+
+
+#: Прямые кавычки и чем их заменить: открывающая и закрывающая.
+_QUOTE_SWAPS = {'"': ("\u201c\u201d", "\u00ab\u00bb", "\u201e\u201c"), "'": ("\u2018\u2019",)}
+
+
+def quote_swaps(path: str) -> dict[str, str]:
+    """Какие прямые кавычки в шрифте отсутствуют и чем их заменить.
+
+    В фигурных шрифтах прямой кавычки часто нет, а «ёлочки» и “лапки” есть.
+    Окно подставляло недостающий знак из другого шрифта и показывало
+    кавычку, а ffmpeg на её месте не рисовал ничего. Ответ — пары
+    «открывающая + закрывающая», которые в шрифте есть.
+    """
+    have = _codepoints(path)
+    if not have:
+        return {}
+    swaps: dict[str, str] = {}
+    for plain, options in _QUOTE_SWAPS.items():
+        if ord(plain) in have:
+            continue
+        for pair in options:
+            if all(ord(char) in have for char in pair):
+                swaps[plain] = pair
+                break
+    return swaps
+
+
+def fit_quotes(text: str, swaps: dict[str, str]) -> str:
+    """Прямые кавычки — парными, если в шрифте их нет (`quote_swaps`).
+
+    Открывающая — в начале строки и после пробела или скобки, иначе
+    закрывающая. То же правило у окна (`fitQuotes`).
+    """
+    if not swaps:
+        return text
+    out: list[str] = []
+    for index, char in enumerate(text):
+        pair = swaps.get(char)
+        if pair:
+            before = text[index - 1] if index else " "
+            char = pair[0] if before.isspace() or before in "([{\u00ab\u201c\u201e-\u2014" else pair[1]
+        out.append(char)
+    return "".join(out)

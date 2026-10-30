@@ -35,6 +35,7 @@ import { useStore } from '../store'
 import { ComposeTimeline } from './ComposeTimeline'
 import { ComposeFrameBox, ComposeGrid, GRIDS, type GridKind } from './ComposeFrameBox'
 import { ComposeCropBox } from './ComposeCropBox'
+import { ComposeDelogoBox, shownDelogos } from './ComposeDelogoBox'
 import { ComposeMaskBox } from './ComposeMaskBox'
 import { ComposeProjects } from './ComposeProjects'
 import { ComposeMissing } from './ComposeMissing'
@@ -469,13 +470,19 @@ export function ComposeTab() {
       const withEffects = shownTracks.some(
         (track) => (track.effects ?? []).length || track.clips.some((clip) => (clip.effects ?? []).length),
       )
+      // Стабилизатор остаётся в обеих половинах: он приближает и сдвигает
+      // кадр, и без него левая половина съезжала и сжималась относительно
+      // правой. На одном кадре его действия всё равно не видно — оно в
+      // движении.
+      const framing = (effects: typeof shownTracks[number]['effects']) =>
+        (effects ?? []).filter((effect) => effect.type === 'stabilize')
       const raw =
         compare && withEffects
           ? frameOf(
               shownTracks.map((track) => ({
                 ...track,
-                effects: [],
-                clips: track.clips.map((clip) => ({ ...clip, effects: [] })),
+                effects: framing(track.effects),
+                clips: track.clips.map((clip) => ({ ...clip, effects: framing(clip.effects) })),
               })),
             )
           : Promise.resolve(null)
@@ -1224,7 +1231,14 @@ export function ComposeTab() {
                   ) : masking === placing.id ? (
                     <ComposeMaskBox clip={shownAt(placing, playhead)} />
                   ) : (
-                    <ComposeFrameBox clip={shownAt(placing, playhead)} grid={grid} />
+                    <>
+                      <ComposeFrameBox clip={shownAt(placing, playhead)} grid={grid} />
+                      {/* Область водяного знака — поверх рамки клипа: её
+                          тянут прямо в кадре, а не ползунками. */}
+                      {shownDelogos(placing).map((effect) => (
+                        <ComposeDelogoBox key={effect.id} clip={shownAt(placing, playhead)} effect={effect} />
+                      ))}
+                    </>
                   )
                 )}
                 {!player.playing && liveText && (

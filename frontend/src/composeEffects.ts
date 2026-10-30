@@ -154,7 +154,7 @@ export const EFFECTS: EffectKind[] = [
     target: 'video',
     hint: 'Закрасить прямоугольник цветом от его краёв. Лучше всего выходит на спокойном фоне',
     params: [
-      { key: 'show', label: 'Показать область рамкой (только в окне просмотра)', kind: 'check', default: 1 },
+      { key: 'show', label: 'Показать область в кадре — её можно тянуть мышью за края и середину', kind: 'check', default: 1 },
       { key: 'left', label: 'Слева', min: 0, max: 100, step: 0.5, unit: '%', default: 75 },
       { key: 'top', label: 'Сверху', min: 0, max: 100, step: 0.5, unit: '%', default: 5 },
       { key: 'width', label: 'Ширина', min: 1, max: 100, step: 0.5, unit: '%', default: 20 },

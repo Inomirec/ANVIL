@@ -29,6 +29,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 from pathlib import Path
 
@@ -458,7 +459,9 @@ def text_layered(clip: ComposeClip) -> bool:
     половине — углы скругляются, прямые края остаются на месте, у тени
     остаётся размытой. Без этих настроек — один проход, как раньше.
     """
-    return (clip.box and clip.box_radius > 1e-6) or (_shadow_on(clip) and clip.shadow_blur > 1e-6)
+    return (clip.box and (clip.box_radius > 1e-6 or abs(clip.box_shift) > 1e-4)) or (
+        _shadow_on(clip) and clip.shadow_blur > 1e-6
+    )
 
 
 def _rgb(colour: str) -> tuple[int, int, int]:
@@ -548,15 +551,19 @@ def text_filter(
     # клипа прошло до него: от этого считаются ключи.
     moment = f"(t+{skip:.4f})"
     where = fonts.path_for(clip.font, clip.bold, clip.italic)
-    parts = [f"textfile={_escaped(str(text_file(clip.text)))}"]
+    # Прямых кавычек в фигурных шрифтах часто нет — рисуем парные.
+    text = fonts.fit_quotes(clip.text, fonts.quote_swaps(where)) if where else clip.text
+    parts = [f"textfile={_escaped(str(text_file(text)))}"]
     if where:
         parts.append(f"fontfile={_escaped(where)}")
     if anim.animated(clip, "fontSize"):
         # Размер по ключам — формулой от времени: drawtext пересчитывает её
         # на каждом кадре. Надпись растёт от своей середины.
-        parts.append(f"fontsize='max(1,{height}*({anim.expression(clip, 'fontSize', moment)}))'")
+        size = f"max(1,{height}*({anim.expression(clip, 'fontSize', moment)}))"
+        parts.append(f"fontsize='{size}'")
     else:
-        parts.append(f"fontsize={max(1, round(height * clip.font_size))}")
+        size = str(max(1, round(height * clip.font_size)))
+        parts.append(f"fontsize={size}")
     # Слои надписи (`text_layers`): у подложки буквы прозрачные, у тени —
     # цвета тени, у самих букв нет ни тени, ни подложки.
     if role == "box":
@@ -610,6 +617,9 @@ def text_filter(
         # Тень — та же надпись, сдвинутая на сдвиг тени.
         middle_x += f"+{height * clip.shadow_x:.2f}"
         middle_y += f"+{height * clip.shadow_y:.2f}"
+    if role == "box" and abs(clip.box_shift) > 1e-4:
+        # Подложка — вокруг самих букв, а не их ячеек (`_ink_shift`).
+        middle_x += f"+({clip.box_shift:.5f})*{size}"
     if clip.align == "left":
         parts.append(f"x='{middle_x}'")
     elif clip.align == "right":
@@ -852,6 +862,66 @@ async def _render_mask_sequence(clip: ComposeClip, fps: float) -> Path:
     return target
 
 
+_ink_shifts: dict[tuple[str, str], float] = {}
+
+#: Размер букв для замера: крупно, чтобы ошибка в пиксель не значила ничего.
+_INK_SIZE = 200
+
+
+def _bbox_x(log: str) -> tuple[int, int] | None:
+    """Левый и правый край из вывода фильтра `bbox`."""
+    found = re.findall(r"x1:(-?\d+) x2:(-?\d+)", log)
+    return (int(found[-1][0]), int(found[-1][1])) if found else None
+
+
+async def _ink_shift(clip: ComposeClip) -> float:
+    """На сколько сдвинуть подложку вбок, чтобы она легла вокруг букв.
+
+    `drawtext` кладёт подложку по ячейкам букв — от начала первой до конца
+    последней. У фигурных шрифтов буквы из ячеек выступают: у Pribambas
+    «Т» уходит за свою ячейку влево и не доходит до её правого края, и
+    подложка выходила с зазором 4 точки слева и 12 справа. Поэтому один раз
+    рисуем надпись крупно и меряем фильтром `bbox`, где ячейки и где сами
+    буквы, — и сдвигаем подложку на разницу их середин. Ответ — в долях
+    размера букв, запоминается на текст и файл шрифта.
+    """
+    where = fonts.path_for(clip.font, clip.bold, clip.italic)
+    text = fonts.fit_quotes(clip.text, fonts.quote_swaps(where)) if where else clip.text
+    if not where or not text.strip():
+        return 0.0
+    key = (where, text)
+    if key in _ink_shifts:
+        return _ink_shifts[key]
+    lines = text.split(LINE_FEED)
+    width = min(16000, max(len(line) for line in lines) * _INK_SIZE * 2 + 4 * _INK_SIZE)
+    height = len(lines) * _INK_SIZE * 2 + 2 * _INK_SIZE
+    align = "" if clip.align == "left" else f":text_align={'C' if clip.align == 'center' else 'R'}"
+    common = (
+        f"drawtext=textfile={_escaped(str(text_file(text)))}:fontfile={_escaped(where)}"
+        f":fontsize={_INK_SIZE}{align}:x={2 * _INK_SIZE}:y={_INK_SIZE}"
+    )
+    edges: list[tuple[int, int]] = []
+    for extra in (":fontcolor=white", ":fontcolor=black@0:box=1:boxcolor=white:boxborderw=0"):
+        process = await asyncio.create_subprocess_exec(
+            binaries.ffmpeg(), "-v", "info", "-f", "lavfi", "-i",
+            f"color=c=black:s={width}x{height}:d=0.04",
+            "-vf", f"{common}{extra},bbox=min_val=40", "-frames:v", "1", "-f", "null", "-",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=binaries.CREATE_NO_WINDOW,
+            env=binaries.subprocess_env(),
+        )
+        _, err = await process.communicate()
+        found = _bbox_x(err.decode("utf-8", "replace"))
+        if process.returncode != 0 or not found:
+            return 0.0
+        edges.append(found)
+    (ink_left, ink_right), (cell_left, cell_right) = edges
+    shift = ((ink_left + ink_right) - (cell_left + cell_right)) / 2 / _INK_SIZE
+    _ink_shifts[key] = shift
+    return shift
+
+
 async def prepare_fills(
     project: ComposeProject, width: int | None = None, height: int | None = None
 ) -> None:
@@ -867,6 +937,8 @@ async def prepare_fills(
         for clip in track.clips:
             if is_decorated_fill(clip):
                 clip.fill_image = str(await _render_fill(clip, frame_w, frame_h))
+            if clip.kind == "text" and clip.box:
+                clip.box_shift = await _ink_shift(clip)
             # Маски — тоже картинки, рисуются здесь же и по той же причине.
             if effects.has_mask(clip) and clip.source_width:
                 if effects.points_animated(clip):

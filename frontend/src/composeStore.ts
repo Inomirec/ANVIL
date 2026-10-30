@@ -215,6 +215,23 @@ export const EFFECT_PIXELS = {
   radius: 0,
 }
 
+/**
+ * Правка клипа, где обводка надписи растёт и уменьшается вместе с буквами.
+ *
+ * Толщина хранится в долях кадра, и при неизменной толщине крупные буквы
+ * выходили с ниточкой, а мелкие тонули в обводке. Поэтому вместе с
+ * размером букв она меняется в той же пропорции — если её саму не задали.
+ */
+function withStrokeScaled(clip: ComposeClip, patch: Partial<ComposeClip>): ComposeClip {
+  const next = { ...clip, ...patch }
+  const before = clip.fontSize ?? 0
+  const after = next.fontSize ?? 0
+  if (clip.kind === 'text' && patch.stroke === undefined && clip.stroke && before > 0 && after > 0 && after !== before) {
+    next.stroke = Math.min(0.2, clip.stroke * (after / before))
+  }
+  return next
+}
+
 /** Эффекты по умолчанию в долях высоты кадра — для новой надписи и заливки. */
 export function effectDefaults(height: number) {
   return {
@@ -1603,7 +1620,7 @@ export const useCompose = create<State>((set, get) => ({
     set((state) => ({
       tracks: state.tracks.map((track) => ({
         ...track,
-        clips: track.clips.map((clip) => (clip.id === id ? { ...clip, ...patch } : clip)),
+        clips: track.clips.map((clip) => (clip.id === id ? withStrokeScaled(clip, patch) : clip)),
       })),
     }))
     save(get())

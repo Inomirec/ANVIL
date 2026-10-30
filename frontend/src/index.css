@@ -52,6 +52,17 @@
     font-size: 14px;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;
+    /* Интерфейс мышью не выделяется: протянутая с зажатой кнопкой мышь
+       закрашивала подписи и кнопки синим. Поля ввода выделяются как обычно. */
+    user-select: none;
+  }
+
+  /* Ошибки, журналы и команды выделяются: их копируют и ищут по ним. */
+  .text-danger,
+  pre,
+  code,
+  [contenteditable] {
+    user-select: text;
   }
 
   ::-webkit-scrollbar {

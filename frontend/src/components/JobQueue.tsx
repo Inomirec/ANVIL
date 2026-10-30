@@ -487,7 +487,7 @@ function ErrorText({ hint, text }: { hint?: string | null; text: string | null }
     )
   }
   return (
-    <div className="mt-1 space-y-1.5">
+    <div className="mt-1 select-text space-y-1.5">
       {hint && (
         <p className="whitespace-pre-wrap break-words text-[12px] leading-snug text-ink">
           {hint}

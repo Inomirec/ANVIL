@@ -202,9 +202,27 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     }
   }, [])
 
+  /**
+   * Где кончается круг повтора для просмотра, идущего с секунды ``from``.
+   *
+   * С повтором и отмеченной областью (метки I и O) круг — сама область: до
+   * её конца — и снова к началу. Просмотр, начатый до области, идёт как шёл
+   * и попадает в круг, дойдя до её конца. Начатый после области идёт до
+   * конца монтажа и начинает сначала — а там уже дойдёт и до области.
+   */
+  const loopRange = useCallback((from: number): { start: number; end: number } | null => {
+    if (!loopRef.current) return null
+    const state = useCompose.getState()
+    if (state.renderIn === null && state.renderOut === null) return null
+    const start = state.renderIn ?? 0
+    const end = state.renderOut ?? state.duration()
+    if (end - start < 0.1 || from >= end - 0.05) return null
+    return { start, end }
+  }, [])
+
   /** Просит у программы кусок монтажа с указанной секунды. */
   const fetchChunk = useCallback(
-    async (at: number, mine: number): Promise<Chunk | null> => {
+    async (at: number, mine: number, from = at): Promise<Chunk | null> => {
       const started = performance.now()
       const version = usePreviewReady.getState().version
       try {
@@ -212,7 +230,8 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
         const data = await api.composeDraft({
           project: snapshot(),
           at,
-          span: CHUNK_SECONDS,
+          // Кусок, на котором кончается круг повтора, — ровно до его конца.
+          span: Math.min(CHUNK_SECONDS, (loopRange(from)?.end ?? Infinity) - at),
           height: previewHeight(asked === 'auto' ? height.current : asked),
         })
         let sound: AudioBuffer | null = null
@@ -239,7 +258,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
         return null
       }
     },
-    [snapshot, graph],
+    [snapshot, graph, loopRange],
   )
 
   /** Ставит звук куска на звуковые часы: секунда ``offset`` — в момент ``when``. */
@@ -286,11 +305,14 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
       queue.current[queue.current.length - 1] ?? upcoming.current?.chunk ?? current.current?.chunk
     if (!last) return null
     const at = last.at + last.span
+    // Дошли до конца круга повтора — следующий кусок с его начала.
+    const range = loopRange(last.at)
+    if (range && at >= range.end - 0.05) return range.start
     const finish = useCompose.getState().duration()
     if (at < finish - 0.05) return at
     // Дошли до конца: с повтором следующий кусок — снова с начала.
     return loopRef.current && last.at > 0 ? 0 : null
-  }, [])
+  }, [loopRange])
 
   /**
    * Ставит следующий кусок встык за играющим: звук — сразу на звуковые часы,
@@ -407,7 +429,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     // Кусок — с ровной отметки, а играть — с иглы внутри него: так кусок,
     // однажды собранный, годится для просмотра с любого места в нём.
     const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
-    const first = await fetchChunk(base, mine)
+    const first = await fetchChunk(base, mine, at)
     if (!first || !alive.current || mine !== run.current) {
       if (mine === run.current) setPreparing(false)
       return
