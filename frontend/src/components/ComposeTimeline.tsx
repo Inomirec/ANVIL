@@ -94,6 +94,10 @@ const FADE_CORNER = 18
 const PLAYHEAD_SNAP = 6
 /** Сдвиг, после которого нажатие считается протяжкой, а не щелчком. */
 const DRAG_START = 4
+/** Ближе этого к краю видимой части таймлайн едет за перетаскиваемым. */
+const FOLLOW_EDGE = 40
+/** Быстрее этого (точек за шаг в 16 мс) он не едет. */
+const FOLLOW_MAX = 30
 /** Обычная высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
 export const TRACK_HEIGHT = 74
 /** Сжатые дорожки: когда их много, а места мало. Клавиша «Ё». */
@@ -371,9 +375,48 @@ export function ComposeTimeline({
   // иначе они запомнили бы снимок из прошлого рендера, и клип прыгал бы к
   // старым координатам. На этих граблях программа стояла уже дважды.
   useEffect(() => {
+    // Тащат клип, край, иглу или рамку к краю видимой части — таймлайн
+    // сам едет следом, пока мышь у края: иначе дальше экрана ничего не
+    // унести, приходилось прокручивать или отдалять таймлайн.
+    let last: MouseEvent | null = null
+    let follow: ReturnType<typeof setInterval> | null = null
+    const stopFollow = () => {
+      if (follow) clearInterval(follow)
+      follow = null
+    }
+    const push = (x: number) => {
+      const box = scroller.current?.getBoundingClientRect()
+      if (!box) return 0
+      if (x < box.left + FOLLOW_EDGE) return x - (box.left + FOLLOW_EDGE)
+      if (x > box.right - FOLLOW_EDGE) return x - (box.right - FOLLOW_EDGE)
+      return 0
+    }
+    const following = () => {
+      const current = drag.current
+      if (!current || current.kind === 'pending' || current.kind === 'level') return false
+      return current.kind !== 'move' || current.started
+    }
+    const step = () => {
+      const element = scroller.current
+      const away = last ? push(last.clientX) : 0
+      if (!element || !last || !away || !following()) {
+        stopFollow()
+        return
+      }
+      // Чем дальше мышь за край, тем быстрее едет.
+      const shift = Math.sign(away) * Math.min(FOLLOW_MAX, 3 + Math.abs(away) * 0.4)
+      const before = element.scrollLeft
+      element.scrollLeft = before + shift
+      if (element.scrollLeft === before) return
+      // Мышь стоит, а таймлайн под ней уехал — клип должен ехать вместе с ним.
+      onMove(last)
+    }
+
     const onMove = (event: MouseEvent) => {
       const current = drag.current
       if (!current) return
+      last = event
+      if (!follow && push(event.clientX) && following()) follow = setInterval(step, 16)
       const state = useCompose.getState()
       const at = secondsAt(event.clientX)
 
@@ -589,6 +632,8 @@ export function ComposeTimeline({
     }
 
     const onUp = () => {
+      stopFollow()
+      last = null
       const current = drag.current
       // Перетащили клип — смотрим, не сошлись ли где-то трое. Проверяем
       // только здесь: во время перетаскивания клип должен свободно проходить
@@ -635,6 +680,7 @@ export function ComposeTimeline({
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     return () => {
+      stopFollow()
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
@@ -2605,12 +2651,12 @@ function Ruler({
           title="Собрано для просмотра — сыграет без ожидания"
         />
       ))}
-      {/* Деление — снизу, у дорожек; подпись — у верха линейки, чтобы не
+      {/* Деление сверху, подпись под ним — чуть приподнята, чтобы не
           налезать на первую дорожку. */}
       {marks.map((at) => (
         <div key={at} className="absolute top-0 h-full" style={{ left: at * scale }}>
-          <div className="absolute bottom-0 h-2 w-px bg-line" />
-          <span className="absolute left-1 top-[3px] whitespace-nowrap font-mono text-[9.5px] leading-none tabular-nums text-ink-faint">
+          <div className="h-2 w-px bg-line" />
+          <span className="ml-1 block -translate-y-[3px] whitespace-nowrap font-mono text-[9.5px] tabular-nums text-ink-faint">
             {inFrames ? frameCode(at, fps) : timecode(at)}
           </span>
         </div>

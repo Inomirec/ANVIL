@@ -705,7 +705,7 @@ export function SideColumn({
       return null
     }
   })
-  const box = useRef<HTMLElement>(null)
+  const box = useRef<HTMLDivElement>(null)
   const fit = (value: number) => Math.round(Math.min(max, Math.max(min, value)))
 
   const grab = (event: React.MouseEvent) => {
@@ -741,21 +741,26 @@ export function SideColumn({
     window.addEventListener('mouseup', drop)
   }
 
+  // Ручка — снаружи колонки, на её границе: внутри она ложилась на полосу
+  // прокрутки списка, и листать его было неудобно. Поэтому колонка — в
+  // обёртке без обрезки, а ручка торчит из неё. У правой колонки ручка
+  // заходит наружу не целиком: там у середины своя полоса прокрутки
+  // (дорожки таймлайна).
   return (
-    <aside
+    <div
       ref={box}
-      className={`relative ${width === null ? fallback : ''} ${className}`}
+      className={`relative flex shrink-0 ${width === null ? fallback : ''}`}
       style={width === null ? undefined : { width: fit(width) }}
     >
-      {children}
+      <aside className={`min-w-0 flex-1 ${className}`}>{children}</aside>
       <div
         onMouseDown={grab}
         title="Потяните, чтобы сделать колонку уже или шире. Двойное нажатие — обычная ширина"
-        className={`absolute inset-y-0 z-30 w-[5px] cursor-col-resize hover:bg-accent/30 ${
-          side === 'left' ? 'right-0' : 'left-0'
+        className={`absolute inset-y-0 z-40 w-[6px] cursor-col-resize hover:bg-accent/30 ${
+          side === 'left' ? '-right-[6px]' : '-left-[4px]'
         }`}
       />
-    </aside>
+    </div>
   )
 }
 

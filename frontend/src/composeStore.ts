@@ -439,9 +439,9 @@ export function volumeLabel(gain: number): string {
 /** Сколько висит картинка, если не трогать её длину. */
 export const DEFAULT_IMAGE_SECONDS = 3
 //: Сколько по умолчанию висит надпись — обычная длина субтитра.
-export const DEFAULT_TEXT_SECONDS = 5
+export const DEFAULT_TEXT_SECONDS = 7.5
 /** Заливка — шире картинки: узкую неудобно растягивать за края. */
-export const DEFAULT_FILL_SECONDS = 5
+export const DEFAULT_FILL_SECONDS = 7.5
 /** Короче этого клип не тянется — иначе он исчезает под курсором. */
 export const MIN_CLIP_SECONDS = 0.2
 
