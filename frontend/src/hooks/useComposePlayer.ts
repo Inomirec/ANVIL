@@ -29,10 +29,6 @@ import type { MeterLevels } from '../components/MasterMeter'
  */
 const CHUNK_SECONDS = 12
 
-/** Ближайшая отметка кусков после ``at`` (сама ``at``, если она на отметке, — следующая). */
-function nextMark(at: number): number {
-  return (Math.floor(at / CHUNK_SECONDS + 1e-6) + 1) * CHUNK_SECONDS
-}
 /** На сколько секунд вперёд держим собранные куски. */
 const AHEAD_SECONDS = 60
 /** С какого качества начинаем. На слабой машине программа понизит сама. */
@@ -210,10 +206,12 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
       width: state.width,
       height: state.height,
       fps: state.fps,
-      // Громкость монтажа и выравнивание идут и в просмотр: иначе на слух
-      // он отличался бы от готового файла.
+      // Громкость монтажа идёт и в просмотр: иначе на слух он отличался бы
+      // от готового файла. Выравнивание громкости всего монтажа — нет: оно
+      // подстраивается заново в начале каждого куска, и на стыках громкость
+      // прыгала. Оно для готового файла; услышать выравнивание в просмотре —
+      // эффекты выравнивания у клипа или дорожки.
       masterVolume: state.masterVolume,
-      loudnorm: state.loudnorm,
       tracks: state.tracks,
     }
   }, [])
@@ -248,9 +246,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           project: snapshot(),
           at,
           // Кусок, на котором кончается круг повтора, — ровно до его конца.
-          // Кусок не с отметки (после круга повтора) — до ближайшей отметки,
-          // дальше снова обычные: их берут из запаса при следующем просмотре.
-          span: Math.min(CHUNK_SECONDS, nextMark(at) - at, (loopRange(from)?.end ?? Infinity) - at),
+          span: Math.min(CHUNK_SECONDS, (loopRange(from)?.end ?? Infinity) - at),
           height: previewHeight(asked === 'auto' ? height.current : asked),
           },
           aborter.current.signal,
@@ -473,12 +469,12 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     let at = state.playhead
     // Игла осталась в самом конце — начинаем сначала, как любой плеер.
     if (at >= finish - 0.05) at = 0
-    // Кусок — с ровной отметки, а играть — с иглы внутри него: так кусок,
-    // однажды собранный, годится для просмотра с любого места в нём.
-    // Короткий первый кусок пробовали: следующий не успевал собраться за
-    // время его показа, и просмотр тут же вставал снова.
-    const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
-    const first = await fetchChunk(base, mine, at)
+    // Первый кусок — прямо с иглы. Прежде он начинался с ровной отметки
+    // до иглы (чтобы годиться для запаса), и до начала просмотра собиралось
+    // то, что человек смотреть не собирался, — иногда десяток секунд пустоты.
+    // Короткий первый кусок тоже пробовали: следующий не успевал собраться
+    // за время его показа, и просмотр тут же вставал снова.
+    const first = await fetchChunk(at, mine, at)
     if (!first || !alive.current || mine !== run.current) {
       if (mine === run.current) setPreparing(false)
       return
@@ -614,8 +610,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
           state.width !== prev.width ||
           state.height !== prev.height ||
           state.fps !== prev.fps ||
-          state.masterVolume !== prev.masterVolume ||
-          state.loudnorm !== prev.loudnorm
+          state.masterVolume !== prev.masterVolume
         ) {
           usePreviewReady.getState().clear()
           // Собранное впрок показывает уже не то — следующие куски заново,
@@ -634,7 +629,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const off = useCompose.subscribe((state, prev) => {
-      if (state.masterVolume === prev.masterVolume && state.loudnorm === prev.loudnorm) return
+      if (state.masterVolume === prev.masterVolume) return
       if (!playingRef.current) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {

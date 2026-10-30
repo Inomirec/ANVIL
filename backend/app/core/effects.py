@@ -102,7 +102,7 @@ def _colour(effect: ClipEffect, key: str, default: str) -> str:
     return "0x" + value.lstrip("#")
 
 
-def _delogo(effect: ClipEffect, clip: ComposeClip, preview: bool) -> str:
+def _delogo(effect: ClipEffect, clip: ComposeClip) -> str:
     """Убрать водяной знак: закрасить прямоугольник, подобрав цвет от краёв.
 
     Место задаётся в процентах картинки, а ffmpeg понимает только пиксели —
@@ -123,10 +123,10 @@ def _delogo(effect: ClipEffect, clip: ComposeClip, preview: bool) -> str:
     y = round(height * _number(effect, "top", 5, 0, 100) / 100)
     x = min(max(1, x), width - w - 2)
     y = min(max(1, y), height - h - 2)
-    # Рамку вокруг области видно только в окне программы: по ней место и
-    # подбирают, а в готовый файл она попасть не должна.
-    show = 1 if preview and _number(effect, "show", 1, 0, 1) >= 0.5 else 0
-    return f"delogo=x={x}:y={y}:w={w}:h={h}:show={show}"
+    # Своей рамки ffmpeg не рисует нигде: в кадре и в просмотре она стояла у
+    # клипа, даже когда его не выбирали. Область показывает и тянет окно
+    # (`ComposeDelogoBox`) — у выбранного клипа.
+    return f"delogo=x={x}:y={y}:w={w}:h={h}"
 
 
 def _keyed(clip: ComposeClip, effect: ClipEffect, param: str) -> bool:
@@ -163,7 +163,7 @@ def _video_effect(
         return f"sendcmd=f={command_file(lines)},"
 
     if kind == "delogo":
-        return _delogo(effect, clip, preview)
+        return _delogo(effect, clip)
     if kind == "color":
         # Шкалы -100…100, ноль — как было.
         def bright(value: float) -> float:

@@ -25,7 +25,6 @@ from ..models import (
     ComposeFindRequest,
     ComposeDraftRequest,
     ComposeFrameRequest,
-    ComposeProject,
     ComposeProjectFile,
     ComposeSnapshotRequest,
     StabilizeRequest,
@@ -52,6 +51,10 @@ async def frame(request: ComposeFrameRequest) -> Response:
         project = await compose.prepare(request.project, skip_missing=True, lost=lost)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+    # Выравнивание громкости всего монтажа — только в готовом файле: в кусках
+    # оно подстраивалось бы заново на каждом стыке, и громкость прыгала.
+    project.loudnorm = False
 
     if not total:
         raise HTTPException(400, "На таймлайне пусто")
@@ -106,7 +109,7 @@ async def frame(request: ComposeFrameRequest) -> Response:
 _DRAFT_KEEP = 80
 #: Версия сборки черновиков. Меняется, когда меняется то, как собирается
 #: кусок, — иначе просмотр брал бы из запаса куски, собранные по-старому.
-_DRAFT_VERSION = "7"
+_DRAFT_VERSION = "8"
 #: Пока собирается один кусок, следующий ждёт: иначе десяток ffmpeg разом
 #: положит машину, ради которой всё это и затевалось.
 _draft_lock = asyncio.Lock()
@@ -157,49 +160,6 @@ async def _draft_sound(video: Path, span: float) -> Path | None:
     return target
 
 
-#: Сколько звука собирать до начала куска, когда выравнивается громкость.
-_WARM_SECONDS = 3.0
-
-
-async def _warm_sound(project: ComposeProject, video: Path, at: float, span: float) -> Path | None:
-    """Звук куска с выравниванием громкости — с разгоном до его начала.
-
-    `loudnorm` подстраивает громкость на ходу и в начале каждого куска
-    начинает подстройку заново, поэтому на стыках громкость прыгала. Здесь
-    звук собирается с запасом в несколько секунд до куска — выравнивание
-    успевает войти в колею, — а запас отрезается. Не вышло — звук из самого
-    куска, как раньше.
-    """
-    target = video.with_suffix(".wav")
-    if target.exists():
-        with contextlib.suppress(OSError):
-            os.utime(target)
-        return target
-    pre = min(at, _WARM_SECONDS)
-    try:
-        args = compose.build_segment(
-            project, target, at=at - pre, span=span + pre, preview=True, audio_only=True,
-            codec=["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2"],
-        )
-    except ValueError:
-        return None
-    # Запас отрезаем на выходе — для звука это точно до отсчёта.
-    cut = len(args) - 1 - args[::-1].index("-t")
-    args[cut : cut + 2] = ["-ss", f"{pre:.3f}", "-t", f"{span:.3f}"]
-    process = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        creationflags=binaries.CREATE_NO_WINDOW,
-        env=binaries.subprocess_env(),
-    )
-    await process.wait()
-    if process.returncode != 0 or not target.exists():
-        target.unlink(missing_ok=True)
-        return await _draft_sound(video, span)
-    return target
-
-
 @router.post("/draft")
 async def draft(request: ComposeDraftRequest, http: Request) -> dict:
     """Собирает кусок монтажа для просмотра и отдаёт ссылку на него.
@@ -216,6 +176,10 @@ async def draft(request: ComposeDraftRequest, http: Request) -> dict:
         project = await compose.prepare(request.project, skip_missing=True, lost=lost)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+    # Выравнивание громкости всего монтажа — только в готовом файле: в кусках
+    # оно подстраивалось бы заново на каждом стыке, и громкость прыгала.
+    project.loudnorm = False
 
     if not total:
         raise HTTPException(400, "На таймлайне пусто")
@@ -284,11 +248,7 @@ async def draft(request: ComposeDraftRequest, http: Request) -> dict:
                     )
                 _prune_drafts(target.parent)
 
-    sound = (
-        await _warm_sound(project, target, at, span)
-        if project.loudnorm and at > 0.05
-        else await _draft_sound(target, span)
-    )
+    sound = await _draft_sound(target, span)
     return {
         "url": f"/api/compose/draft/{target.name}",
         "audio": f"/api/compose/draft/{sound.name}" if sound else None,

@@ -1419,7 +1419,10 @@ def build_segment(
                 chain.append(
                     f"{pre_label}{pre_chain}split=2[fa{index}][fb{index}];"
                     f"[fa{index}]scale={width}:{height}:force_original_aspect_ratio=increase,"
-                    f"crop={width}:{height},gblur=sigma={sigma:.1f},"
+                    # Сила размытия — в точках кадра проекта: кадр просмотра
+                    # мельче, и та же сила в его точках размывала его в
+                    # разы сильнее, чем готовый файл.
+                    f"crop={width}:{height},gblur=sigma={max(0.3, sigma * height / project.height):.2f},"
                     f"eq=brightness={-dim * 0.5:.3f},format=yuva420p[fbg{index}];"
                     f"[fb{index}]{place_filter(clip, width, height, fps, max(0.0, at - clip.start))}"
                     f"[ffg{index}];"
