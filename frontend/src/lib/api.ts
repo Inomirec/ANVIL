@@ -120,9 +120,9 @@ export const api = {
       { source, params },
     ),
   /** Какие файлы монтажа пропали и какие лежат вне рабочих папок. */
-  /** Запись с микрофона — сервер кладёт её в папку «Записи» и отдаёт путь. */
-  composeRecord: async (blob: Blob): Promise<{ path: string }> => {
-    const response = await fetch('/api/compose/record', {
+  /** Запись с микрофона (WAV) — сервер кладёт её в папку и отдаёт путь. */
+  composeRecord: async (blob: Blob, folder: string): Promise<{ path: string }> => {
+    const response = await fetch(`/api/compose/record?folder=${encodeURIComponent(folder)}`, {
       method: 'POST',
       headers: { 'Content-Type': blob.type || 'application/octet-stream' },
       body: blob,
@@ -138,6 +138,8 @@ export const api = {
     }
     return response.json()
   },
+  /** Папка записей по умолчанию: «Записи» в рабочей папке. */
+  recordFolder: () => request<{ path: string }>('/api/compose/record-folder'),
   composeCheck: (sources: string[]) =>
     post<{ missing: string[]; outside: string[] }>('/api/compose/check', { sources }),
   /** Ищет пропавшие файлы в папке, где нашёлся один из них. */
@@ -158,10 +160,12 @@ export const api = {
   /** Какие из картинок движутся — по заголовкам файлов, без ffprobe. */
   movingImages: (paths: string[]) => post<{ moving: string[] }>('/api/library/moving', { paths }),
   fileInfo: (path: string) => request<FileInfo>(`/api/library/info?path=${encodeURIComponent(path)}`),
-  waveform: (path: string, buckets?: number) =>
+  /** ``raw`` — пики как есть, без подгонки под самый громкий момент файла. */
+  waveform: (path: string, buckets?: number, raw = false) =>
     request<Waveform>(
       `/api/library/waveform?path=${encodeURIComponent(path)}` +
-        (buckets ? `&buckets=${Math.round(buckets)}` : ''),
+        (buckets ? `&buckets=${Math.round(buckets)}` : '') +
+        (raw ? '&raw=1' : ''),
     ),
   filmstrip: (path: string, frames?: number, height?: number) =>
     request<FilmstripInfo>(

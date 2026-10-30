@@ -497,7 +497,7 @@ export function MediaEditor({
         // поле. Сверху отступ под сведения о файле: они стоят над кадром.
         className="stage relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 pt-9"
       >
-        {zoom.view !== 1 && (
+        {zoom.changed && (
           <button
             type="button"
             onClick={zoom.reset}

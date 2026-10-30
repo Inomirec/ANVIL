@@ -23,7 +23,7 @@ import { api, thumbUrl } from '../lib/api'
 import { fileName, humanSize } from '../lib/format'
 import type { LibraryFile } from '../lib/types'
 import { useStore, type FilterKind } from '../store'
-import { Button, IconButton, Modal, Segmented, Spinner } from './ui'
+import { Button, IconButton, Modal, Segmented, SideColumn, Spinner } from './ui'
 
 //: По сколько файлов добавляем в список за раз.
 const PAGE = 120
@@ -202,7 +202,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
   }, [files, sort, layout])
 
   return (
-    <aside className="flex w-[clamp(236px,20vw,336px)] shrink-0 flex-col overflow-hidden border-r border-line-soft bg-surface">
+    <SideColumn side="left" min={236} max={336} fallback="w-[clamp(236px,20vw,336px)]" className="flex shrink-0 flex-col overflow-hidden border-r border-line-soft bg-surface">
       {/* Рабочая папка */}
       <div className="border-b border-line-soft px-3 py-2.5">
         <button
@@ -469,7 +469,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
           </Button>
         </div>
       </Modal>
-    </aside>
+    </SideColumn>
   )
 }
 

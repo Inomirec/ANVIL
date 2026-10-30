@@ -51,6 +51,8 @@ export interface Prefs {
   downloadHeight?: number
   downloadContainer?: 'mp4' | 'mkv' | 'webm' | 'auto'
   downloadCodec?: 'any' | 'h264' | 'vp9' | 'av1'
+  /** Микрофон для записи голоса в монтаже; пусто — тот, что выбран в Windows. */
+  micDevice?: string
   downloadSound?: 'any' | 'aac' | 'opus'
   downloadAudioFormat?: 'opus' | 'mp3' | 'm4a' | 'best'
   downloadAudioQuality?: number

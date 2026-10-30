@@ -667,3 +667,95 @@ export function MarkIcons({ marks, max = 4 }: { marks: Mark[]; max?: number }) {
     </>
   )
 }
+
+/** Где лежит ширина колонок: левая одна на все вкладки, правая — тоже. */
+const COLUMN_KEYS = { left: 'sgh.leftWidth', right: 'sgh.rightWidth' } as const
+
+/**
+ * Боковая колонка, которую тянут за край.
+ *
+ * Пока человек её не трогал, ширина — по окну (``fallback``, `clamp` в CSS).
+ * Потянул — ширина запоминается и не меньше той, что у колонки в самом
+ * маленьком окне (``min``): уже настройки перестают помещаться. Двойное
+ * нажатие по краю возвращает ширину по окну. Нужна, чтобы отдать середине
+ * больше места — кадру и таймлайну.
+ */
+export function SideColumn({
+  side,
+  min,
+  max,
+  fallback,
+  className = '',
+  children,
+}: {
+  side: 'left' | 'right'
+  min: number
+  max: number
+  /** Класс ширины, пока человек её не задал. */
+  fallback: string
+  className?: string
+  children: ReactNode
+}) {
+  const key = COLUMN_KEYS[side]
+  const [width, setWidth] = useState<number | null>(() => {
+    try {
+      const saved = Number(localStorage.getItem(key))
+      return saved > 0 ? saved : null
+    } catch {
+      return null
+    }
+  })
+  const box = useRef<HTMLElement>(null)
+  const fit = (value: number) => Math.round(Math.min(max, Math.max(min, value)))
+
+  const grab = (event: React.MouseEvent) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    if (event.detail >= 2) {
+      setWidth(null)
+      try {
+        localStorage.removeItem(key)
+      } catch {
+        /* не запомнилось — не беда */
+      }
+      return
+    }
+    const from = event.clientX
+    const start = box.current?.offsetWidth ?? min
+    let last = start
+    const move = (moved: MouseEvent) => {
+      const shift = moved.clientX - from
+      last = fit(side === 'left' ? start + shift : start - shift)
+      setWidth(last)
+    }
+    const drop = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', drop)
+      try {
+        localStorage.setItem(key, String(last))
+      } catch {
+        /* не запомнилось — не беда */
+      }
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', drop)
+  }
+
+  return (
+    <aside
+      ref={box}
+      className={`relative ${width === null ? fallback : ''} ${className}`}
+      style={width === null ? undefined : { width: fit(width) }}
+    >
+      {children}
+      <div
+        onMouseDown={grab}
+        title="Потяните, чтобы сделать колонку уже или шире. Двойное нажатие — обычная ширина"
+        className={`absolute inset-y-0 z-30 w-[5px] cursor-col-resize hover:bg-accent/30 ${
+          side === 'left' ? 'right-0' : 'left-0'
+        }`}
+      />
+    </aside>
+  )
+}
+

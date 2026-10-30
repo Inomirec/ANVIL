@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ChevronDown,
   ChevronRight,
   FlagTriangleLeft,
   FlagTriangleRight,
@@ -30,7 +31,7 @@ import {
 } from 'lucide-react'
 import { VolumeControl } from './VolumeControl'
 import { usePreviewReady } from '../hooks/useComposePlayer'
-import type { VoiceRecording } from '../hooks/useVoiceRecorder'
+import { PEAKS_PER_SECOND, type VoiceRecording } from '../hooks/useVoiceRecorder'
 import { setMagnet, useMagnet } from '../lib/magnet'
 import { api } from '../lib/api'
 import { plural, timecode } from '../lib/format'
@@ -54,6 +55,9 @@ import {
   snapFrame,
   trackAudible,
   trackColor,
+  waveHeight,
+  WAVE_FLOOR_MAX,
+  WAVE_FLOOR_MIN,
   trackNumber,
   volumeLabel,
   volumeShare,
@@ -178,10 +182,18 @@ export function ComposeTimeline({
   onDropFile,
   adding,
   recording,
+  onRecord,
+  onRecordFolder,
+  recordFolder,
   player,
 }: {
   /** Запись голоса с микрофона: кнопка стоит на панели таймлайна. */
   recording: VoiceRecording
+  /** Начать или остановить запись (при первой — спросить папку). */
+  onRecord: () => void
+  /** Сменить папку записей проекта. */
+  onRecordFolder: () => void
+  recordFolder: string
   /** Файл притащили из медиатеки: путь, секунда, дорожка и место броска. */
   onDropFile: (
     path: string,
@@ -242,6 +254,7 @@ export function ComposeTimeline({
   const headWidth = useCompose((state) => state.headWidth)
   const setHeadWidth = useCompose((state) => state.setHeadWidth)
   const heightFor = (track: ComposeTrack) => heightOf(track, compact)
+  const waveFloor = useCompose((state) => state.waveFloor)
 
   const [dropAt, setDropAt] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null)
@@ -267,6 +280,9 @@ export function ComposeTimeline({
   // стояла сразу под последней дорожкой, и с каждой новой дорожкой уезжала
   // вниз, а под ней оставалась пустота.
   const hbar = useRef<HTMLDivElement>(null)
+  // Линейка — своей строкой над дорожками: дорожки листаются вниз, а она
+  // остаётся на месте. Вбок едет вместе с полотном.
+  const rulerBox = useRef<HTMLDivElement>(null)
   // Ширина вертикальной полосы прокрутки: на неё нижняя полоса короче, иначе
   // их длины расходятся и прокрутка не доходит до конца.
   const [gutter, setGutter] = useState(0)
@@ -309,7 +325,7 @@ export function ComposeTimeline({
       const box = canvas.current?.getBoundingClientRect()
       if (!box) return 0
       const state = useCompose.getState()
-      return rowAtOffset(state.tracks, state.compact, clientY - box.top - RULER_HEIGHT)
+      return rowAtOffset(state.tracks, state.compact, clientY - box.top)
     },
     [],
   )
@@ -667,6 +683,18 @@ export function ComposeTimeline({
         }
       }
 
+      // Ctrl+↑ — волна крупнее (видны тихие места), Ctrl+↓ — мельче (видны
+      // только громкие). Шаг — 6 дБ, вдвое по громкости.
+      if ((event.ctrlKey || event.metaKey) && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault()
+        const state = useCompose.getState()
+        const next = state.waveFloor + (event.key === 'ArrowUp' ? -6 : 6)
+        state.setWaveFloor(next)
+        const shown = Math.min(WAVE_FLOOR_MAX, Math.max(WAVE_FLOOR_MIN, next))
+        toast(`Волна звука: видно всё громче ${String(shown).replace('-', '−')} дБ`, 'info', 'wave-floor')
+        return
+      }
+
       // Ctrl+Z и Ctrl+A — то же, что и везде. Без своей обработки Ctrl+A
       // выделял всю страницу, а отменять правку было нечем.
       if (event.ctrlKey || event.metaKey) {
@@ -857,11 +885,13 @@ export function ComposeTimeline({
   // «смотрит», и отменить обычную прокрутку из него нельзя. Так и было —
   // колесо приближало таймлайн и заодно листало дорожки вверх-вниз.
   useEffect(() => {
-    const element = vscroll.current
-    if (!element) return
+    // И над дорожками, и над линейкой — она теперь своей строкой.
+    const elements = [vscroll.current, rulerBox.current].filter((item): item is HTMLDivElement => Boolean(item))
     const listener = (event: WheelEvent) => wheelRef.current(event)
-    element.addEventListener('wheel', listener, { passive: false })
-    return () => element.removeEventListener('wheel', listener)
+    for (const element of elements) element.addEventListener('wheel', listener, { passive: false })
+    return () => {
+      for (const element of elements) element.removeEventListener('wheel', listener)
+    }
   }, [])
 
   return (
@@ -929,14 +959,16 @@ export function ComposeTimeline({
           {/* Запись голоса: красная, пока пишет, рядом — сколько записано. */}
           <button
             type="button"
-            onClick={recording.toggle}
+            onClick={onRecord}
             disabled={recording.saving}
             title={
               recording.waiting
-                ? 'Монтаж готовится играть — начинайте говорить, когда пойдёт время. Нажмите, чтобы отменить (Ctrl+R)'
+                ? 'Монтаж готовится играть — начинайте говорить, когда пойдёт время. Остановить — Enter или Ctrl+R'
                 : recording.active
-                ? 'Остановить запись (Ctrl+R)'
-                : 'Записать голос с микрофона (Ctrl+R). Запись начнётся с места иглы, монтаж будет играть под неё; готовая ляжет на свободную звуковую дорожку'
+                ? 'Остановить запись — Enter, Ctrl+R или эта кнопка'
+                : `Записать голос с микрофона (Ctrl+R). Запись начнётся с места иглы, монтаж будет играть под неё. Остановить — Enter.${
+                    recordFolder ? ` Файлы WAV сохраняются в ${recordFolder}` : ''
+                  }`
             }
             className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 transition-colors disabled:opacity-50 ${
               recording.waiting
@@ -957,6 +989,16 @@ export function ComposeTimeline({
               </span>
             )}
           </button>
+          {!recording.active && (
+            <button
+              type="button"
+              onClick={onRecordFolder}
+              title={recordFolder ? `Папка записей проекта: ${recordFolder}. Нажмите, чтобы сменить` : 'Куда сохранять записи голоса'}
+              className="-ml-0.5 flex h-7 w-3.5 shrink-0 items-center justify-center text-ink-faint hover:text-ink"
+            >
+              <ChevronDown size={11} />
+            </button>
+          )}
           <KeyBar />
 
           {/* Чтение файла занимает мгновение, но без этого окно выглядит
@@ -1112,6 +1154,48 @@ export function ComposeTimeline({
           иначе полотно растягивается лишь на видимую высоту, прокручивается
           по высоте само (вбок-прокрутка тянет за собой и вертикальную), и
           когда дорожки перестают влезать, названия и дорожки разъезжаются. */}
+      <div className="flex shrink-0">
+        <div
+          className="shrink-0 border-b border-r border-line-soft bg-surface"
+          style={{ width: headWidth, height: RULER_HEIGHT }}
+        />
+        <div ref={rulerBox} className="relative min-w-0 flex-1 overflow-hidden">
+          <div style={{ width, minWidth: '100%' }} className="relative select-none">
+            <Ruler
+              span={span}
+              scale={scale}
+              fps={fps}
+              renderIn={renderIn}
+              renderOut={renderOut}
+              duration={duration}
+              onSeek={(at) => {
+                // Нажатие по линейке заодно снимает выделение клипов: иначе
+                // ради этого приходилось искать пустое место на дорожке.
+                select([])
+                drag.current = { kind: 'playhead' }
+                setPlayhead(at)
+              }}
+            />
+            {/* Головки игл — на линейке, сами иглы — по дорожкам ниже. */}
+            <div
+              className="pointer-events-none absolute top-0 z-20 h-full w-px bg-danger"
+              style={{ left: playhead * scale }}
+            >
+              <div className="-ml-[5px] h-2.5 w-2.5 rounded-b-sm bg-danger" />
+            </div>
+            {cue !== null && (
+              <div
+                className="pointer-events-none absolute top-0 z-20 h-full w-px bg-white/85"
+                style={{ left: cue * scale }}
+              >
+                <div className="-ml-[5px] h-2.5 w-2.5 rounded-b-sm bg-white" />
+              </div>
+            )}
+          </div>
+        </div>
+        {gutter > 0 && <div className="shrink-0 border-b border-line-soft bg-surface" style={{ width: gutter }} />}
+      </div>
+
       <div ref={vscroll} className="flex min-h-0 flex-1 items-start overflow-y-auto">
         <TrackHeads
           tracks={tracks}
@@ -1142,6 +1226,7 @@ export function ComposeTimeline({
         onScroll={(event) => {
           const left = event.currentTarget.scrollLeft
           if (hbar.current && hbar.current.scrollLeft !== left) hbar.current.scrollLeft = left
+          if (rulerBox.current) rulerBox.current.scrollLeft = left
         }}
       >
         {/* Полотно не уже видимой части: иначе справа остаётся пустое место,
@@ -1151,21 +1236,6 @@ export function ComposeTimeline({
           style={{ width, minWidth: '100%' }}
           className="relative flex flex-1 select-none flex-col"
         >
-          <Ruler
-            span={span}
-            scale={scale}
-            fps={fps}
-            renderIn={renderIn}
-            renderOut={renderOut}
-            duration={duration}
-            onSeek={(at) => {
-              // Нажатие по линейке заодно снимает выделение клипов: иначе
-              // ради этого приходилось искать пустое место на дорожке.
-              select([])
-              drag.current = { kind: 'playhead' }
-              setPlayhead(at)
-            }}
-          />
 
           {tracks.map((track) => (
             <div
@@ -1249,6 +1319,7 @@ export function ComposeTimeline({
                 <ClipBox
                   key={clip.id}
                   clip={clip}
+                  trackLevel={track.level}
                   scale={scale}
                   height={heightFor(track)}
                   active={selected.includes(clip.id)}
@@ -1350,6 +1421,32 @@ export function ComposeTimeline({
                   style={{ left: dropAt * scale }}
                 />
               )}
+
+              {/* Идущая запись: растёт вправо вместе с волной, пока человек
+                  говорит, — видно, что звук пишется и где он ляжет. */}
+              {recording.live?.trackId === track.id && (
+                <div
+                  className="pointer-events-none absolute top-0 z-[6] overflow-hidden border border-danger/80 bg-danger/15"
+                  style={{
+                    left: recording.live.at * scale,
+                    width: Math.max(recording.live.seconds * scale, 3),
+                    height: heightFor(track) - 1,
+                  }}
+                >
+                  <div
+                    className="absolute inset-y-0 left-0"
+                    style={{ width: (recording.live.peaks.length / PEAKS_PER_SECOND) * scale }}
+                  >
+                    <WaveShape
+                      heights={recording.live.peaks.map((value) => waveHeight(value, waveFloor))}
+                      className="fill-danger/70"
+                    />
+                  </div>
+                  <span className="absolute left-1.5 top-1 whitespace-nowrap text-[10.5px] font-medium text-white">
+                    ● {recording.waiting ? 'жду просмотр…' : 'Запись'}
+                  </span>
+                </div>
+              )}
             </div>
           ))}
 
@@ -1390,9 +1487,7 @@ export function ComposeTimeline({
           <div
             className="pointer-events-none absolute top-0 z-20 h-full w-px bg-danger"
             style={{ left: playhead * scale }}
-          >
-            <div className="-ml-[5px] h-2.5 w-2.5 rounded-b-sm bg-danger" />
-          </div>
+          />
           {/* Белая игла — откуда начали смотреть; во время просмотра
               нажатия по таймлайну двигают её, а не красную. */}
           {cue !== null && (
@@ -1400,9 +1495,7 @@ export function ComposeTimeline({
               className="pointer-events-none absolute top-0 z-20 h-full w-px bg-white/85"
               style={{ left: cue * scale }}
               title="Отсюда начнётся просмотр после остановки"
-            >
-              <div className="-ml-[5px] h-2.5 w-2.5 rounded-b-sm bg-white" />
-            </div>
+            />
           )}
         </div>
       </div>
@@ -1621,8 +1714,6 @@ function TrackHeads({
         if (event.target === event.currentTarget) onEmptyMenu(event)
       }}
     >
-      {/* Пустое место под линейкой: дорожки должны встать вровень с полотном. */}
-      <div style={{ height: RULER_HEIGHT }} className="border-b border-line-soft" />
 
       {tracks.map((track) => {
         const colour = trackColor(tracks, track.id)
@@ -1655,7 +1746,7 @@ function TrackHeads({
               pending.current = {
                 id: track.id,
                 kind: track.kind,
-                top: (box?.top ?? 0) + RULER_HEIGHT,
+                top: box?.top ?? 0,
                 y: event.clientY,
               }
             }}
@@ -2404,8 +2495,8 @@ function clipsInside(
   compact: boolean,
 ): string[] {
   const caught: string[] = []
-  // Линейка сверху, дорожки идут под ней — каждая своей высоты.
-  let offset = RULER_HEIGHT
+  // Дорожки идут от верха полотна — каждая своей высоты.
+  let offset = 0
   for (const track of tracks) {
     const height = heightOf(track, compact)
     const crossed = offset < bottom && offset + height > top
@@ -2514,10 +2605,12 @@ function Ruler({
           title="Собрано для просмотра — сыграет без ожидания"
         />
       ))}
+      {/* Деление — снизу, у дорожек; подпись — у верха линейки, чтобы не
+          налезать на первую дорожку. */}
       {marks.map((at) => (
         <div key={at} className="absolute top-0 h-full" style={{ left: at * scale }}>
-          <div className="h-2 w-px bg-line" />
-          <span className="ml-1 font-mono text-[9.5px] tabular-nums text-ink-faint">
+          <div className="absolute bottom-0 h-2 w-px bg-line" />
+          <span className="absolute left-1 top-[3px] whitespace-nowrap font-mono text-[9.5px] leading-none tabular-nums text-ink-faint">
             {inFrames ? frameCode(at, fps) : timecode(at)}
           </span>
         </div>
@@ -2553,8 +2646,10 @@ function useWave(path: string, enabled: boolean, seconds: number): number[] | nu
       return
     }
     let alive = true
+    // Пики как есть, без подгонки под файл: высоту задаёт общая шкала в
+    // децибелах (`waveHeight`).
     api
-      .waveform(path, wavePoints(seconds))
+      .waveform(path, wavePoints(seconds), true)
       .then((data) => {
         waveCache.set(path, data.peaks ?? null)
         if (alive) setPeaks(data.peaks ?? null)
@@ -2567,18 +2662,35 @@ function useWave(path: string, enabled: boolean, seconds: number): number[] | nu
   return peaks
 }
 
-/** Звуковая волна внутри клипа. */
-function WaveFill({ clip, peaks }: { clip: ComposeClip; peaks: number[] }) {
+/**
+ * Звуковая волна внутри клипа — в общей шкале децибел (`waveHeight`), с
+ * громкостью клипа и дорожки: убавленный клип и выглядит тише. Эффекты на
+ * волну не влияют — её считают по самому файлу.
+ */
+function WaveFill({ clip, peaks, gain = 1 }: { clip: ComposeClip; peaks: number[]; gain?: number }) {
+  const floor = useCompose((state) => state.waveFloor)
   const whole = clip.sourceDuration || clip.duration
   const from = Math.floor((clip.sourceIn / whole) * peaks.length)
   const to = Math.ceil(((clip.sourceIn + clip.duration * speedOf(clip)) / whole) * peaks.length)
   const slice = peaks.slice(Math.max(0, from), Math.max(from + 1, to))
   if (!slice.length) return null
+  const heights = slice.map((value) => waveHeight(value * gain, floor))
+  return <WaveShape heights={heights} />
+}
 
-  const step = 100 / slice.length
-  const top = slice.map((value, index) => `${index * step},${50 - value * 46}`).join(' ')
-  const bottom = slice
-    .map((value, index) => `${(slice.length - 1 - index) * step},${50 + slice[slice.length - 1 - index] * 46}`)
+/** Волна по готовым высотам 0..1 — у клипа и у идущей записи. */
+export function WaveShape({ heights, className = 'fill-ok/70' }: { heights: number[]; className?: string }) {
+  if (!heights.length) return null
+  const step = 100 / Math.max(1, heights.length - 1)
+  // Два знака после запятой: у длинного файла точек тысячи, и с полными
+  // числами рисунок одного клипа весил сотни тысяч знаков.
+  const at = (index: number) => (index * step).toFixed(2)
+  const top = heights.map((value, index) => `${at(index)},${(50 - value * 46).toFixed(2)}`).join(' ')
+  const bottom = heights
+    .map((_, index) => {
+      const back = heights.length - 1 - index
+      return `${at(back)},${(50 + heights[back] * 46).toFixed(2)}`
+    })
     .join(' ')
 
   return (
@@ -2587,7 +2699,7 @@ function WaveFill({ clip, peaks }: { clip: ComposeClip; peaks: number[] }) {
       viewBox="0 0 100 100"
       preserveAspectRatio="none"
     >
-      <polygon points={`${top} ${bottom}`} className="fill-ok/70" />
+      <polygon points={`${top} ${bottom}`} className={className} />
     </svg>
   )
 }
@@ -2595,6 +2707,7 @@ function WaveFill({ clip, peaks }: { clip: ComposeClip; peaks: number[] }) {
 /** Прямоугольник клипа: кадры или волна, название, уголки. */
 function ClipBox({
   clip,
+  trackLevel = 1,
   scale,
   height,
   active,
@@ -2604,6 +2717,8 @@ function ClipBox({
   onMenu,
 }: {
   clip: ComposeClip
+  /** Уровень дорожки: волна звука рисуется с ним. */
+  trackLevel?: number
   scale: number
   height: number
   active: boolean
@@ -2740,7 +2855,7 @@ function ClipBox({
       ) : sound ? (
         <>
           <div className="absolute inset-0 bg-ok/12" />
-          {peaks && <WaveFill clip={clip} peaks={peaks} />}
+          {peaks && <WaveFill clip={clip} peaks={peaks} gain={clip.volume * trackLevel} />}
         </>
       ) : scenes ? (
         <SceneStrip

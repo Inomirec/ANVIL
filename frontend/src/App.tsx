@@ -27,7 +27,7 @@ import { emptyFades, type Fades } from './components/Timeline'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { TextContextMenu } from './components/TextContextMenu'
-import { Empty, Spinner } from './components/ui'
+import { Empty, SideColumn, Spinner } from './components/ui'
 
 type Tab = 'library' | 'download' | 'compose'
 
@@ -283,7 +283,7 @@ export default function App() {
 
         {/* Правая панель настроек экспорта */}
         {tab === 'library' && activeInfo && (
-          <aside className="flex w-[clamp(260px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
+          <SideColumn side="right" min={260} max={340} fallback="w-[clamp(260px,22vw,340px)]" className="flex shrink-0 flex-col border-l border-line-soft bg-surface">
             {activeInfo.kind === 'image' && !isGif(activeInfo) ? (
               <>
                 <ImageObjectColumn
@@ -313,7 +313,7 @@ export default function App() {
                 trackVolume={trackVolume}
               />
             )}
-          </aside>
+          </SideColumn>
         )}
       </div>
 

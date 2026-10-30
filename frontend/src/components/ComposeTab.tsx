@@ -52,10 +52,11 @@ import {
   type RenderSettings,
 } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
+import { ComposeRecordFolder } from './ComposeRecordFolder'
 import { MasterMeter, METER_DEFAULT } from './MasterMeter'
 import { PREVIEW_QUALITIES, useComposePlayer, type PreviewQuality } from '../hooks/useComposePlayer'
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder'
-import { Button, Dropdown, Empty, IconButton, QuietHints, Section, Segmented, Toggle } from './ui'
+import { Button, Dropdown, Empty, IconButton, QuietHints, Section, Segmented, SideColumn, Toggle } from './ui'
 
 /** Имя готового файла, если поле оставили пустым. */
 const DEFAULT_NAME = 'Project'
@@ -283,45 +284,68 @@ export function ComposeTab() {
   // курсором сразу, а не после первого движения мыши.
   const [adding, setAdding] = useState<{ x: number; y: number } | null>(null)
 
-  // Запись голоса: ложится на свободную звуковую дорожку с места иглы.
-  const recording = useVoiceRecorder(
-    player,
-    (path, at, trim) => void placeRecording(path, at, trim),
-    (text) => toast(text, 'error'),
-  )
+  // Запись голоса: ложится на звуковую дорожку с места иглы и растёт на
+  // ней, пока человек говорит.
+  const recordFolder = useCompose((state) => state.recordFolder)
+  const recording = useVoiceRecorder(player, {
+    folder: () => useCompose.getState().recordFolder,
+    pickTrack: (at) => {
+      // Дорожка, свободная от иглы и до конца: длина записи заранее не
+      // известна. Такой нет — заводим новую.
+      const free = (track: ComposeTrack) =>
+        track.kind === 'audio' && !track.clips.some((clip) => clip.start + clip.duration > at)
+      const found = useCompose.getState().tracks.find(free)
+      if (found) return found.id
+      useCompose.getState().addTrack('audio')
+      return useCompose.getState().tracks.filter((track) => track.kind === 'audio').at(-1)?.id ?? null
+    },
+    onSaved: (path, at, trackId) => void placeRecording(path, at, trackId),
+    onError: (text) => toast(text, 'error'),
+  })
+  // Окно «куда сохранять записи»: при первой записи проекта и по стрелке
+  // рядом с кнопкой. ``then`` — начать ли запись после ответа.
+  const [folderAsk, setFolderAsk] = useState<{ then: boolean } | null>(null)
   const recordingRef = useRef(recording)
   recordingRef.current = recording
+  const toggleRecording = () => {
+    const now = recordingRef.current
+    if (now.active) now.stop()
+    else if (!useCompose.getState().recordFolder) setFolderAsk({ then: true })
+    else now.start()
+  }
+  const toggleRef = useRef(toggleRecording)
+  toggleRef.current = toggleRecording
   useEffect(() => {
-    // Ctrl+R — запись. Без перехвата окно перезагрузило бы страницу.
     const onKey = (event: KeyboardEvent) => {
+      // Ctrl+R — начать или остановить запись. Без перехвата окно
+      // перезагрузило бы страницу.
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyR') {
         event.preventDefault()
-        recordingRef.current.toggle()
+        toggleRef.current()
+        return
+      }
+      // Enter — остановить идущую запись: попасть в кнопку посреди фразы
+      // неудобно.
+      if (event.key === 'Enter' && recordingRef.current.active) {
+        event.preventDefault()
+        recordingRef.current.stop()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  /** Готовая запись — на звуковую дорожку, где в это время пусто; нет такой — на новую. */
-  async function placeRecording(path: string, at: number, trim: number) {
-    try {
-      const info = await api.fileInfo(path)
-      const length = Math.max(0.2, (info.media?.duration ?? 0) - trim)
-      const free = (track: ComposeTrack) =>
-        track.kind === 'audio' &&
-        !track.clips.some((clip) => clip.start < at + length && clip.start + clip.duration > at)
-      let target = useCompose.getState().tracks.find(free)
-      if (!target) {
-        useCompose.getState().addTrack('audio')
-        target = useCompose.getState().tracks.filter((track) => track.kind === 'audio').at(-1)
-      }
-      if (!target) return
-      await dropFile(path, at, target.id, { x: window.innerWidth / 2, y: window.innerHeight - 120 }, trim)
-      toast(`Запись сохранена: ${info.name}`, 'ok')
-    } catch (error) {
-      toast((error as Error).message, 'error')
+  /** Готовая запись — туда, где она росла во время записи. */
+  async function placeRecording(path: string, at: number, trackId: string) {
+    const exists = useCompose.getState().tracks.some((track) => track.id === trackId)
+    let target = trackId
+    if (!exists) {
+      // Дорожку убрали, пока шла запись, — кладём на новую.
+      useCompose.getState().addTrack('audio')
+      target = useCompose.getState().tracks.filter((track) => track.kind === 'audio').at(-1)?.id ?? ''
     }
+    if (!target) return
+    await dropFile(path, at, target, { x: window.innerWidth / 2, y: window.innerHeight - 120 })
   }
   // Вопрос о размере кадра по первому файлу. Отметка нужна, когда бросили
   // сразу несколько файлов: первым считается только один.
@@ -547,8 +571,6 @@ export function ComposeTab() {
     at: number,
     trackId: string,
     from: { x: number; y: number },
-    /** Сколько секунд от начала файла не брать — у записи голоса. */
-    trim = 0,
   ) {
     setAdding(from)
     let claimed = false
@@ -595,8 +617,8 @@ export function ComposeTab() {
         kind: info.kind === 'audio' ? 'audio' : info.kind === 'image' ? 'image' : 'video',
         start: Math.max(0, Math.round(at * 100) / 100),
         // Картинка висит столько, сколько скажут; у ролика берём его длину.
-        duration: info.kind === 'image' ? DEFAULT_IMAGE_SECONDS : Math.max(0.2, length - trim),
-        sourceIn: trim,
+        duration: info.kind === 'image' ? DEFAULT_IMAGE_SECONDS : Math.max(0.2, length),
+        sourceIn: 0,
         sourceDuration: info.kind === 'image' ? 0 : length,
         hasAudio: Boolean(info.media?.hasAudio),
         volume: 1,
@@ -893,7 +915,7 @@ export function ComposeTab() {
             получится кадр, было невозможно — всё выглядело прямоугольником. */}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div
-            className={`stage relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 ${noStraySelection.className}`}
+            className={`stage relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-2.5 ${noStraySelection.className}`}
             onMouseDownCapture={noStraySelection.onMouseDownCapture}
             onDragStart={noStraySelection.onDragStart}
             onWheel={(event) => {
@@ -932,13 +954,13 @@ export function ComposeTab() {
             // дальше 20% размера кадра: немного подвинуть, чтобы ухватить
             // клип у края, а не потерять кадр за пределами окна.
             onMouseDown={(event) => {
-              if (event.button !== 1 || view === 1) return
+              if (event.button !== 1) return
               event.preventDefault()
               const from = { x: event.clientX, y: event.clientY }
               const was = { ...pan }
               const box = frameBox.current
               const reach =
-                view < 1 && box ? { x: box.offsetWidth * 0.2, y: box.offsetHeight * 0.2 } : null
+                view <= 1 && box ? { x: box.offsetWidth * 0.2, y: box.offsetHeight * 0.2 } : null
               const limit = (value: number, edge: number | undefined) =>
                 edge === undefined ? value : Math.max(-edge, Math.min(edge, value))
               const move = (moved: MouseEvent) => {
@@ -973,7 +995,7 @@ export function ComposeTab() {
                     }}
                     title="Увеличение экрана просмотра — на готовый файл не влияет. Колесо приближает, зажатое колесо таскает кадр. Нажмите, чтобы вернуть обычный размер."
                     className={`inline-flex h-6 items-center rounded-md px-1.5 font-mono text-[10.5px] tabular-nums transition-colors ${
-                      view !== 1
+                      view !== 1 || pan.x !== 0 || pan.y !== 0
                         ? 'bg-accent/20 text-accent-soft hover:bg-accent/30'
                         : 'text-ink-faint hover:text-ink'
                     }`}
@@ -1088,8 +1110,8 @@ export function ComposeTab() {
                 стоит под ней, а не заходит под неё. Под плашку уходит только
                 увеличенный кадр. */}
             <div
-              className={`flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden ${
-                clips > 0 ? 'pt-[22px]' : ''
+              className={`flex min-h-0 min-w-0 flex-1 items-center justify-center ${
+                clips > 0 ? 'pt-[26px]' : ''
               }`}
               style={{ containerType: 'size' }}
             >
@@ -1108,7 +1130,10 @@ export function ComposeTab() {
                 // отличить от пустоты. Само место прозрачное — сквозь него
                 // видна сцена с сеткой; серая подложка торчала при отдалении
                 // прямоугольником поверх сцены.
-                className="relative overflow-hidden"
+                // Без обрезки по своему краю: увеличенный кадр выходит на всю
+                // сцену, а не остаётся в окошке обычного размера с пустыми
+                // полями по бокам. Обрезает сам кадр (ниже) и сцена.
+                className="relative"
                 style={{
                   aspectRatio: `${width} / ${height}`,
                   // Кадр вписывается в свободное место целиком, сохраняя свою
@@ -1128,7 +1153,7 @@ export function ComposeTab() {
                   сетка, и рамка клипа. Точка увеличения та, где было колесо,
                   поэтому нужное место остаётся под курсором. */}
               <div
-                className="absolute inset-0 bg-black shadow-xl ring-1 ring-line"
+                className="absolute inset-0 overflow-hidden bg-black shadow-xl ring-1 ring-line"
                 style={{
                   transform: `translate(${pan.x}px, ${pan.y}px) scale(${view})`,
                 }}
@@ -1245,6 +1270,9 @@ export function ComposeTab() {
           <ComposeTimeline
             adding={adding !== null}
             recording={recording}
+            onRecord={toggleRecording}
+            onRecordFolder={() => setFolderAsk({ then: false })}
+            recordFolder={recordFolder}
             player={player}
             onDropFile={(path, at, trackId, from) => void dropFile(path, at, trackId, from)}
           />
@@ -1255,7 +1283,7 @@ export function ComposeTab() {
       {/* Описания настроек в колонке — при наведении, как и в панелях
           обработки: текстом под каждой галочкой они занимали место. */}
       <QuietHints>
-      <aside className="flex w-[clamp(260px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
+      <SideColumn side="right" min={260} max={340} fallback="w-[clamp(260px,22vw,340px)]" className="flex shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
           {/* Пока выделена надпись, здесь её настройки, а не кадра: так их
               не надо искать, и экран просмотра остаётся открытым — цвет и
@@ -1444,7 +1472,7 @@ export function ComposeTab() {
             <Trash2 size={15} />
           </Button>
         </div>
-      </aside>
+      </SideColumn>
       </QuietHints>
 
       <ComposeProjects open={projectsOpen} onClose={() => setProjectsOpen(false)} />
@@ -1466,6 +1494,19 @@ export function ComposeTab() {
       />
 
 
+
+      <ComposeRecordFolder
+        open={folderAsk !== null}
+        current={recordFolder}
+        startAfter={folderAsk?.then ?? false}
+        onClose={() => setFolderAsk(null)}
+        onChoose={(folder) => {
+          const then = folderAsk?.then
+          useCompose.getState().setRecordFolder(folder)
+          setFolderAsk(null)
+          if (then) recordingRef.current.start()
+        }}
+      />
 
       <FolderPicker
         open={pickingFolder}

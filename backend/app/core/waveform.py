@@ -39,18 +39,25 @@ def cache_dir() -> Path:
     return data_dir() / "waveforms"
 
 
-def _cache_path(source: Path, buckets: int) -> Path:
+def _cache_path(source: Path, buckets: int, raw: bool = False) -> Path:
+    tag = "|raw" if raw else ""
     try:
         stat = source.stat()
-        signature = f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{buckets}"
+        signature = f"{source}|{stat.st_mtime_ns}|{stat.st_size}|{buckets}{tag}"
     except OSError:
-        signature = f"{source}|{buckets}"
+        signature = f"{source}|{buckets}{tag}"
     return cache_dir() / f"{hashlib.sha1(signature.encode('utf-8')).hexdigest()}.json"
 
 
-async def peaks(source: Path, buckets: int = DEFAULT_BUCKETS) -> dict[str, object]:
-    """Возвращает ``{peaks: [0..1], duration, buckets}`` для файла."""
-    cache = _cache_path(source, buckets)
+async def peaks(source: Path, buckets: int = DEFAULT_BUCKETS, raw: bool = False) -> dict[str, object]:
+    """Возвращает ``{peaks: [0..1], duration, buckets}`` для файла.
+
+    ``raw`` — пики как есть, в долях полной шкалы, без подгонки под самый
+    громкий момент файла. Монтажу нужны именно такие: по ним видно, где
+    тишина, а где голос, одинаково у всех файлов. Подогнанная волна у
+    записи тишины с лёгким шумом выглядела как громкий звук.
+    """
+    cache = _cache_path(source, buckets, raw)
     if cache.exists():
         try:
             return json.loads(cache.read_text("utf-8"))
@@ -73,7 +80,7 @@ async def peaks(source: Path, buckets: int = DEFAULT_BUCKETS) -> dict[str, objec
 
         duration = info.duration or 0.0
         rate = SAMPLE_RATE if duration <= LONG_FILE_SECONDS else SAMPLE_RATE // 2
-        values = await _decode(source, rate, buckets)
+        values = await _decode(source, rate, buckets, normalize=not raw)
 
         result = {
             "peaks": values,
@@ -91,7 +98,7 @@ def _store(cache: Path, payload: dict[str, object]) -> None:
         cache.write_text(json.dumps(payload), encoding="utf-8")
 
 
-async def _decode(source: Path, rate: int, buckets: int) -> list[float]:
+async def _decode(source: Path, rate: int, buckets: int, *, normalize: bool = True) -> list[float]:
     """Гоняет звук через ffmpeg и сворачивает его в список пиков 0..1."""
     args = [
         binaries.ffmpeg(),
@@ -145,7 +152,12 @@ async def _decode(source: Path, rate: int, buckets: int) -> list[float]:
         if not segment:
             continue
         peak = max(max(segment), -min(segment))
-        result.append(round(peak / 32768, 4))
+        # Пять знаков: у тихого шума пик бывает в десятитысячных долях, и
+        # округление до четырёх знаков превращало его в ноль — в «тишину».
+        result.append(round(peak / 32768, 5))
+
+    if not normalize:
+        return result
 
     # Нормируем по максимуму: тихая запись должна быть видна так же хорошо,
     # как громкая, — дорожка нужна для навигации, а не для замера уровня.

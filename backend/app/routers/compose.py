@@ -432,60 +432,84 @@ async def stabilize_status(request: StabilizeRequest) -> dict[str, object]:
     return answer
 
 
-#: Самая длинная запись, которую примем: два часа голоса в Opus — около
-#: 150 МБ. Больше — это уже не запись с микрофона, а ошибка.
-_RECORD_LIMIT = 400 * 1024 * 1024
+#: Самая длинная запись, которую примем: WAV 48 кГц стерео весит около
+#: 660 МБ в час. Больше — это уже не запись с микрофона, а ошибка.
+_RECORD_LIMIT = 2 * 1024 * 1024 * 1024
+
+
+def default_record_folder() -> Path:
+    """Куда класть записи голоса, если человек не выбрал папку сам."""
+    return Path(config.load().resolved_workspace()) / "Записи"
+
+
+def _allow_folder(folder: Path) -> None:
+    """Пускает папку записей в рабочие, если её там нет.
+
+    Клип монтажа читается только из рабочих папок. Папку для записей человек
+    выбрал сам — значит, она его. Добавляем её в список проверки путей, но
+    медиатеку на неё не переключаем: он сейчас монтирует, а не листает файлы.
+    """
+    if fsutil.is_allowed(folder):
+        return
+    settings = config.load()
+    resolved = str(folder.resolve())
+    workspaces = [item for item in settings.workspaces if item != resolved]
+    workspaces.insert(1 if workspaces else 0, resolved)
+    config.update({"workspaces": workspaces[:8]})
 
 
 @router.post("/record")
-async def record(request: Request) -> dict[str, str]:
-    """Сохраняет запись с микрофона в папку «Записи» рабочей папки.
+async def record(request: Request, folder: str = "") -> dict[str, str]:
+    """Сохраняет запись с микрофона как есть — WAV без сжатия.
 
-    Окно пишет звук в WebM (Opus), но у такого файла нет длины в
-    заголовке: браузер не знает её, пока запись идёт, и монтаж увидел бы
-    клип неизвестной длины. Поэтому перекладываем звук в Ogg без
-    перекодирования — длина там считается по последнему отсчёту.
+    Окно присылает готовый WAV: звук снимается с микрофона отсчётами, без
+    сжатия и без обработки браузером. Файл принимаем потоком, сразу на диск:
+    часовая запись весит сотни мегабайт, и держать её в памяти незачем.
+    Папку выбирает человек (своя у каждого проекта), иначе — «Записи» в
+    рабочей папке.
     """
-    data = await request.body()
-    if not data:
-        raise HTTPException(400, "Запись пустая — микрофон ничего не передал")
-    if len(data) > _RECORD_LIMIT:
-        raise HTTPException(413, "Запись слишком длинная")
-
-    folder = Path(config.load().resolved_workspace()) / "Записи"
-    if not fsutil.is_allowed(folder):
-        raise HTTPException(400, "Рабочая папка недоступна — некуда сохранить запись")
-    stamp = time.strftime("Запись %Y-%m-%d %H-%M-%S")
-
-    def write() -> tuple[Path, Path]:
-        folder.mkdir(parents=True, exist_ok=True)
-        raw = folder / f".{stamp}.webm"
-        raw.write_bytes(data)
-        return raw, fsutil.unique_path(folder / f"{stamp}.ogg", reserve=True)
-
-    raw, output = await asyncio.to_thread(write)
+    target = Path(folder).expanduser() if folder else default_record_folder()
     try:
-        # Сначала без перекодирования; не вышло — пережимаем в Opus.
-        for codec in (["-c:a", "copy"], ["-c:a", "libopus", "-b:a", "128k"]):
-            process = await asyncio.create_subprocess_exec(
-                binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
-                "-i", str(raw), "-vn", *codec, "-f", "ogg", str(output),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-                creationflags=binaries.CREATE_NO_WINDOW,
-                env=binaries.subprocess_env(),
-            )
-            _, err = await process.communicate()
-            if process.returncode == 0 and output.exists() and output.stat().st_size > 0:
-                break
-        else:
-            output.unlink(missing_ok=True)
-            detail = err.decode("utf-8", "replace").strip().splitlines()
-            raise HTTPException(500, "Не удалось сохранить запись: " + (detail[-1] if detail else "?"))
+        await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(_allow_folder, target)
+    except OSError as exc:
+        raise HTTPException(400, f"Не удалось открыть папку для записей: {exc}") from exc
+    if not fsutil.is_allowed(target):
+        raise HTTPException(400, "Папка для записей недоступна")
+
+    stamp = time.strftime("Запись %Y-%m-%d %H-%M-%S")
+    output = fsutil.unique_path(target / f"{stamp}.wav", reserve=True)
+    part = output.with_name(f".{output.name}.part")
+    size = 0
+    try:
+        handle = await asyncio.to_thread(part.open, "wb")
+        try:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                if size == 0 and not chunk.startswith(b"RIFF"):
+                    raise HTTPException(400, "Окно прислало не WAV")
+                size += len(chunk)
+                if size > _RECORD_LIMIT:
+                    raise HTTPException(413, "Запись слишком длинная")
+                await asyncio.to_thread(handle.write, chunk)
+        finally:
+            await asyncio.to_thread(handle.close)
+        if size <= 44:
+            raise HTTPException(400, "Запись пустая — микрофон ничего не передал")
+        await asyncio.to_thread(part.replace, output)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
     finally:
         fsutil.release_path(output)
-        raw.unlink(missing_ok=True)
     return {"path": str(output)}
+
+
+@router.get("/record-folder")
+async def record_folder() -> dict[str, str]:
+    """Папка записей по умолчанию — её показывают, когда спрашивают, куда писать."""
+    return {"path": str(default_record_folder())}
 
 
 @router.post("/check")

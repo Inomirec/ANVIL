@@ -25,7 +25,7 @@ import { useStore } from '../store'
 import { Choice } from './ComposeRender'
 import { FolderPicker } from './FolderPicker'
 import { LinkPreview } from './LinkPreview'
-import { Button, MarkIcons, Modal, QuietHints, Section, Segmented, Toggle } from './ui'
+import { Button, MarkIcons, Modal, QuietHints, Section, Segmented, SideColumn, Toggle } from './ui'
 
 /**
  * Обработка пресетом сразу после скачивания — выключена. Качество и кодек
@@ -554,7 +554,7 @@ export function DownloadPanel() {
       </div>
 
       <QuietHints>
-      <aside className="flex w-[clamp(260px,22vw,340px)] shrink-0 flex-col border-l border-line-soft bg-surface">
+      <SideColumn side="right" min={260} max={340} fallback="w-[clamp(260px,22vw,340px)]" className="flex shrink-0 flex-col border-l border-line-soft bg-surface">
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5">
           <Section title="Что скачать">
             <Segmented<Mode>
@@ -783,7 +783,7 @@ export function DownloadPanel() {
               : `Скачать ${filled.length > 1 ? `(${filled.length})` : ''}`}
         </Button>
         </div>
-      </aside>
+      </SideColumn>
       </QuietHints>
 
       <FolderPicker

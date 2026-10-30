@@ -60,9 +60,9 @@ export function useZoomPan(resetKey: unknown, max = 8, min = 1) {
     return () => box.removeEventListener('wheel', onWheel)
   }, [max, min, reset])
 
-  /** Зажатое колесо таскает приближенную картинку. */
+  /** Зажатое колесо таскает картинку — и приближенную, и в обычном размере. */
   const onMouseDown = useCallback((event: React.MouseEvent) => {
-    if (event.button !== 1 || state.current.view === 1) return
+    if (event.button !== 1) return
     event.preventDefault()
     const from = { x: event.clientX, y: event.clientY }
     const was = { ...state.current.pan }
@@ -76,11 +76,15 @@ export function useZoomPan(resetKey: unknown, max = 8, min = 1) {
     window.addEventListener('mouseup', drop)
   }, [])
 
+  // Сдвинута ли картинка с места: тогда кнопка «100%» видна и подсвечена,
+  // и по ней картинка возвращается на место.
+  const changed = view !== 1 || pan.x !== 0 || pan.y !== 0
   return {
     shell,
     view,
+    changed,
     reset,
     onMouseDown,
-    transform: view === 1 ? undefined : `translate(${pan.x}px, ${pan.y}px) scale(${view})`,
+    transform: changed ? `translate(${pan.x}px, ${pan.y}px) scale(${view})` : undefined,
   }
 }

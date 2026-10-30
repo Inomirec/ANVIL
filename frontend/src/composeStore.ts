@@ -279,6 +279,25 @@ export interface ComposeTrack {
 }
 
 /**
+ * Шкала волны звука на таймлайне — в децибелах, одна на все файлы: тишина
+ * плоская, шум — тонкой полоской, голос — заметно, крик — во всю высоту.
+ * Нижняя граница двигается Ctrl+↑/↓: ниже — видны тихие места, выше —
+ * только громкие.
+ */
+export const WAVE_FLOOR = -60
+export const WAVE_FLOOR_MIN = -96
+export const WAVE_FLOOR_MAX = -18
+
+/** Высота волны 0..1 для пика ``value`` (доля полной шкалы). Любой звук,
+ *  даже тише нижней границы, остаётся видимой ниточкой: пусто — только там,
+ *  где в файле ровно ноль. */
+export function waveHeight(value: number, floor: number): number {
+  if (!(value > 0)) return 0
+  const db = 20 * Math.log10(value)
+  return Math.min(1, Math.max(0.035, (db - floor) / -floor))
+}
+
+/**
  * Слышна ли (видна ли) дорожка: не выключена кнопкой M и не заглушена чужим
  * S. Соло действует внутри своего вида: соло звука не прячет картинку.
  */
@@ -644,6 +663,8 @@ interface Saved {
   masterVolume: number
   /** Выровнять громкость готового файла, как при обычной обработке. */
   loudnorm: boolean
+  /** Куда сохранять записи голоса этого проекта. Пусто — ещё не спрашивали. */
+  recordFolder: string
 }
 
 interface State extends Saved {
@@ -696,6 +717,9 @@ interface State extends Saved {
   compact: boolean
   /** Ширина колонки с названиями дорожек. */
   headWidth: number
+  /** Нижняя граница шкалы волны звука, дБ: что тише — не видно. Ctrl+↑/↓. */
+  waveFloor: number
+  setWaveFloor: (value: number) => void
 
   setQuality: (quality: number) => void
   setShape: (shape: string) => void
@@ -721,6 +745,7 @@ interface State extends Saved {
 
   setMasterVolume: (value: number) => void
   setLoudnorm: (value: boolean) => void
+  setRecordFolder: (folder: string) => void
   markIn: () => void
   markOut: () => void
   clearMarks: () => void
@@ -857,6 +882,7 @@ function emptyProject(): Saved {
     renderOut: null,
     masterVolume: 1,
     loudnorm: false,
+    recordFolder: '',
   }
 }
 
@@ -952,11 +978,11 @@ function loadSaved(): Saved {
 function toSaved(state: State): Saved {
   const {
     width, height, fps, quality, shape, turned, custom, tracks,
-    renderIn, renderOut, masterVolume, loudnorm,
+    renderIn, renderOut, masterVolume, loudnorm, recordFolder,
   } = state
   return {
     width, height, fps, quality, shape, turned, custom, tracks,
-    renderIn, renderOut, masterVolume, loudnorm,
+    renderIn, renderOut, masterVolume, loudnorm, recordFolder,
   }
 }
 
@@ -1382,6 +1408,11 @@ export const useCompose = create<State>((set, get) => ({
   // --- метки отрезка сборки ---------------------------------------------
   setLoudnorm(value) {
     set({ loudnorm: value })
+    save(get())
+  },
+
+  setRecordFolder(folder) {
+    set({ recordFolder: folder })
     save(get())
   },
 
@@ -1827,6 +1858,24 @@ export const useCompose = create<State>((set, get) => ({
       tracks: state.tracks.map((track) => (track.id === id ? { ...track, ...patch } : track)),
     }))
     save(get())
+  },
+
+  waveFloor: (() => {
+    try {
+      const saved = Number(localStorage.getItem('sgh.waveFloor'))
+      return saved < 0 ? saved : WAVE_FLOOR
+    } catch {
+      return WAVE_FLOOR
+    }
+  })(),
+  setWaveFloor(value) {
+    const next = Math.min(WAVE_FLOOR_MAX, Math.max(WAVE_FLOOR_MIN, value))
+    set({ waveFloor: next })
+    try {
+      localStorage.setItem('sgh.waveFloor', String(next))
+    } catch {
+      /* не запомнилось — не беда */
+    }
   },
 
   trackFx: null,

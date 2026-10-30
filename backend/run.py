@@ -271,6 +271,58 @@ def _custom_titlebar(window) -> None:
 #: а событие «страница загрузилась» приходит и при обновлении окна.
 _drop_ready = False
 
+#: Обработчик разрешений встроенного браузера. Держим ссылку, чтобы .NET не
+#: остался с обработчиком, который сборщик мусора Python уже убрал.
+_permission_handler = None
+
+
+def _allow_microphone(window) -> None:
+    """Микрофон своей странице — без вопроса.
+
+    Без этого WebView2 спрашивает сам, своим окошком, и ответ «Запретить»
+    он запоминает: нажал мимо один раз — запись голоса больше не работает,
+    и вернуть её из программы нечем. Спрашивать незачем: страница своя,
+    микрофон включается только кнопкой записи. Чужим адресам ничего не
+    даём. Запрет в самой Windows («Конфиденциальность → Микрофон») остаётся в
+    силе — о нём окно скажет при записи.
+    """
+    global _permission_handler
+
+    log = logging.getLogger("sigame-helper")
+    if _permission_handler is not None:
+        return
+    form = getattr(window, "native", None)
+    browser = getattr(getattr(form, "browser", None), "webview", None)
+    if form is None or browser is None:
+        return
+    try:
+        from urllib.parse import urlparse
+
+        from System import Action  # type: ignore[import-not-found]
+        from Microsoft.Web.WebView2.Core import (  # type: ignore[import-not-found]
+            CoreWebView2PermissionKind,
+            CoreWebView2PermissionState,
+        )
+
+        def handler(_sender, args) -> None:
+            try:
+                own = urlparse(str(args.Uri)).hostname in {"127.0.0.1", "localhost"}
+                if own and args.PermissionKind == CoreWebView2PermissionKind.Microphone:
+                    args.State = CoreWebView2PermissionState.Allow
+                    log.info("микрофон разрешён странице программы")
+            except Exception:
+                log.warning("не удалось ответить на запрос разрешения", exc_info=True)
+
+        def attach() -> None:
+            browser.CoreWebView2.PermissionRequested += handler
+            log.info("микрофон для страницы программы — без вопроса")
+
+        _permission_handler = handler
+        form.Invoke(Action(attach))
+    except Exception:
+        _permission_handler = None
+        log.warning("разрешение микрофона не настроено", exc_info=True)
+
 
 def _enable_file_drop(window) -> None:
     """Учит окно принимать файлы, перетащенные из проводника.
@@ -431,6 +483,9 @@ def launch_window(url: str, port: int) -> bool:
     # Перетаскивание файлов из проводника. Ждём именно загрузки страницы:
     # обработчик вешается на её document, а до этого вешать не на что.
     window.events.loaded += lambda: _enable_file_drop(window)
+    # Микрофон для записи голоса в монтаже — без окошка с вопросом.
+    if sys.platform == "win32":
+        window.events.loaded += lambda: _allow_microphone(window)
 
     # Чтобы вторая копия могла попросить это окно показаться.
     from app.core import appwindow

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, CheckCircle2, Gauge, RefreshCw, XCircle } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Gauge, RefreshCw, XCircle } from 'lucide-react'
 import { api } from '../lib/api'
 import { plural } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
 import type { ToolInfo } from '../lib/types'
 import { useStore } from '../store'
-import { Button, Modal, NumberField, QuietHints, Section, Segmented, Select, Spinner, Toggle } from './ui'
+import { Button, Dropdown, Modal, NumberField, QuietHints, Section, Segmented, Select, Spinner, Toggle } from './ui'
 
 /** Инструменты, которые протухают и требуют обновления. */
 const UPDATABLE = new Set(['yt-dlp', 'gallery-dl'])
@@ -379,6 +379,10 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               <TimelineFrames />
             </Section>
 
+            <Section title="Микрофон">
+              <MicPicker />
+            </Section>
+
             <Section title="Доп настройки">
               <Toggle
                 checked={settings.hints ?? true}
@@ -687,6 +691,90 @@ function CookiesField() {
  * больше полутора тысяч, так что памяти это не съест). «Редко» берёт только
  * опорные кадры и готово почти сразу.
  */
+/**
+ * Микрофон для записи голоса в монтаже.
+ *
+ * Названия микрофонов браузер отдаёт, только когда микрофон уже включали.
+ * Поэтому список сначала тот, что есть; без названий — кнопка, которая на
+ * мгновение включает микрофон и узнаёт их. Сама по себе настройка микрофон
+ * не трогает: иначе он загорался бы при каждом открытии настроек.
+ */
+function MicPicker() {
+  const [device, setDevice] = useState(() => loadPrefs().micDevice ?? '')
+  const [list, setList] = useState<{ value: string; label: string }[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const read = async () => {
+    const found = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (item) => item.kind === 'audioinput' && item.deviceId !== 'default' && item.deviceId !== 'communications',
+    )
+    return found
+  }
+  useEffect(() => {
+    let alive = true
+    void read()
+      .then((found) => {
+        if (alive && found.every((item) => item.label)) {
+          setList(found.map((item) => ({ value: item.deviceId, label: item.label })))
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const options = [{ value: '', label: 'Как в Windows (по умолчанию)' }, ...(list ?? [])]
+  const shown = options.find((item) => item.value === device)?.label ?? 'Выбранный раньше (сейчас не подключён)'
+
+  return (
+    <div className="space-y-2">
+      {list ? (
+        <Dropdown
+          value={device}
+          options={options}
+          onChange={(value) => {
+            setDevice(value)
+            savePrefs({ micDevice: value })
+          }}
+          className="field flex w-full items-center justify-between gap-2 text-left"
+        >
+          <span className="truncate">{shown}</span>
+          <ChevronDown size={13} className="shrink-0 text-ink-faint" />
+        </Dropdown>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{shown}</span>
+          <Button
+            onClick={async () => {
+              setError(null)
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+                stream.getTracks().forEach((track) => track.stop())
+                const found = await read()
+                setList(found.map((item, index) => ({ value: item.deviceId, label: item.label || `Микрофон ${index + 1}` })))
+              } catch (problem) {
+                setError(
+                  (problem as Error).name === 'NotAllowedError'
+                    ? 'Windows не даёт программе микрофон: «Параметры» → «Конфиденциальность и защита» → «Микрофон»'
+                    : `Микрофоны не найдены: ${(problem as Error).message}`,
+                )
+              }
+            }}
+          >
+            Показать микрофоны
+          </Button>
+        </div>
+      )}
+      <p className="text-[11.5px] leading-snug text-ink-faint">
+        Запись голоса в монтаже — кнопка с микрофоном или Ctrl+R. Пишется WAV без сжатия и без
+        шумоподавления.
+      </p>
+      {error && <p className="select-text text-[11.5px] leading-snug text-danger">{error}</p>}
+    </div>
+  )
+}
+
 function TimelineFrames() {
   const [mode, setMode] = useState(() => loadPrefs().timelineFrames ?? 'scenes')
   // Прежнее «normal» значило обычные кадры — то же, что теперь «хорошее».
