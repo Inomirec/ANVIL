@@ -77,6 +77,11 @@ export function FadeCurveMenu({
       className="fixed z-[60] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
       style={place}
       onContextMenu={(event) => event.preventDefault()}
+      // Меню в корне страницы, но нажатия по нему всё равно всплывают к
+      // дорожке, рядом с которой его открыли: та ловила их как перемотку,
+      // забирала мышь себе, и пункт так и не получал нажатия.
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
     >
       <p className="px-2 pb-1 pt-0.5 text-[10.5px] text-ink-faint">{side === 'in' ? 'Форма появления' : 'Форма ухода'}</p>
       {FADE_CURVES.map((item) => (
@@ -122,6 +127,11 @@ export function CrossFadeMenu({
       className="fixed z-[60] rounded-xl border border-line bg-surface-2 p-1.5 shadow-xl"
       style={place}
       onContextMenu={(event) => event.preventDefault()}
+      // Меню в корне страницы, но нажатия по нему всё равно всплывают к
+      // дорожке, рядом с которой его открыли: та ловила их как перемотку,
+      // забирала мышь себе, и пункт так и не получал нажатия.
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
     >
       <p className="px-1 pb-1.5 text-[10.5px] text-ink-faint">Форма перехода: строка — уход, столбец — появление</p>
       <div className="grid grid-cols-5 gap-1">

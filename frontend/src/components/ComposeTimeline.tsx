@@ -98,6 +98,14 @@ const PLAYHEAD_SNAP = 6
 const DRAG_START = 4
 /** Ближе этого к краю видимой части таймлайн едет за перетаскиваемым. */
 const FOLLOW_EDGE = 40
+/**
+ * Кнопки панели таймлайна: в узком окне — на четыре точки уже, разделители
+ * пропадают, время иглы прячется (оно видно на самом таймлайне). Так в
+ * самом маленьком окне с широкими колонками видны все кнопки, а не
+ * обрезаются и не налезают друг на друга. Ступени — 720 и 560 точек панели.
+ */
+const TOOL = 'h-7 w-5 @[560px]:w-6 @[720px]:w-7'
+const DIVIDER = 'mx-0.5 hidden h-4 w-px bg-line-soft @[720px]:block'
 /** Быстрее этого (точек за шаг в 16 мс) он не едет. */
 const FOLLOW_MAX = 30
 /** Обычная высота дорожек. Одинаковая: при монтаже звук не менее важен картинки. */
@@ -955,22 +963,22 @@ export function ComposeTimeline({
           посередине — просмотр, справа — что делают со всем монтажом и с
           самим таймлайном. Середина держится по центру окна и не ездит,
           когда слева появляются надписи вроде «добавляю файл…». */}
-      <div className="@container flex h-9 shrink-0 items-center gap-2 border-b border-line-soft px-2">
+      <div className="@container flex h-9 shrink-0 items-center gap-1 border-b border-line-soft px-1 @[560px]:px-2 @[720px]:gap-2">
         {/* Слева: что делают с клипами и дорожками */}
-        <div className="flex min-w-0 flex-auto items-center gap-0.5 overflow-hidden">
-          <IconButton className="h-7 w-7"
+        <div className="flex min-w-0 flex-auto items-center gap-0 overflow-hidden @[560px]:gap-0.5">
+          <IconButton className={TOOL}
             title="Отменить последнее действие (Ctrl+Z)"
             onClick={() => useCompose.getState().undo()}
           >
             <Undo2 size={14} />
           </IconButton>
 
-          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+          <span className={DIVIDER} />
 
-          <IconButton className="h-7 w-7" title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
+          <IconButton className={TOOL} title="Разрезать клип под иглой (S)" onClick={() => splitAtPlayhead()}>
             <Scissors size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Удалить выбранное (Delete)"
             onClick={() => selected.length && removeClips(selected)}
             disabled={!selected.length}
@@ -978,16 +986,16 @@ export function ComposeTimeline({
             <Trash2 size={14} />
           </IconButton>
 
-          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+          <span className={DIVIDER} />
 
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Добавить видеодорожку — она ляжет верхним слоем"
             onClick={() => addTrack('video')}
             disabled={tracks.length >= MAX_TRACKS}
           >
             <Layers size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Добавить звуковую дорожку"
             onClick={() => addTrack('audio')}
             disabled={tracks.length >= MAX_TRACKS}
@@ -995,21 +1003,21 @@ export function ComposeTimeline({
             <MusicTrack size={14} />
           </IconButton>
 
-          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+          <span className={DIVIDER} />
 
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Положить заливку под иглу: сплошной цвет под картинки с полями, под заставку или полосой поверх кадра"
             onClick={() => addColor('#101018')}
           >
             <PaintBucket size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Положить надпись под иглу: субтитр, заголовок или подпись поверх кадра"
             onClick={() => addText()}
           >
             <Type size={14} />
           </IconButton>
-          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+          <span className={DIVIDER} />
           {/* Запись голоса: красная, пока пишет, рядом — сколько записано. */}
           <button
             type="button"
@@ -1066,8 +1074,8 @@ export function ComposeTimeline({
         </div>
 
         {/* Посередине: просмотр */}
-        <div className="flex shrink-0 items-center gap-0.5">
-          <IconButton className="h-7 w-7"
+        <div className="flex shrink-0 items-center gap-0 @[560px]:gap-0.5">
+          <IconButton className={TOOL}
             title="В начало монтажа"
             onClick={() => {
               player.stop()
@@ -1076,7 +1084,7 @@ export function ComposeTimeline({
           >
             <SkipBack size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title={player.playing ? 'Пауза' : 'Смотреть с иглы (пробел)'}
             onClick={() => (player.playing ? player.stop() : player.start())}
             active={player.playing}
@@ -1089,7 +1097,7 @@ export function ComposeTimeline({
               <PlayIcon size={14} />
             )}
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Повторять по кругу. Если отмечен отрезок (I и O), повторяется он: просмотр, дошедший до его конца, возвращается к началу отрезка"
             onClick={() => player.setLoop(!player.loop)}
             active={player.loop}
@@ -1105,7 +1113,7 @@ export function ComposeTimeline({
             volume={player.volume}
             muted={player.volume === 0}
             title={`Громкость прослушивания ${Math.round(player.volume * 100)}% — на готовый файл не влияет`}
-            popupClassName="@[680px]:hidden"
+            popupClassName="@[800px]:hidden"
             onMute={() => {
               if (player.volume > 0) {
                 heardBefore.current = player.volume
@@ -1121,30 +1129,30 @@ export function ComposeTimeline({
             value={Math.round(player.volume * 100)}
             onChange={(event) => player.setVolume(Number(event.target.value) / 100)}
             title={`Громкость прослушивания ${Math.round(player.volume * 100)}%`}
-            className="ml-0.5 hidden w-[64px] @[680px]:block"
+            className="ml-0.5 hidden w-[64px] @[800px]:block"
           />
         </div>
 
         {/* Справа: как выглядит сам таймлайн. Где стоит игла и что уйдёт в
             файл, видно на самом таймлайне — метками и её чертой, поэтому
             словами это здесь не повторяем: место на панели дороже. */}
-        <div className="flex min-w-0 flex-auto items-center justify-end gap-0.5 overflow-hidden">
+        <div className="flex min-w-0 flex-auto items-center justify-end gap-0 overflow-hidden @[560px]:gap-0.5">
 
-          <IconButton className="h-7 w-7" title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null}>
+          <IconButton className={TOOL} title="Начало отрезка сборки (I)" onClick={markIn} active={renderIn !== null || renderOut !== null}>
             <FlagTriangleRight size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7" title="Конец отрезка сборки (O)" onClick={markOut} active={renderOut !== null}>
+          <IconButton className={TOOL} title="Конец отрезка сборки (O)" onClick={markOut} active={renderIn !== null || renderOut !== null}>
             <FlagTriangleLeft size={14} />
           </IconButton>
           {(renderIn !== null || renderOut !== null) && (
-            <IconButton className="h-7 w-7" title="Собрать всё целиком" onClick={clearMarks}>
+            <IconButton className={TOOL} title="Собрать всё целиком" onClick={clearMarks}>
               <X size={14} />
             </IconButton>
           )}
 
-          <span className="mx-0.5 h-4 w-px bg-line-soft" />
+          <span className={DIVIDER} />
 
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title={
               magnet
                 ? 'Прилипание включено: клипы, игла и рамки в кадре липнут к краям, сетке и друг к другу. Нажмите, чтобы выключить'
@@ -1155,20 +1163,20 @@ export function ComposeTimeline({
           >
             <Magnet size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Сжать дорожки, чтобы поместились все (Ё)"
             active={compact}
             onClick={() => setCompact(!compact)}
           >
             {compact ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Отдалить (колесо мыши)"
             onClick={() => keepPlayhead(Math.max(minScale(), scale / 1.4))}
           >
             <ZoomOut size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Показать монтаж целиком"
             onClick={() => {
               // До этого же места доходит и колесо, только за полтора десятка
@@ -1185,7 +1193,7 @@ export function ComposeTimeline({
           >
             <Scan size={14} />
           </IconButton>
-          <IconButton className="h-7 w-7"
+          <IconButton className={TOOL}
             title="Приблизить (колесо мыши)"
             onClick={() => keepPlayhead(Math.min(MAX_SCALE, scale * 1.4))}
           >
@@ -1195,7 +1203,7 @@ export function ComposeTimeline({
               скопировать: остальное окно выделять запрещено, чтобы не мешать
               перетаскиванию, и время вместе с ним не копировалось. */}
           <span
-            className="shrink-0 cursor-text select-text font-mono text-[11px] tabular-nums text-ink-dim"
+            className="hidden shrink-0 cursor-text select-text font-mono text-[11px] tabular-nums text-ink-dim @[720px]:inline"
             title="Где стоит игла: минуты, секунды и номер кадра в секунде"
           >
             {frameCode(playhead, fps)}
@@ -2711,6 +2719,26 @@ function Ruler({
           style={{ left: from * scale, width: Math.max((to - from) * scale, 2) }}
         />
       )}
+      {/* Оба края отрезка — флажками, даже если поставлен только один:
+          второй край тогда — начало или конец монтажа, и отрезок кончается
+          там, а не «нигде». */}
+      {marked &&
+        [
+          { at: from, side: 'in' as const },
+          { at: to, side: 'out' as const },
+        ].map((flag) => (
+          <div
+            key={flag.side}
+            className="pointer-events-none absolute top-0 h-full w-0.5 bg-accent-soft"
+            style={{ left: flag.at * scale - (flag.side === 'out' ? 2 : 0) }}
+          >
+            <div
+              className={`absolute top-0 h-0 w-0 border-y-[4px] border-y-transparent ${
+                flag.side === 'in' ? 'left-0.5 border-l-[6px] border-l-accent-soft' : 'right-0.5 border-r-[6px] border-r-accent-soft'
+              }`}
+            />
+          </div>
+        ))}
       {frameWidth >= 5 && (
         <div
           className="pointer-events-none absolute bottom-0 left-0 h-1.5"
@@ -2945,6 +2973,10 @@ function ClipBox({
   const fadeInWidth = (clip.fadeIn / clip.duration) * box
   const fadeOutWidth = (clip.fadeOut / clip.duration) * box
   const corner = short ? 0 : FADE_CORNER
+  // Уголок затухания стоит там, где затухание кончается, и едет за ним, как
+  // в монтажных программах. У края клипа — пока затухания нет.
+  const inAt = Math.min(Math.max(fadeInWidth - corner / 2, 0), Math.max(box - corner, 0))
+  const outAt = Math.min(Math.max(fadeOutWidth - corner / 2, 0), Math.max(box - corner, 0))
 
   return (
     <div
@@ -2965,8 +2997,12 @@ function ClipBox({
         const fromRight = area.right - event.clientX
         const fromTop = event.clientY - area.top
         // Верхние углы отданы затуханию, бока ниже них — длине клипа.
-        if (corner > 0 && fromTop <= corner && fromLeft <= corner) return onGrab(event, 'fadeIn')
-        if (corner > 0 && fromTop <= corner && fromRight <= corner) return onGrab(event, 'fadeOut')
+        if (corner > 0 && fromTop <= corner && fromLeft >= inAt && fromLeft <= inAt + corner) {
+          return onGrab(event, 'fadeIn')
+        }
+        if (corner > 0 && fromTop <= corner && fromRight >= outAt && fromRight <= outAt + corner) {
+          return onGrab(event, 'fadeOut')
+        }
         onGrab(
           event,
           fromLeft <= GRIP_PIXELS ? 'left' : fromRight <= GRIP_PIXELS ? 'right' : 'move',
@@ -3075,13 +3111,13 @@ function ClipBox({
           форма (правая кнопка на уголке). */}
       {clip.fadeIn > 0 && (
         <div
-          className="pointer-events-none absolute inset-y-0 left-0 bg-black/55"
+          className="pointer-events-none absolute inset-y-0 left-0 bg-black/80"
           style={{ width: fadeInWidth, clipPath: fadeClip(clip.fadeInCurve, 'in', sound) }}
         />
       )}
       {clip.fadeOut > 0 && (
         <div
-          className="pointer-events-none absolute inset-y-0 right-0 bg-black/55"
+          className="pointer-events-none absolute inset-y-0 right-0 bg-black/80"
           style={{ width: fadeOutWidth, clipPath: fadeClip(clip.fadeOutCurve, 'out', sound) }}
         />
       )}
@@ -3229,8 +3265,8 @@ function ClipBox({
       {!short && (
         <>
           <div
-            className="absolute left-0 top-0 cursor-nwse-resize"
-            style={{ width: corner, height: corner }}
+            className="absolute top-0 z-[3] cursor-ew-resize"
+            style={{ left: inAt, width: corner, height: corner }}
             title="Потяните вправо — плавное появление. Правая кнопка — его форма"
             onMouseDown={(event) => {
               if (event.button !== 0) return
@@ -3239,11 +3275,15 @@ function ClipBox({
             }}
             onContextMenu={(event) => onFadeMenu(event, 'in')}
           >
-            <div className="m-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div
+              className={`mx-auto mt-1 h-2 w-2 rounded-sm bg-accent/80 transition-opacity ${
+                clip.fadeIn > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              }`}
+            />
           </div>
           <div
-            className="absolute right-0 top-0 cursor-nesw-resize"
-            style={{ width: corner, height: corner }}
+            className="absolute top-0 z-[3] cursor-ew-resize"
+            style={{ right: outAt, width: corner, height: corner }}
             title="Потяните влево — плавный уход. Правая кнопка — его форма"
             onMouseDown={(event) => {
               if (event.button !== 0) return
@@ -3252,7 +3292,11 @@ function ClipBox({
             }}
             onContextMenu={(event) => onFadeMenu(event, 'out')}
           >
-            <div className="ml-auto mr-1 mt-1 h-2 w-2 rounded-sm bg-accent/80 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div
+              className={`mx-auto mt-1 h-2 w-2 rounded-sm bg-accent/80 transition-opacity ${
+                clip.fadeOut > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              }`}
+            />
           </div>
         </>
       )}

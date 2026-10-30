@@ -577,6 +577,8 @@ export function Dropdown<T extends string>({
           ref={list}
           className="fixed z-50 min-w-[150px] rounded-xl border border-line bg-surface-2 p-1 shadow-xl"
           style={place}
+          // Нажатия по списку не всплывают к окну, рядом с которым он открыт.
+          onPointerDown={(event) => event.stopPropagation()}
         >
           {options.map((item) => (
             <button
