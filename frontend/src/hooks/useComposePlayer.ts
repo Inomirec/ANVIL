@@ -28,8 +28,6 @@ import type { MeterLevels } from '../components/MasterMeter'
  * не успевал собраться, пока играет текущий.
  */
 const CHUNK_SECONDS = 12
-/** Первый кусок просмотра — короткий: его ждут, нажав «играть». */
-const QUICK_SECONDS = 3
 
 /** Ближайшая отметка кусков после ``at`` (сама ``at``, если она на отметке, — следующая). */
 function nextMark(at: number): number {
@@ -169,6 +167,17 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
    * Запоздавший ответ тогда не начинает играть и не жалуется на ошибку.
    */
   const run = useRef(0)
+  /**
+   * Отзыв запросов кусков прежнего просмотра. Сервер собирает куски по
+   * одному, и брошенные запросы иначе стояли в очереди впереди нового
+   * просмотра: остановили, подвинули клип, нажали «играть» — и ждали, пока
+   * доделаются куски, которые уже никто не покажет (до 10–20 секунд).
+   */
+  const aborter = useRef(new AbortController())
+  const dropRequests = useCallback(() => {
+    aborter.current.abort()
+    aborter.current = new AbortController()
+  }, [])
   const height = useRef(START_HEIGHT)
   const alive = useRef(true)
 
@@ -229,36 +238,29 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
 
   /** Просит у программы кусок монтажа с указанной секунды. */
   const fetchChunk = useCallback(
-    async (at: number, mine: number, from = at, quick = false): Promise<Chunk | null> => {
+    async (at: number, mine: number, from = at): Promise<Chunk | null> => {
       const started = performance.now()
       const version = usePreviewReady.getState().version
       try {
         const asked = qualityRef.current
-        const data = await api.composeDraft({
+        const data = await api.composeDraft(
+          {
           project: snapshot(),
           at,
           // Кусок, на котором кончается круг повтора, — ровно до его конца.
-          // Кусок не с отметки — до ближайшей отметки, дальше снова обычные:
-          // их собирают впрок и берут из запаса при следующем просмотре.
-          // Первый кусок — короткий (`QUICK_SECONDS`): собирается вдвое
-          // быстрее, и просмотр начинается раньше; готовый обычный кусок
-          // сервер отдаст вместо него (`ready_at`).
-          span: Math.min(
-            quick ? QUICK_SECONDS : CHUNK_SECONDS,
-            nextMark(at) - at,
-            (loopRange(from)?.end ?? Infinity) - at,
-          ),
-          ...(quick
-            ? {
-                ready_at: Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS,
-                ready_span: Math.min(CHUNK_SECONDS, (loopRange(from)?.end ?? Infinity) - Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS),
-              }
-            : {}),
+          // Кусок не с отметки (после круга повтора) — до ближайшей отметки,
+          // дальше снова обычные: их берут из запаса при следующем просмотре.
+          span: Math.min(CHUNK_SECONDS, nextMark(at) - at, (loopRange(from)?.end ?? Infinity) - at),
           height: previewHeight(asked === 'auto' ? height.current : asked),
-        })
+          },
+          aborter.current.signal,
+        )
         let sound: AudioBuffer | null = null
         if (data.audio) {
           const bytes = await (await fetch(data.audio)).arrayBuffer()
+          // С вкладки ушли, пока кусок собирался, — звуковой граф уже закрыт,
+          // и заводить новый незачем.
+          if (!alive.current) return null
           sound = await graph().ctx.decodeAudioData(bytes)
         }
         // Собиралось долго — дальше берём кадр помельче. Человек этого не
@@ -275,8 +277,11 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
         if (data.missing?.length) useCompose.getState().reportMissing(data.missing)
         return { url: data.url, sound, at: data.at, span: data.span }
       } catch (problem) {
-        // Об ошибке говорим, только если её ещё ждут.
-        if (mine === run.current) setError((problem as Error).message)
+        // Об ошибке говорим, только если её ещё ждут. Отозванный запрос —
+        // не ошибка.
+        if (mine === run.current && (problem as Error).name !== 'AbortError') {
+          setError((problem as Error).message)
+        }
         return null
       }
     },
@@ -286,7 +291,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   /** Ставит звук куска на звуковые часы: секунда ``offset`` — в момент ``when``. */
   const sound = useCallback(
     (chunk: Chunk, when: number, offset: number): AudioBufferSourceNode | null => {
-      if (!chunk.sound) return null
+      if (!chunk.sound || !alive.current) return null
       const { ctx, splitter, gain } = graph()
       const source = ctx.createBufferSource()
       source.buffer = chunk.sound
@@ -370,7 +375,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
         if (at === null) break
         const version = usePreviewReady.getState().version
         const next = await fetchChunk(at, mine)
-        if (!next || mine !== run.current) break
+        if (!next || mine !== run.current || !alive.current) break
         // Пока кусок собирался, монтаж поправили — он показывает уже не то.
         if (version !== usePreviewReady.getState().version) continue
         queue.current.push(next)
@@ -387,6 +392,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
 
   const stop = useCallback(() => {
     run.current += 1
+    dropRequests()
     setPlaying(false)
     setPreparing(false)
     setError(null)
@@ -452,6 +458,7 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
 
   const start = useCallback(async () => {
     const mine = ++run.current
+    dropRequests()
     setError(null)
     setPreparing(true)
     silence(current.current)
@@ -466,10 +473,12 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
     let at = state.playhead
     // Игла осталась в самом конце — начинаем сначала, как любой плеер.
     if (at >= finish - 0.05) at = 0
-    // Первый кусок — короткий и прямо с иглы: его ждут, нажав «играть».
-    // Если обычный кусок с отметки уже собран, сервер отдаст его, и играть
-    // начнём с иглы внутри него.
-    const first = await fetchChunk(at, mine, at, true)
+    // Кусок — с ровной отметки, а играть — с иглы внутри него: так кусок,
+    // однажды собранный, годится для просмотра с любого места в нём.
+    // Короткий первый кусок пробовали: следующий не успевал собраться за
+    // время его показа, и просмотр тут же вставал снова.
+    const base = Math.floor(at / CHUNK_SECONDS) * CHUNK_SECONDS
+    const first = await fetchChunk(base, mine, at)
     if (!first || !alive.current || mine !== run.current) {
       if (mine === run.current) setPreparing(false)
       return
@@ -655,9 +664,18 @@ export function useComposePlayer(videos: [VideoRef, VideoRef]) {
   useEffect(() => {
     alive.current = true
     return () => {
+      // Ушли с вкладки — просмотр останавливается целиком. Прежде гас только
+      // звук, а сборка кусков впрок шла дальше: дособранный кусок ставился в
+      // очередь, заводил звук заново, и он вдруг начинал играть на другой
+      // вкладке.
       alive.current = false
+      run.current += 1
+      aborter.current.abort()
       silence(current.current)
       silence(upcoming.current)
+      current.current = null
+      upcoming.current = null
+      queue.current = []
       void audio.current?.ctx.close()
       audio.current = null
     }

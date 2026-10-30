@@ -262,18 +262,15 @@ export const api = {
       method: 'DELETE',
     }),
   /** Кусок монтажа для просмотра: собирается быстрым кодеком и кэшируется. */
-  composeDraft: (payload: unknown) =>
-    post<{
+  composeDraft: (payload: unknown, signal?: AbortSignal) =>
+    request<{
       url: string
       audio: string | null
       at: number
       span: number
       size: number
       missing?: string[]
-    }>(
-      '/api/compose/draft',
-      payload,
-    ),
+    }>('/api/compose/draft', { method: 'POST', body: JSON.stringify(payload), signal }),
 
   exportPreview: (payload: unknown) =>
     post<{ summary: string; command: string | null; output?: string }>('/api/export/preview', payload),

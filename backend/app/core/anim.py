@@ -187,9 +187,21 @@ def commands(
         moment = index / rate
         value = f"{convert(value_at(clip, field, moment + skip)):.{digits}f}"
         if value != last:
-            found.append((moment, f"{target} {option} {value}"))
+            found.append((command_time(moment, rate), f"{target} {option} {value}"))
             last = value
     return found
+
+
+def command_time(moment: float, rate: float) -> float:
+    """Когда слать команду для кадра в ``moment`` — на полкадра раньше него.
+
+    Время в файле команд округляется до десятитысячной, и у части кадров
+    (1/60 = 0.016666…) команда выходила на волосок позже самого кадра:
+    срабатывала на следующем, а этот оставался прежним. Затухания и ключи шли
+    рывками — кадр стоит, следующий прыгает вдвое. Полкадра запаса снимают
+    это при любом округлении.
+    """
+    return max(0.0, moment - 0.5 / max(rate, 1))
 
 
 def points_at(clip: ComposeClip, local: float) -> list[tuple[float, float]]:

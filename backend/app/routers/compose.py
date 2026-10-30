@@ -25,6 +25,7 @@ from ..models import (
     ComposeFindRequest,
     ComposeDraftRequest,
     ComposeFrameRequest,
+    ComposeProject,
     ComposeProjectFile,
     ComposeSnapshotRequest,
     StabilizeRequest,
@@ -66,7 +67,9 @@ async def frame(request: ComposeFrameRequest) -> Response:
         # Заливки со скруглением, рамкой и тенью рисуются заранее и отдельно:
         # внутри сборки команды ждать ffmpeg было бы нельзя.
         preview_height = round(request.preview_width * project.height / project.width)
-        await compose.prepare_fills(project, request.preview_width, preview_height)
+        await compose.prepare_fills(
+            project, request.preview_width, preview_height, at=request.at, span=0.05
+        )
         args = compose.build_frame(project, target, request.at, request.preview_width)
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -103,7 +106,7 @@ async def frame(request: ComposeFrameRequest) -> Response:
 _DRAFT_KEEP = 80
 #: Версия сборки черновиков. Меняется, когда меняется то, как собирается
 #: кусок, — иначе просмотр брал бы из запаса куски, собранные по-старому.
-_DRAFT_VERSION = "6"
+_DRAFT_VERSION = "7"
 #: Пока собирается один кусок, следующий ждёт: иначе десяток ffmpeg разом
 #: положит машину, ради которой всё это и затевалось.
 _draft_lock = asyncio.Lock()
@@ -154,8 +157,51 @@ async def _draft_sound(video: Path, span: float) -> Path | None:
     return target
 
 
+#: Сколько звука собирать до начала куска, когда выравнивается громкость.
+_WARM_SECONDS = 3.0
+
+
+async def _warm_sound(project: ComposeProject, video: Path, at: float, span: float) -> Path | None:
+    """Звук куска с выравниванием громкости — с разгоном до его начала.
+
+    `loudnorm` подстраивает громкость на ходу и в начале каждого куска
+    начинает подстройку заново, поэтому на стыках громкость прыгала. Здесь
+    звук собирается с запасом в несколько секунд до куска — выравнивание
+    успевает войти в колею, — а запас отрезается. Не вышло — звук из самого
+    куска, как раньше.
+    """
+    target = video.with_suffix(".wav")
+    if target.exists():
+        with contextlib.suppress(OSError):
+            os.utime(target)
+        return target
+    pre = min(at, _WARM_SECONDS)
+    try:
+        args = compose.build_segment(
+            project, target, at=at - pre, span=span + pre, preview=True, audio_only=True,
+            codec=["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2"],
+        )
+    except ValueError:
+        return None
+    # Запас отрезаем на выходе — для звука это точно до отсчёта.
+    cut = len(args) - 1 - args[::-1].index("-t")
+    args[cut : cut + 2] = ["-ss", f"{pre:.3f}", "-t", f"{span:.3f}"]
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        creationflags=binaries.CREATE_NO_WINDOW,
+        env=binaries.subprocess_env(),
+    )
+    await process.wait()
+    if process.returncode != 0 or not target.exists():
+        target.unlink(missing_ok=True)
+        return await _draft_sound(video, span)
+    return target
+
+
 @router.post("/draft")
-async def draft(request: ComposeDraftRequest) -> dict:
+async def draft(request: ComposeDraftRequest, http: Request) -> dict:
     """Собирает кусок монтажа для просмотра и отдаёт ссылку на него.
 
     Готовый кусок кэшируется по содержимому монтажа и границам отрезка:
@@ -174,24 +220,16 @@ async def draft(request: ComposeDraftRequest) -> dict:
     if not total:
         raise HTTPException(400, "На таймлайне пусто")
 
-    def place(at: float, span: float) -> tuple[float, float, Path]:
-        at = min(at, total)
-        span = min(span, max(total - at, 0.0))
-        # Номер версии сборки — в ключе: исправленная сборка не должна брать
-        # из запаса куски, собранные прежней (с пропавшим кадром на стыке).
-        stamp = f"{_DRAFT_VERSION}|{project.model_dump_json()}|{at:.3f}|{span:.3f}|{request.height}"
-        key = hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:20]
-        return at, span, _draft_dir() / f"{key}.mp4"
-
-    at, span, target = place(request.at, request.span)
+    at = min(request.at, total)
+    span = min(request.span, max(total - at, 0.0))
     if span <= 0:
         raise HTTPException(400, "Дальше конца монтажа смотреть нечего")
-    if request.ready_at is not None and request.ready_span:
-        # Обычный кусок уже собран — он лучше короткого: дальше просмотр
-        # пойдёт от него без лишнего стыка.
-        ready = place(request.ready_at, request.ready_span)
-        if ready[1] > 0 and ready[2].exists():
-            at, span, target = ready
+
+    # Номер версии сборки — в ключе: исправленная сборка не должна брать из
+    # запаса куски, собранные прежней (с пропавшим кадром на стыке).
+    stamp = f"{_DRAFT_VERSION}|{project.model_dump_json()}|{at:.3f}|{span:.3f}|{request.height}"
+    key = hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:20]
+    target = _draft_dir() / f"{key}.mp4"
 
     if target.exists():
         # Кусок снова понадобился — он свежий: чистка убирает давно не нужные,
@@ -200,10 +238,15 @@ async def draft(request: ComposeDraftRequest) -> dict:
             os.utime(target)
     else:
         async with _draft_lock:
+            # Пока ждали очереди, окно могло передумать: просмотр остановили
+            # или начали с другого места. Брошенный кусок не собираем — иначе
+            # новый просмотр ждал бы, пока доделаются никому не нужные.
+            if not target.exists() and await http.is_disconnected():
+                raise HTTPException(409, "Кусок больше не нужен")
             # Пока ждали очереди, соседний запрос мог всё собрать за нас.
             if not target.exists():
                 width = round(request.height * project.width / project.height)
-                await compose.prepare_fills(project, width, request.height)
+                await compose.prepare_fills(project, width, request.height, at=at, span=span)
                 args = compose.build_segment(
                     project, target, at=at, span=span,
                     width=width, height=request.height, preview=True,
@@ -215,9 +258,24 @@ async def draft(request: ComposeDraftRequest) -> dict:
                     creationflags=binaries.CREATE_NO_WINDOW,
                     env=binaries.subprocess_env(),
                 )
-                _, err = await process.communicate()
+                # Окно отозвало запрос посреди сборки — останавливаем ffmpeg.
+                async def watch() -> None:
+                    while process.returncode is None:
+                        await asyncio.sleep(0.25)
+                        if await http.is_disconnected():
+                            with contextlib.suppress(ProcessLookupError):
+                                process.kill()
+                            return
+
+                watcher = asyncio.create_task(watch())
+                try:
+                    _, err = await process.communicate()
+                finally:
+                    watcher.cancel()
                 if process.returncode != 0 or not target.exists():
                     target.unlink(missing_ok=True)
+                    if await http.is_disconnected():
+                        raise HTTPException(409, "Кусок больше не нужен")
                     detail = err.decode("utf-8", "replace").strip().splitlines()
                     raise HTTPException(
                         500,
@@ -226,7 +284,11 @@ async def draft(request: ComposeDraftRequest) -> dict:
                     )
                 _prune_drafts(target.parent)
 
-    sound = await _draft_sound(target, span)
+    sound = (
+        await _warm_sound(project, target, at, span)
+        if project.loudnorm and at > 0.05
+        else await _draft_sound(target, span)
+    )
     return {
         "url": f"/api/compose/draft/{target.name}",
         "audio": f"/api/compose/draft/{sound.name}" if sound else None,

@@ -83,7 +83,6 @@ export function MediaEditor({
   const [peaksLoading, setPeaksLoading] = useState(false)
   const [grabbing, setGrabbing] = useState(false)
   // Насколько затемнить картинку прямо сейчас — показываем затухание вживую.
-  const [dim, setDim] = useState(0)
 
   const toast = useStore((state) => state.toast)
   const revealQueue = useStore((state) => state.revealQueue)
@@ -188,10 +187,28 @@ export function MediaEditor({
       // Те же формы, что у обработки: звук и картинка — каждый своей.
       const audioGain = fadeGain(at, from, to, fades.audio, true)
       media.volume = muted ? 0 : volume * audioGain
-      setDim(1 - fadeGain(at, from, to, fades.video, false))
+      // Затемнение — прямо в разметке, без перерисовки всего окна: во время
+      // воспроизведения оно меняется на каждом кадре.
+      if (media instanceof HTMLVideoElement) {
+        const dim = 1 - fadeGain(at, from, to, fades.video, false)
+        media.style.filter = dim > 0.001 ? `brightness(${1 - dim})` : ''
+      }
     },
     [trim.in, trim.out, duration, fades, volume, muted],
   )
+
+  // Пока играет — затухание пересчитываем на каждом кадре. Событие «время
+  // изменилось» браузер шлёт около четырёх раз в секунду, и по нему
+  // затухание шло заметными ступеньками. Таймер, а не кадры отрисовки: в
+  // свёрнутом окне те не приходят, а звук затухать должен.
+  useEffect(() => {
+    if (!playing) return
+    const timer = setInterval(() => {
+      const media = mediaRef.current
+      if (media) applyFades(media, media.currentTime)
+    }, 16)
+    return () => clearInterval(timer)
+  }, [playing, applyFades])
 
   useEffect(() => {
     const media = mediaRef.current
@@ -547,7 +564,7 @@ export function MediaEditor({
             className="max-h-full max-w-full bg-black shadow-xl ring-1 ring-line"
             // Затухание картинки — потемнением самого кадра: вуаль поверх
             // всего окна закрасила бы и поле вокруг.
-            style={{ transform: zoom.transform, filter: dim > 0.001 ? `brightness(${1 - dim})` : undefined }}
+            style={{ transform: zoom.transform }}
             onLoadedMetadata={(event) => {
               const total = event.currentTarget.duration || 0
               setDuration(total)

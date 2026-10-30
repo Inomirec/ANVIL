@@ -359,6 +359,8 @@ def place_filter(clip: ComposeClip, width: int, height: int, fps: float, skip: f
     """
     if clip.kind == "text":
         # Слой уже размером с кадр — подгонять нечего, остаётся написать.
+        if clip.text_image:
+            return f"format=yuva420p,setsar=1,fps={rate(fps)}"
         if text_layered(clip):
             return f"{text_layers(clip, width, height, skip)},setsar=1,fps={rate(fps)}"
         return f"{text_filter(clip, width, height, skip)},setsar=1,fps={rate(fps)}"
@@ -922,23 +924,101 @@ async def _ink_shift(clip: ComposeClip) -> float:
     return shift
 
 
+def text_still(clip: ComposeClip) -> bool:
+    """Надпись не меняется по ходу клипа — её можно нарисовать один раз.
+
+    Непрозрачность и затухания не в счёт: они ложатся на готовый слой.
+    """
+    return bool(clip.text.strip()) and not any(
+        anim.animated(clip, field) for field in ("x", "y", "fontSize")
+    )
+
+
+#: Сколько хранить нарисованные надписи, которые давно не были нужны.
+_TEXT_IMAGE_AGE = 7 * 24 * 3600
+
+
+async def _render_text(clip: ComposeClip, width: int, height: int) -> Path:
+    """Рисует неподвижную надпись картинкой во весь кадр — один раз.
+
+    Скруглённая подложка и размытая тень — это размытие всего кадра в 16
+    битах, и раньше оно считалось заново на каждом кадре: кусок просмотра с
+    одной такой надписью собирался 4.7 с вместо 1.6. Нарисованная картинка
+    лежит в кэше по виду надписи и размеру кадра и при сборке просто
+    повторяется, как заливка.
+    """
+    looks = clip.model_dump(
+        exclude={
+            "id", "name", "start", "duration", "source_in", "opacity", "fade_in", "fade_out",
+            "fade_in_curve", "fade_out_curve", "anim", "group_id", "text_image", "muted", "volume",
+        },
+    )
+    where = fonts.path_for(clip.font, clip.bold, clip.italic)
+    stamp = json.dumps(["v1", width, height, where, looks], sort_keys=True, default=str)
+    folder = paths.data_dir() / "texts"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{hashlib.sha1(stamp.encode('utf-8')).hexdigest()[:20]}.png"
+    if target.exists():
+        with contextlib.suppress(OSError):
+            os.utime(target)
+        return target
+    chain = (
+        text_layers(clip, width, height).removesuffix(",format=yuva420p")
+        if text_layered(clip)
+        else text_filter(clip, width, height)
+    )
+    process = await asyncio.create_subprocess_exec(
+        binaries.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", f"color=c=black@0:s={width}x{height}:d=0.04,format=yuva420p",
+        "-filter_complex", f"[0:v]{chain},format=rgba[o]", "-map", "[o]",
+        "-frames:v", "1", str(target),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=binaries.CREATE_NO_WINDOW,
+        env=binaries.subprocess_env(),
+    )
+    _, err = await process.communicate()
+    if process.returncode != 0 or not target.exists():
+        target.unlink(missing_ok=True)
+        detail = err.decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError("Не удалось нарисовать надпись: " + (detail[0] if detail else "неизвестно"))
+    # Заодно подчищаем надписи, которые давно никому не нужны.
+    edge = time.time() - _TEXT_IMAGE_AGE
+    for stale in folder.glob("*.png"):
+        with contextlib.suppress(OSError):
+            if stale != target and stale.stat().st_mtime < edge:
+                stale.unlink()
+    return target
+
+
 async def prepare_fills(
-    project: ComposeProject, width: int | None = None, height: int | None = None
+    project: ComposeProject,
+    width: int | None = None,
+    height: int | None = None,
+    *,
+    at: float = 0.0,
+    span: float | None = None,
 ) -> None:
-    """Готовит картинки заливок со скруглением, рамкой и тенью.
+    """Готовит картинки заливок со скруглением, рамкой и тенью, надписи и маски.
 
     Отдельным шагом и асинхронно: рисует их ffmpeg, и ждать его внутри
     `build_segment`, который зовут прямо из обработчиков, значило бы подвесить
-    весь сервер. Размер — тот же, что потом возьмёт сборка.
+    весь сервер. Размер — тот же, что потом возьмёт сборка. ``at``/``span`` —
+    какой отрезок собирается: кадру и куску просмотра не нужно рисовать то,
+    чего в них нет.
     """
     frame_w = _even(width or project.width)
     frame_h = _even(height or project.height)
     for track in project.tracks:
         for clip in track.clips:
+            if span is not None and (clip.end <= at or clip.start >= at + span):
+                continue
             if is_decorated_fill(clip):
                 clip.fill_image = str(await _render_fill(clip, frame_w, frame_h))
             if clip.kind == "text" and clip.box:
                 clip.box_shift = await _ink_shift(clip)
+            if clip.kind == "text" and text_still(clip):
+                clip.text_image = str(await _render_text(clip, frame_w, frame_h))
             # Маски — тоже картинки, рисуются здесь же и по той же причине.
             if effects.has_mask(clip) and clip.source_width:
                 if effects.points_animated(clip):
@@ -1020,35 +1100,29 @@ def _video_fade_filters(clip: ComposeClip, at: float, take: float, fps: float = 
     skip = max(0.0, at - clip.start)
     parts: list[str] = []
 
-    # Кусок, начавшийся посреди появления, тоже идёт формулой: `fade` начал
+    # Кусок, начавшийся посреди появления, тоже идёт командами: `fade` начал
     # бы появление с нуля, и на стыке кусков клип мигал бы в чёрное.
     midway = 0 < skip < clip.fade_in - MIN_FADE
     if fades.custom(clip.fade_in_curve) or fades.custom(clip.fade_out_curve) or midway:
-        # Форму, кроме линейной, `fade` не рисует — считаем видимость формулой
-        # `geq` и только на кадрах появления и ухода (`enable`), остальные
-        # проходят мимо. Командами `sendcmd` нельзя: на повторённых кадрах
-        # (картинка 25 к/с или ролик 24 к/с в монтаже на 60) они срабатывают
-        # через раз, и затухание шло ступеньками по 24 в секунду.
-        local = f"(T+{skip:.4f})"
-        gain: list[str] = []
-        when: list[str] = []
-        if clip.fade_in - skip > MIN_FADE:
-            share = f"{local}/{clip.fade_in:.4f}"
-            gain.append(f"if(lt({local},{clip.fade_in:.4f}),{fades.expression(clip.fade_in_curve or 'linear', share)},1)")
-            when.append(f"lt(t+{skip:.4f},{clip.fade_in:.4f})")
-        if clip.fade_out > MIN_FADE and (clip.duration - skip) - clip.fade_out < take:
-            starts = clip.duration - clip.fade_out
-            left = f"({clip.duration:.4f}-{local})/{clip.fade_out:.4f}"
-            curve = fades.expression(clip.fade_out_curve or "linear", f"1-{left}")
-            gain.append(f"if(gt({local},{starts:.4f}),1-{curve},1)")
-            when.append(f"gt(t+{skip:.4f},{starts:.4f})")
-        if gain:
-            parts.append(
-                "geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)'"
-                f":a='alpha(X,Y)*{'*'.join(gain)}':enable='{'+'.join(when)}'"
-            )
-        parts += _opacity_filters(clip, skip, take, fps, tag)
-        return ",format=yuva420p," + ",".join(parts) if parts else ""
+        # Форму, кроме линейной, `fade` не рисует: видимость вместе с
+        # непрозрачностью шлём на каждый кадр командой, как ключи. Формулой
+        # `geq` выходило вшестеро медленнее: она считается для каждой точки.
+        rate = max(fps, 1)
+        lines: list[tuple[float, str]] = []
+        last = ""
+        for index in range(max(1, int(math.ceil(take * rate)) + 1)):
+            moment = index / rate
+            local = skip + moment
+            opacity = min(1.0, max(0.0, anim.value_at(clip, "opacity", local)))
+            value = f"{opacity * fade_gain(clip, clip.start + local):.3f}"
+            if value != last:
+                lines.append((anim.command_time(moment, rate), f"colorchannelmixer@{tag} aa {value}"))
+                last = value
+        first = lines[0][1].rsplit(" ", 1)[-1]
+        return (
+            ",format=yuva420p,"
+            f"sendcmd=f={effects.command_file(lines)},colorchannelmixer@{tag}=aa={first}"
+        )
 
     if clip.fade_in - skip > MIN_FADE:
         parts.append(f"fade=t=in:st=0:d={clip.fade_in - skip:.3f}:alpha=1")
@@ -1248,7 +1322,10 @@ def build_segment(
         if audio_only and not sound:
             continue
 
-        if clip.kind == "text":
+        if clip.kind == "text" and clip.text_image:
+            # Неподвижную надпись нарисовали заранее — повторяем картинку.
+            inputs += ["-loop", "1", "-t", _frames_span(take, fps), "-i", clip.text_image]
+        elif clip.kind == "text":
             # Надпись живёт на прозрачном слое размером с кадр: масштабировать
             # готовые буквы нельзя — они замылятся, поэтому рисуем их сразу в
             # том размере, в котором они попадут в файл.
