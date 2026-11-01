@@ -429,10 +429,16 @@ export function Section({
                 folded ? '-rotate-90' : ''
               }`}
             />
-            {heading}
+            <span className="shrink-0 whitespace-nowrap">{heading}</span>
+            {/* Сводка уступает место заголовку и в узкой колонке обрезается
+                многоточием, а не уезжает за край: текст внутри flex сам не
+                сжимается, поэтому строку оборачиваем в свой truncate. */}
             {folded && summary && (
-              <span className="ml-auto flex min-w-0 items-center gap-1.5 truncate text-[11px] text-ink-dim">
-                {summary}
+              <span
+                title={typeof summary === 'string' ? summary : undefined}
+                className="ml-auto flex min-w-0 items-center justify-end gap-1.5 overflow-hidden text-[11px] text-ink-dim"
+              >
+                {typeof summary === 'string' ? <span className="truncate">{summary}</span> : summary}
               </span>
             )}
           </button>
