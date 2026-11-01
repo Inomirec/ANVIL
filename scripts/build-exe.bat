@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title SiGame Helper - сборка
+title ANVIL - сборка
 cd /d "%~dp0.."
 
-rem Собирает "SiGame Helper.exe" - единственный файл, который нужен человеку.
+rem Собирает "ANVIL.exe" - единственный файл, который нужен человеку.
 rem Он же установщик, он же запускалка: если рядом есть папка runtime,
 rem просто открывает программу, иначе показывает окно установки.
 rem
@@ -17,7 +17,7 @@ echo   Ставлю PyInstaller...
 
 echo   Собираю...
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --noconsole --clean ^
-  --name "SiGame Helper" --icon "%CD%\assets\icon.ico" ^
+  --name "ANVIL" --icon "%CD%\assets\icon.ico" ^
   --add-data "%CD%\backend;backend" ^
   --add-data "%CD%\assets;assets" ^
   --add-data "%CD%\scripts;scripts" ^
@@ -25,7 +25,7 @@ echo   Собираю...
   --specpath "%CD%\build-setup" installer.py
 if errorlevel 1 goto :fail
 
-copy /y "dist-setup\SiGame Helper.exe" "SiGame Helper.exe" >nul
+copy /y "dist-setup\ANVIL.exe" "ANVIL.exe" >nul
 echo.
 echo   Готово. Файл обновлён и в папке проекта, и в dist-setup.
 echo.

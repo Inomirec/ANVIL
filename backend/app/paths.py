@@ -16,6 +16,8 @@ import os
 import sys
 from pathlib import Path
 
+#: Имя прежней папки данных в %APPDATA% — по нему находим старые данные
+#: (до переименования программа называлась SiGame Helper).
 APP_NAME = "SiGameHelper"
 
 
@@ -129,12 +131,12 @@ def logs_dir() -> Path:
 
 
 def default_workspace() -> Path:
-    """Рабочая папка по умолчанию — ``Видео/SiGame Helper`` в профиле пользователя."""
+    """Рабочая папка по умолчанию — ``Видео/ANVIL`` в профиле пользователя."""
     for candidate in ("Videos", "Видео"):
         folder = Path.home() / candidate
         if folder.exists():
-            return folder / "SiGame Helper"
-    return Path.home() / "SiGame Helper"
+            return folder / "ANVIL"
+    return Path.home() / "ANVIL"
 
 
 def static_dir() -> Path:

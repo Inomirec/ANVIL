@@ -2,7 +2,7 @@
 #
 # Сборка:
 #   .venv\Scripts\python.exe -m pip install pyinstaller
-#   .venv\Scripts\pyinstaller.exe sigame-helper.spec
+#   .venv\Scripts\pyinstaller.exe anvil.spec
 #
 # Перед сборкой обязательно соберите фронтенд (scripts\build.bat) — иначе
 # в .exe попадёт пустая папка static и интерфейс не откроется.
@@ -51,7 +51,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="SiGame Helper",
+    name="ANVIL",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -73,5 +73,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="SiGame Helper",
+    name="ANVIL",
 )

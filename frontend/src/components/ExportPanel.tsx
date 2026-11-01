@@ -72,7 +72,7 @@ const AUDIO_CODECS: {
   marks: { value: number; label: string }[]
 }[] = [
   {
-    value: 'opus', label: 'Opus', title: 'Лучше всех звучит на малом весе. Играет в SIGame',
+    value: 'opus', label: 'Opus', title: 'Лучше всех звучит на малом весе',
     min: 32, max: 256, normal: 96,
     marks: [{ value: 48, label: 'речь' }, { value: 96, label: 'обычно' }, { value: 128, label: 'музыка' }, { value: 192, label: 'отлично' }],
   },
@@ -87,7 +87,7 @@ const AUDIO_CODECS: {
     marks: [{ value: 128, label: 'речь' }, { value: 192, label: 'обычно' }, { value: 256, label: 'музыка' }, { value: 320, label: 'максимум' }],
   },
   {
-    value: 'flac', label: 'FLAC', title: 'Без потерь: для архива, а не для пака — весит в разы больше',
+    value: 'flac', label: 'FLAC', title: 'Без потерь: для архива — весит в разы больше',
     min: 0, max: 0, normal: 0, marks: [],
   },
 ]
@@ -514,7 +514,7 @@ export function ExportPanel({
           summary={activePreset?.label ?? 'свои настройки'}
           hint={
             gif
-              ? 'SIQuester считает GIF картинкой, а у картинок предел 1 МБ. Видео с тем же движением весит в разы меньше. Превью AV1 SIQuester не показывает — для него берите H.264.'
+              ? 'Видео с тем же движением весит в разы меньше, чем GIF.'
               : undefined
           }
         >
@@ -785,7 +785,7 @@ export function ExportPanel({
 const VIDEO_CODECS = [
   {
     value: 'av1_svt', label: 'AV1',
-    title: 'Лучшее качество при меньшем весе. Кодируется дольше H.264 и H.265, совсем старые телефоны и телевизоры могут его не открыть. Играет в SIGame',
+    title: 'Лучшее качество при меньшем весе. Кодируется дольше H.264 и H.265, совсем старые телефоны и телевизоры могут его не открыть',
   },
   {
     value: 'h265', label: 'H.265',

@@ -26,7 +26,7 @@ import sys
 from ctypes import wintypes
 from typing import Any, Callable
 
-log = logging.getLogger("sigame-helper")
+log = logging.getLogger("anvil")
 
 WM_NCCALCSIZE = 0x0083
 WM_GETMINMAXINFO = 0x0024

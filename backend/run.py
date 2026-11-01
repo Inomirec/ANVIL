@@ -1,4 +1,4 @@
-"""Запуск SiGame Helper.
+"""Запуск ANVIL.
 
 Два режима:
   python run.py            — сервер + вкладка в браузере (максимальная совместимость)
@@ -44,7 +44,7 @@ def log_file() -> Path:
         ensure_dirs()
         return logs_dir() / "app.log"
     except Exception:
-        return Path(tempfile.gettempdir()) / "sigame-helper.log"
+        return Path(tempfile.gettempdir()) / "anvil.log"
 
 
 def attach_streams() -> None:
@@ -82,7 +82,7 @@ def report_fatal(text: str) -> None:
             import ctypes
 
             ctypes.windll.user32.MessageBoxW(
-                None, text, "SiGame Helper — не удалось запустить", 0x10
+                None, text, "ANVIL — не удалось запустить", 0x10
             )
 
 
@@ -101,7 +101,7 @@ def find_free_port(preferred: int, host: str = HOST, attempts: int = 20) -> int:
 
 
 def running_instance(host: str, port: int) -> bool:
-    """Занят ли порт уже запущенной копией SiGame Helper.
+    """Занят ли порт уже запущенной копией ANVIL.
 
     Чужую программу на том же порту не трогаем: она не ответит нашей меткой,
     и мы просто уйдём искать свободный порт, как и раньше.
@@ -114,7 +114,9 @@ def running_instance(host: str, port: int) -> bool:
             data = json.loads(answer.read().decode("utf-8", "replace"))
     except (OSError, urllib.error.URLError, ValueError):
         return False
-    return isinstance(data, dict) and data.get("app") == "sigame-helper"
+    # Старая метка — копия, запущенная до переименования: её тоже узнаём,
+    # иначе две копии разошлись бы по разным портам.
+    return isinstance(data, dict) and data.get("app") in {"anvil", "sigame-helper"}
 
 
 def show_running_instance(host: str, port: int) -> bool:
@@ -145,7 +147,7 @@ def bring_to_front(window) -> bool:
     не открывает. Такая копия завершается сама, а вторая получает «нет» и
     открывает программу как обычно.
     """
-    log = logging.getLogger("sigame-helper")
+    log = logging.getLogger("anvil")
     form = getattr(window, "native", None)
     if sys.platform == "win32" and form is not None and bool(getattr(form, "IsDisposed", False)):
         log.warning("окно уже закрыто, а программа не завершилась — завершаю её")
@@ -223,7 +225,7 @@ def _set_window_icon(window, icon: Path) -> None:
     можно, но WinForms при следующей перерисовке возвращает свой обратно,
     а свойство формы держится.
     """
-    log = logging.getLogger("sigame-helper")
+    log = logging.getLogger("anvil")
     form = getattr(window, "native", None)
     if form is None:
         log.warning("окно ещё не создано — иконку поставить не на что")
@@ -248,7 +250,7 @@ def _custom_titlebar(window) -> None:
     Как именно — в ``app/core/titlebar.py``. Не вышло — остаётся обычная
     строка, а страница своих кнопок окна не рисует.
     """
-    log = logging.getLogger("sigame-helper")
+    log = logging.getLogger("anvil")
     form = getattr(window, "native", None)
     if form is None:
         return
@@ -288,7 +290,7 @@ def _allow_microphone(window) -> None:
     """
     global _permission_handler
 
-    log = logging.getLogger("sigame-helper")
+    log = logging.getLogger("anvil")
     if _permission_handler is not None:
         return
     form = getattr(window, "native", None)
@@ -339,7 +341,7 @@ def _enable_file_drop(window) -> None:
     """
     global _drop_ready
 
-    log = logging.getLogger("sigame-helper")
+    log = logging.getLogger("anvil")
     if _drop_ready:
         return
 
@@ -426,13 +428,13 @@ def launch_window(url: str, port: int) -> bool:
     if sys.platform == "win32":
         with contextlib.suppress(Exception):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "Inomirec.SiGameHelper"
+                "Inomirec.ANVIL"
             )
             current = ctypes.c_wchar_p()
             ctypes.windll.shell32.GetCurrentProcessExplicitAppUserModelID(
                 ctypes.byref(current)
             )
-            logging.getLogger("sigame-helper").info(
+            logging.getLogger("anvil").info(
                 "личность приложения: %s", current.value
             )
 
@@ -445,7 +447,7 @@ def launch_window(url: str, port: int) -> bool:
         with contextlib.suppress(Exception):
             ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 
-    title = f"SiGame Helper {__version__}"
+    title = f"ANVIL {__version__}"
     window = webview.create_window(
         title,
         url,
@@ -500,7 +502,7 @@ def launch_window(url: str, port: int) -> bool:
             icon=str(icon) if icon.exists() else None,
         )
     except Exception:  # WebView2 может отсутствовать на голой системе
-        logging.getLogger("sigame-helper").exception("Не удалось открыть окно приложения")
+        logging.getLogger("anvil").exception("Не удалось открыть окно приложения")
         return False
     return True
 
@@ -572,7 +574,7 @@ def bootstrap_tools() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="SiGame Helper")
+    parser = argparse.ArgumentParser(description="ANVIL")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--host", default=HOST)
     parser.add_argument("--window", action="store_true", help="открыть в отдельном окне")
@@ -603,7 +605,7 @@ def main() -> int:
     # записывает файл целиком, поэтому та, что сохранит последней, молча
     # затрёт чужие изменения. Показываем уже открытое окно и выходим.
     if not args.headless and running_instance(args.host, args.port):
-        print("SiGame Helper уже запущен — показываю его окно.")
+        print("ANVIL уже запущен — показываю его окно.")
         if show_running_instance(args.host, args.port):
             return 0
         # Окна у прежней копии нет: она застряла на выходе и сейчас
@@ -637,7 +639,7 @@ def main() -> int:
 
     from app import __version__
 
-    print(f"\n  SiGame Helper {__version__}")
+    print(f"\n  ANVIL {__version__}")
     print(f"  Интерфейс: {url}")
     print("  Остановить: Ctrl+C\n")
 

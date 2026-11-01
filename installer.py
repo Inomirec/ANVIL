@@ -1,4 +1,4 @@
-"""SiGame Helper — единственный файл, на который нажимает человек.
+"""ANVIL — единственный файл, на который нажимает человек.
 
 Он и устанавливает программу, и запускает её. Что именно делать, решает сам:
 
@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import queue
 import shutil
@@ -24,7 +25,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-APP_NAME = "SiGame Helper"
+APP_NAME = "ANVIL"
+#: Так программа называлась раньше: его файл и ярлык убираем при обновлении.
+OLD_NAME = "SiGame Helper"
 PYTHON_VERSION = "3.12.10"
 PYTHON_ZIP = (
     f"https://www.python.org/ftp/python/{PYTHON_VERSION}/"
@@ -205,6 +208,11 @@ class Worker:
             destination = self.target / f"{APP_NAME}.exe"
             if myself != destination.resolve():
                 shutil.copy2(myself, destination)
+            # Запускалка под прежним именем больше не нужна: рядом теперь своя.
+            old = self.target / f"{OLD_NAME}.exe"
+            if old.exists() and old.resolve() != myself:
+                with contextlib.suppress(OSError):
+                    old.unlink()
 
     def download(self, url: str, target: Path, label: str, base: float, span: float) -> None:
         with urllib.request.urlopen(url, timeout=60) as response:
@@ -313,13 +321,16 @@ class Worker:
         exe = self.target / f"{APP_NAME}.exe"
         icon = self.target / "assets" / "icon.ico"
         desktop = Path(os.path.expanduser("~")) / "Desktop"
+        # Ярлык под прежним именем вёл бы на удалённую запускалку.
+        with contextlib.suppress(OSError):
+            (desktop / f"{OLD_NAME}.lnk").unlink(missing_ok=True)
         command = (
             "$s = (New-Object -ComObject WScript.Shell).CreateShortcut("
             f"'{desktop / (APP_NAME + '.lnk')}'); "
             f"$s.TargetPath = '{exe}'; "
             f"$s.WorkingDirectory = '{self.target}'; "
             f"$s.IconLocation = '{icon}'; "
-            "$s.Description = 'Скачивание, нарезка и сжатие медиа для паков SIGame'; "
+            "$s.Description = 'Скачивание, сжатие и простой монтаж видео, звука и картинок'; "
             "$s.Save()"
         )
         subprocess.run(
@@ -493,7 +504,7 @@ class Wizard:
         ttk.Label(self.frame, text=APP_NAME, font=("Segoe UI", 14, "bold")).pack(anchor="w")
         ttk.Label(
             self.frame,
-            text="Скачивание, нарезка и сжатие медиа для паков SIGame.",
+            text="Скачивание, сжатие и простой монтаж видео, звука и картинок.",
         ).pack(anchor="w", pady=(2, 16))
 
         ttk.Checkbutton(

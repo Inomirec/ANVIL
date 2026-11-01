@@ -43,7 +43,7 @@ def _version_key(raw: str | None) -> tuple[int, ...]:
 def _fetch_latest(package: str) -> str | None:
     """Последняя стабильная версия пакета по данным PyPI."""
     url = f"https://pypi.org/pypi/{package}/json"
-    request = urllib.request.Request(url, headers={"User-Agent": "SiGameHelper"})
+    request = urllib.request.Request(url, headers={"User-Agent": "ANVIL"})
     try:
         with urllib.request.urlopen(request, timeout=12) as response:
             data = json.loads(response.read().decode("utf-8", "replace"))

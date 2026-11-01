@@ -23,7 +23,7 @@ from .core.jobs import manager
 from .paths import ensure_dirs, static_dir
 from .routers import compose, downloads, jobs, library, media, settings, stream, system
 
-logger = logging.getLogger("sigame-helper")
+logger = logging.getLogger("anvil")
 
 # Режим разработки: страница живёт на Vite, а запросы к /api он пересылает сюда.
 DEV_ORIGINS = {
@@ -127,9 +127,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="SiGame Helper",
+        title="ANVIL",
         version=__version__,
-        description="Локальный комбайн для скачивания, нарезки и сжатия медиа под паки SIGame",
+        description="Простой инструмент для работы с видео, звуком и картинками",
         lifespan=lifespan,
     )
 

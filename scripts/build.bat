@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title SiGame Helper - build frontend
+title ANVIL - build frontend
 cd /d "%~dp0..\frontend"
 
 call npm install --no-audit --no-fund

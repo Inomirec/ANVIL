@@ -172,8 +172,8 @@ export default function App() {
       >
         <TopResizeEdge show={chrome.custom && !chrome.maximized} />
         <div className="flex items-center gap-2">
-          <img src="/icon.png" alt="" draggable={false} className="h-[19px] w-[19px] rounded-[5px]" />
-          <span className="text-[14px] font-semibold tracking-tight">SiGame Helper</span>
+          <img src="/icon.png?v=anvil" alt="" draggable={false} className="h-[19px] w-[19px] rounded-[5px]" />
+          <span className="text-[14px] font-semibold tracking-tight">ANVIL</span>
           {status?.version && (
             <span className="font-mono text-[11px] text-ink-faint">{status.version}</span>
           )}
