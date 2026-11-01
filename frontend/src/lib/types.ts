@@ -130,7 +130,7 @@ export interface VideoOptions {
   crf: number
   /** Битрейт видео, кбит/с. Ноль или нет — вес задан качеством. */
   bitrate_kbps?: number
-  /** Подгонять качество под разрешение — у пресетов для паков. */
+  /** Подгонять качество под разрешение — у пресетов сжатия. */
   adapt_crf?: boolean
   speed_preset: string
   max_height: number

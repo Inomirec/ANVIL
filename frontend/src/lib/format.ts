@@ -53,7 +53,7 @@ export function savings(before?: number, after?: number): string | null {
  *
  * Процент отвечает на вопрос «сколько веса ушло», а кратность — «насколько
  * меньше стал файл». Второе понятнее, когда прикидываешь, сколько таких
- * влезет в пак, поэтому показываем оба.
+ * влезет в лимит, поэтому показываем оба.
  */
 export function shrinkRatio(before?: number, after?: number): string | null {
   if (!before || !after || after >= before) return null

@@ -220,7 +220,7 @@ export function Sidebar({ onPickWorkspace }: { onPickWorkspace: () => void }) {
           </span>
         </button>
 
-        {/* Где мы сейчас внутри пака */}
+        {/* Где мы сейчас внутри рабочей папки */}
         {(currentFolder || flat) && (
           <button
             type="button"

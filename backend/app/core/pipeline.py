@@ -442,7 +442,7 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
     )
 
     # Настройки сборки приходят от монтажа, а не из общего списка пресетов:
-    # там они про то, как ужать чужой файл до веса пака, а монтаж человек
+    # там они про то, как ужать готовый файл, а монтаж человек
     # собирает начисто. Команду кодека всё равно собирает общий код — свой
     # список кодеков монтаж не заводит.
     render = request.render or ComposeRender()
@@ -458,7 +458,7 @@ def submit_compose(request: ComposeBuildRequest, project: ComposeProject) -> Job
         max_height=0,
         max_fps=0,
         # Число качества должно значить ровно то, что задано: подгонка под
-        # разрешение нужна пакам, а здесь она молча меняла бы картинку.
+        # разрешение нужна сжатию, а здесь она молча меняла бы картинку.
         adapt_crf=False,
     )
     audio = AudioOptions(

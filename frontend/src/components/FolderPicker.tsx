@@ -79,7 +79,7 @@ export function FolderPicker({
           <input
             className="field font-mono text-[12px]"
             value={manual}
-            placeholder="Или вставьте путь целиком: D:\Паки\Мой пак"
+            placeholder="Или вставьте путь целиком: D:\Видео\Мой проект"
             onChange={(event) => setManual(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && manual.trim()) {
