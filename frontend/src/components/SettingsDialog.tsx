@@ -356,13 +356,13 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               />
             </Section>
 
-            {/* Пусто — по пресету: «_баланс», «_avif» и т. п. Заданная
-                приписка одна на всё: видео, звук и картинки. */}
+            {/* Пусто — по пресету: «_anvil_баланс», без пресета «_anvil».
+                Заданная приписка одна на всё: видео, звук и картинки. */}
             <Section title="Приписка для обработанных файлов">
               <input
                 className="field font-mono text-[12px]"
                 value={suffixDraft ?? settings.export.file_suffix ?? ''}
-                placeholder="По пресету: _баланс, _avif, _jpg…"
+                placeholder="По пресету: _anvil_баланс, _anvil_экономия…"
                 onChange={(event) => setSuffixDraft(event.target.value)}
                 onBlur={() => {
                   if (suffixDraft === null) return

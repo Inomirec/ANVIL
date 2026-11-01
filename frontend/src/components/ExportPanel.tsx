@@ -3,6 +3,7 @@ import { ArrowLeftRight, AudioLines, ChevronDown, FileX2, FolderInput, Headphone
 import { api } from '../lib/api'
 import { parentDir, plural, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
+import { outputSuffix } from '../lib/suffix'
 import {
   AUDIO_CODECS as SOUND_CODECS,
   bitrateMarks,
@@ -159,7 +160,6 @@ export function ExportPanel({
     }
   })
   const [streamCopy, setStreamCopy] = useState(false)
-  const [suffix, setSuffix] = useState('_anvil')
   // Высота, которая стоит на второй кнопке разрешения: последняя выбранная.
   const [listHeight, setListHeight] = useState(() => {
     const prefs = loadPrefs()
@@ -172,13 +172,6 @@ export function ExportPanel({
   const [speed, setSpeed] = useState<number>(() => loadPrefs().videoSpeed ?? 2)
   const [container, setContainer] = useState(() => loadPrefs().videoContainer ?? 'mp4')
 
-  // Приписка к имени по основным пресетам: в папке потом сразу видно, чем
-  // сжимали, — иначе три версии одного ролика различаются только весом.
-  const PRESET_SUFFIX: Record<string, string> = {
-    pack_balanced: '_баланс',
-    pack_quality: '_качество',
-    pack_economy: '_экономия',
-  }
   const [busy, setBusy] = useState(false)
   const [command, setCommand] = useState<string | null>(null)
   // Складывать в подпапку или прямо рядом с исходником. Запоминаем: выбор
@@ -247,12 +240,6 @@ export function ExportPanel({
       } as AudioOptions))
     }
     setStreamCopy(Boolean(preset.options.stream_copy))
-    // Имя, которое человек уже поправил руками, не трогаем.
-    setSuffix((current) =>
-      current === '_anvil' || Object.values(PRESET_SUFFIX).includes(current)
-        ? PRESET_SUFFIX[preset.id] ?? '_anvil'
-        : current,
-    )
   }
 
   const activePreset = kindPresets.find((preset) => preset.id === presetId)
@@ -322,7 +309,7 @@ export function ExportPanel({
     subtitles: subtitleRequest(),
     stream_copy: streamCopy,
     replace_original: deleteOriginal,
-    suffix: fixedSuffix || (toWebp ? '_webp' : suffix),
+    suffix: fixedSuffix || outputSuffix(activePreset?.id),
     preset_label: activePreset?.label,
   })
 

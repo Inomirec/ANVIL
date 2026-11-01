@@ -482,10 +482,6 @@ async def _apply_edits(source: Path, options: ImageOptions, info: MediaInfo | No
     return edited
 
 
-#: Приписка к имени файла по формату — та же, что предлагает интерфейс.
-SUFFIXES = {"avif": "_avif", "jpg": "_jpeg", "webp": "_webp", "png": "_png", "ico": "_ico"}
-
-
 async def resolve_format(source: Path, options: ImageOptions) -> str:
     """Формат, которым файл получится сжать на самом деле.
 

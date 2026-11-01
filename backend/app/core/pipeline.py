@@ -84,14 +84,12 @@ def submit_export(request: ExportRequest) -> Job:
         try:
             if request.kind == "image":
                 # Гифку в AVIF не сжать. Меняем формат, только если человек на это
-                # согласился: решаем до выбора имени, от формата зависят и
-                # расширение, и приписка.
+                # согласился: решаем до выбора имени, от формата зависит
+                # расширение.
                 asked = request.image.format
                 if request.allow_format_switch:
                     request.image.format = await images.resolve_format(source, request.image)
                 if request.image.format != asked:
-                    if request.suffix == images.SUFFIXES.get(asked):
-                        request.suffix = images.SUFFIXES[request.image.format]
                     ctx.meta(formatSwitched=request.image.format.upper())
                     ctx.log(
                         f"Это движущаяся картинка: {asked.upper()} сохранил бы только "

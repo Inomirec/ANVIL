@@ -3,6 +3,7 @@ import { Eye, FileX2, FolderInput, Play, Terminal } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural } from '../lib/format'
 import { imageEffort, loadPrefs, savePrefs, SPEED_LABELS } from '../lib/prefs'
+import { outputSuffix } from '../lib/suffix'
 import { Choice, SPEED_HINTS } from './ComposeRender'
 import { strokesToPng } from '../lib/paint'
 import type { FileInfo, ImageOptions, ImagePreview, Preset } from '../lib/types'
@@ -75,8 +76,6 @@ function sizeFor(format: string, size: number): number {
 /** Слева ползунок не уходит в нечитаемое месиво, справа — в бессмысленный вес. */
 const MIN_QUALITY = 20
 const MAX_QUALITY = 100
-
-const SUFFIXES: Record<string, string> = { avif: '_avif', jpg: '_jpeg', webp: '_webp', ico: '_ico' }
 
 /** Скорость с подсказками — те же, что у видео. */
 const SPEED_OPTIONS = SPEED_LABELS.map((label, index) => ({
@@ -261,7 +260,7 @@ export function ImagePanel({
     },
     // Без подпапки результат ложится прямо туда, где лежал оригинал.
     output_dir: intoSubfolder ? null : parentDir(source),
-    suffix: fixedSuffix || (SUFFIXES[options.format] ?? '_сжатый'),
+    suffix: fixedSuffix || outputSuffix(activePreset?.id),
     preset_label: activePreset?.label,
     replace_original: deleteOriginal,
     allow_format_switch: switchFormats,
