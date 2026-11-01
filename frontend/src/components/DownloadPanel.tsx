@@ -648,6 +648,7 @@ export function DownloadPanel() {
                     savePrefs({ downloadCodec: value })
                   }}
                   options={CODECS}
+                  fit
                 />
               </div>
               <div>
@@ -659,6 +660,7 @@ export function DownloadPanel() {
                     savePrefs({ downloadSound: value })
                   }}
                   options={SOUNDS}
+                  fit
                 />
               </div>
             </Section>

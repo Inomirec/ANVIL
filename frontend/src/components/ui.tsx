@@ -213,6 +213,7 @@ export function Segmented<T extends string>({
   className = '',
   columns: forced,
   stacked = false,
+  fit = false,
 }: {
   value: T
   options: { value: T; label: string; badge?: ReactNode; title?: string; disabled?: boolean }[]
@@ -223,6 +224,12 @@ export function Segmented<T extends string>({
   /** Подпись сверху, число снизу. Нужно там, где числа бывают большими:
       в строку «Кадры 909» не влезает, и название обрезается до «Кад…». */
   stacked?: boolean
+  /**
+   * Ширина кнопок — по подписи: каждая сначала получает своё слово, свободное
+   * место делится поровну. В узкой колонке длинная подпись («Лучший») рядом
+   * с короткими («VP9») иначе обрезалась до «Лучш…», хотя места хватало.
+   */
+  fit?: boolean
 }) {
   // grid вместо flex: колонки одинаковой ширины делятся поровну и не
   // раздуваются под длинную подпись, поэтому переключатель никогда не вылезает
@@ -234,7 +241,7 @@ export function Segmented<T extends string>({
     ] ?? 'grid-cols-4'
 
   return (
-    <div className={`grid ${columns} gap-1 rounded-xl bg-surface-2 p-1 ${className}`}>
+    <div className={`${fit ? 'flex' : `grid ${columns}`} gap-1 rounded-xl bg-surface-2 p-1 ${className}`}>
       {options.map((option) => (
         <button
           key={option.value}
@@ -242,7 +249,7 @@ export function Segmented<T extends string>({
           title={option.title}
           disabled={option.disabled}
           onClick={() => onChange(option.value)}
-          className={`flex min-w-0 rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+          className={`flex min-w-0 ${fit ? 'flex-auto' : ''} rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
             stacked
               ? 'flex-col items-center justify-center gap-0.5 px-1 py-2 text-[12px]'
               : `items-center justify-center gap-1 px-1 py-1.5 ${
