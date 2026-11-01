@@ -72,16 +72,18 @@ def build_video_filters(
         # GIF, которые перегоняют в видео, — сплошь и рядом.
         filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
 
-    if info and info.hdr:
+    if info and info.hdr and not keeps_hdr(options, info):
         # Уменьшаем раньше перевода: переводить 4K вчетверо дольше.
         filters.append(TONEMAP)
 
     if options.max_fps > 0:
+        from .compose import rate
+
         source_fps = info.video.fps if info and info.video else None
         # Темп уже умножает фактический fps, учитываем это при сравнении.
         effective = (source_fps or 0) * (options.tempo or 1.0)
         if not source_fps or effective > options.max_fps + 0.01:
-            filters.append(f"fps={options.max_fps}")
+            filters.append(f"fps={rate(options.max_fps)}")
 
     # Затухания ставим последними: они должны работать по итоговому времени,
     # уже с учётом изменённого темпа.
@@ -107,6 +109,35 @@ TONEMAP = (
     "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
     "tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
 )
+
+#: Кодеки, которые держат HDR, и 10-битный формат кадра для каждого. H.264
+#: и аппаратные кодировщики Intel и AMD здесь не держат — им всегда перевод.
+_HDR_FORMATS = {"av1_svt": "yuv420p10le", "h265": "yuv420p10le", "av1_nvenc": "p010le"}
+
+
+def keeps_hdr(options: VideoOptions, info: MediaInfo | None) -> bool:
+    """Оставить HDR как есть: так просили, и выбранный кодек это умеет."""
+    return bool(
+        info and info.hdr and not options.tonemap and resolve_codec(options) in _HDR_FORMATS
+    )
+
+
+def _hdr_args(args: list[str], options: VideoOptions, info: MediaInfo) -> list[str]:
+    """Аргументы кодека для HDR: 10 бит и пометки исходника.
+
+    Без пометок плеер принял бы цифры за обычный цвет и показал бы ту же
+    серую картинку, от которой спасает перевод.
+    """
+    args = list(args)
+    if "-pix_fmt" in args:
+        args[args.index("-pix_fmt") + 1] = _HDR_FORMATS[resolve_codec(options)]
+    video = info.video
+    return args + [
+        "-color_primaries", (video.color_primaries if video else None) or "bt2020",
+        "-color_trc", (video.color_transfer if video else None) or "smpte2084",
+        "-colorspace", (video.color_space if video else None) or "bt2020nc",
+    ]
+
 
 #: Пометки обычного цвета для файла, переведённого из HDR.
 SDR_TAGS = [
@@ -461,19 +492,38 @@ def container_extension(request: ExportRequest, info: MediaInfo | None) -> str:
     return f".{container}"
 
 
+#: Двухбуквенные и запасные коды языка — к трёхбуквенным: в одной пачке
+#: серий японский бывает записан и «jpn», и «ja», и «jp».
+_LANGUAGE_CODES = {
+    "ja": "jpn", "jp": "jpn", "ru": "rus", "en": "eng", "de": "ger", "deu": "ger",
+    "fr": "fre", "fra": "fre", "es": "spa", "it": "ita", "pt": "por", "pl": "pol",
+    "uk": "ukr", "ko": "kor", "zh": "chi", "zho": "chi", "cn": "chi",
+}
+
+
+def _language(code: str | None) -> str:
+    """Код языка в одном написании; нет языка — «und»."""
+    code = (code or "").strip().lower()
+    return _LANGUAGE_CODES.get(code, code) or "und"
+
+
 def _same_track(streams: list, number: int, language: str | None, title: str | None) -> int:
     """Дорожка с тем же языком и названием, что выбрали в открытом файле.
 
     Пачка серий обрабатывается с выбором, сделанным в одной из них, а
     дорожки в разных файлах бывают в разном порядке: по номеру у остальных
-    бралась бы чужая озвучка. Не нашлась такая — остаётся номер.
+    бралась бы чужая озвучка. Без языка ищем по одному названию. Не нашлась
+    такая — остаётся номер.
     """
-    if not language:
-        return number
-    same = [i for i, s in enumerate(streams) if (s.language or "und") == language]
-    if title:
-        named = [i for i in same if (streams[i].title or "") == title]
-        same = named or same
+    wanted = _language(language)
+    by_language = (
+        [i for i, s in enumerate(streams) if _language(s.language) == wanted] if wanted != "und" else []
+    )
+    # Название уточняет язык, а когда язык не помог (у выбранной дорожки или
+    # у этого файла его нет) — ищем по одному названию среди всех.
+    pool = by_language or range(len(streams))
+    named = [i for i in pool if title and (streams[i].title or "") == title]
+    same = named or by_language
     if number in same or not same:
         return number
     return same[0]
@@ -683,16 +733,19 @@ def build_command(
             args += ["-an"]
     else:
         if not audio_only:
-            args += video_codec_args(
+            codec_args = video_codec_args(
                 request.video, crf if crf is not None else effective_crf(request.video, info)
             )
+            if info and keeps_hdr(request.video, info):
+                codec_args = _hdr_args(codec_args, request.video, info)
+            args += codec_args
             # Длительность результата с поправкой на темп — по ней ставится затухание.
             tempo = request.video.tempo or 1.0
             visible = (duration / tempo) if duration else None
             video_filters = build_video_filters(request.video, info, visible)
             if video_filters:
                 args += ["-vf", ",".join(video_filters)]
-            if info and info.hdr and request.video.codec != "copy":
+            if info and info.hdr and request.video.codec != "copy" and not keeps_hdr(request.video, info):
                 args += SDR_TAGS
 
         if has_audio:
@@ -746,7 +799,7 @@ def describe(request: ExportRequest) -> dict[str, Any]:
     if request.video.max_height:
         parts.append(f"{request.video.max_height}p")
     if request.video.max_fps:
-        parts.append(f"{request.video.max_fps} к/с")
+        parts.append(f"{request.video.max_fps:g} к/с")
     if abs(request.video.tempo - 1.0) > 1e-6:
         parts.append(f"×{request.video.tempo:g}")
     parts.append(f"{request.audio.codec.upper()} {request.audio.bitrate_kbps}k")

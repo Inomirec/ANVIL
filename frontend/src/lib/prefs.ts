@@ -34,6 +34,8 @@ export interface Prefs {
   imagePreview?: boolean
   /** Складывать результат в подпапку рядом с оригиналом. */
   subfolder?: boolean
+  /** «Перевести HDR в обычный цвет» в медиатеке. */
+  hdrToSdr?: boolean
   /** Скорость кодирования видео: 0 — очень медленно … 4 — очень быстро, 2 — обычно. */
   videoSpeed?: number | null
   /** То же у картинок. */

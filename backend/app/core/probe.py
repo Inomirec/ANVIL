@@ -44,6 +44,9 @@ class StreamInfo:
     title: str | None = None
     #: Как записана яркость: ``smpte2084`` и ``arib-std-b67`` — это HDR.
     color_transfer: str | None = None
+    #: Охват цвета и матрица — для HDR, который сохраняют как есть.
+    color_primaries: str | None = None
+    color_space: str | None = None
     #: Отмечена ли дорожка «по умолчанию» — у субтитров и звука это видно плееру.
     default: bool = False
 
@@ -430,6 +433,8 @@ async def probe(path: str | Path, use_cache: bool = True) -> MediaInfo:
                 pix_fmt=raw.get("pix_fmt"),
                 frames=_to_int(raw.get("nb_frames")),
                 color_transfer=raw.get("color_transfer"),
+                color_primaries=raw.get("color_primaries"),
+                color_space=raw.get("color_space"),
                 default=bool((raw.get("disposition") or {}).get("default")),
             )
         )

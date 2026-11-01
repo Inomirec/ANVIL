@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, AudioLines, ChevronDown, FileX2, FolderInput, Headphones, Play, Speaker, Terminal, Zap } from 'lucide-react'
+import { ArrowLeftRight, AudioLines, ChevronDown, FileX2, FolderInput, Headphones, Play, Speaker, Sun, Terminal, Zap } from 'lucide-react'
 import { api } from '../lib/api'
 import { parentDir, plural, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
@@ -17,12 +17,16 @@ import {
   type Frame,
 } from './ComposeRender'
 import type { AudioOptions, FileInfo, Preset, VideoOptions } from '../lib/types'
+import { fpsLabel } from '../composeStore'
 import { useStore } from '../store'
 import type { TrimState } from './MediaEditor'
 import type { Fades } from './Timeline'
 import { SliderNumber } from './ComposeTextPanel'
 import { initialTracks, TracksSection, type TrackChoice } from './TracksSection'
 import { Button, Dropdown, MarkIcons, QuietHints, Section, Segmented, Toggle } from './ui'
+
+/** Частоты кадров на выбор: как в монтаже и ниже — меньше кадров, легче файл. */
+const FPS_STEPS = [10, 12, 15, 20, 24000 / 1001, 24, 25, 30000 / 1001, 30, 50, 60000 / 1001, 60, 120]
 
 const DEFAULT_VIDEO: VideoOptions = {
   codec: 'av1_svt',
@@ -160,6 +164,10 @@ export function ExportPanel({
     }
   })
   const [streamCopy, setStreamCopy] = useState(false)
+  // Частота кадров — своя у каждого файла и пресетом не сбрасывается: пресет
+  // отвечает за силу сжатия. 0 — как у файла.
+  const [fpsCap, setFpsCap] = useState(0)
+  const [hdrToSdr, setHdrToSdr] = useState(() => loadPrefs().hdrToSdr ?? true)
   // Высота, которая стоит на второй кнопке разрешения: последняя выбранная.
   const [listHeight, setListHeight] = useState(() => {
     const prefs = loadPrefs()
@@ -291,6 +299,8 @@ export function ExportPanel({
       ...video,
       // Без пересжатия скорость и контейнер не нужны: файл копируется как есть.
       ...(streamCopy ? {} : { speed_preset: speedOptions(video.codec)[speed].value, container: shownContainer }),
+      max_fps: fpsCap,
+      tonemap: hdrToSdr,
       fade_in: withTrim ? fades.video.in : 0,
       fade_out: withTrim ? fades.video.out : 0,
       fade_in_curve: fades.video.inCurve ?? '',
@@ -430,7 +440,14 @@ export function ExportPanel({
     label: value === 2160 ? '2160p (4K)' : `${value}p`,
     title: resolutionHint(value),
   }))
-  const summaryResolution = video.max_height ? `${video.max_height}p` : 'Оригинал'
+  const summaryResolution =
+    (video.max_height ? `${video.max_height}p` : 'Оригинал') + (fpsCap ? ` · ${fpsLabel(fpsCap)} к/с` : '')
+  // Частоты ниже, чем у файла: повышать частоту программа не берётся —
+  // кадров от этого не прибавится, только веса.
+  const sourceFps = file.media?.fps ?? 0
+  const fpsOptions = FPS_STEPS.filter((value) => value < sourceFps - 0.01)
+  // Кодек, который HDR не держит, переводит цвет в любом случае.
+  const hdrKeepable = !video.codec.startsWith('h264')
 
   return (
     <QuietHints>
@@ -441,6 +458,27 @@ export function ExportPanel({
             title="Разрешение"
             id="export.resolution"
             summary={summaryResolution}
+            action={
+              sourceFps > 0 && fpsOptions.length > 0 ? (
+                <Dropdown
+                  value={String(fpsCap)}
+                  align="right"
+                  title="Частота кадров: меньше кадров — легче файл. Выше, чем у файла, не бывает"
+                  options={[
+                    { value: '0', label: `Как у файла · ${fpsLabel(sourceFps)}` },
+                    ...fpsOptions.map((value) => ({ value: String(value), label: fpsLabel(value) })).reverse(),
+                  ]}
+                  onChange={(next) => setFpsCap(Number(next))}
+                  className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] hover:text-ink ${
+                    fpsCap ? 'border-accent/40 bg-accent/10 text-accent-soft' : 'border-line-soft bg-surface-2 text-ink-dim'
+                  }`}
+                >
+                  <span className="text-ink-faint">FPS:</span>
+                  <span className="font-mono tabular-nums text-ink">{fpsLabel(fpsCap || sourceFps)}</span>
+                  <ChevronDown size={12} className="text-ink-faint" />
+                </Dropdown>
+              ) : undefined
+            }
           >
             {/* Две кнопки: «Оригинал» и высота со списком рядом. Нажатие по
                 высоте ставит её, стрелка открывает список всех высот. */}
@@ -615,6 +653,9 @@ export function ExportPanel({
                 ...(!streamCopy && !isAudio && status?.gpuAvailable && video.use_gpu
                   ? [{ icon: Zap, label: 'Кодировать на видеокарте' }]
                   : []),
+                ...(!streamCopy && !isAudio && file.media?.hdr && (!hdrToSdr && hdrKeepable)
+                  ? [{ icon: Sun, label: 'HDR останется HDR' }]
+                  : []),
                 ...(!streamCopy && !gif && audio.loudnorm ? [{ icon: AudioLines, label: 'Выравнивание звука' }] : []),
                 ...(!streamCopy && !gif && audio.mono ? [{ icon: Headphones, label: 'Звук в моно' }] : []),
                 ...(!streamCopy && !gif && !audio.mono && audio.stereo ? [{ icon: Speaker, label: 'Звук в стерео' }] : []),
@@ -634,6 +675,22 @@ export function ExportPanel({
                 }}
                 label="Кодировать на видеокарте"
                 hint="Высокая скорость, но в теории могут появиться незначительные артефакты. Полезно для больших видео, когда важно время."
+              />
+            )}
+            {!streamCopy && !isAudio && file.media?.hdr && (
+              <Toggle
+                checked={hdrToSdr || !hdrKeepable}
+                onChange={(value) => {
+                  setHdrToSdr(value)
+                  savePrefs({ hdrToSdr: value })
+                }}
+                disabled={!hdrKeepable}
+                label="Перевести HDR в обычный цвет"
+                hint={
+                  hdrKeepable
+                    ? 'Ролик в HDR. С галочкой цвет переводится в обычный — так файл правильно покажут любой экран и монтажные программы. Без неё останется HDR (10 бит): ярко на HDR-экранах, но обычные покажут его бледным.'
+                    : 'H.264 не держит HDR — цвет переводится в обычный всегда. Чтобы оставить HDR, выберите AV1 или H.265.'
+                }
               />
             )}
             {!gif && (

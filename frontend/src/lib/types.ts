@@ -134,7 +134,10 @@ export interface VideoOptions {
   adapt_crf?: boolean
   speed_preset: string
   max_height: number
+  /** Не выше этой частоты кадров; 0 — как у файла. */
   max_fps: number
+  /** HDR переводится в обычный цвет; false — остаётся HDR, если кодек держит. */
+  tonemap?: boolean
   tempo: number
   container: 'mp4' | 'webm' | 'mkv' | 'auto'
   use_gpu: boolean
