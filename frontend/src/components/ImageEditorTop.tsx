@@ -701,7 +701,6 @@ export function ImageEditor({
             </span>
           )}
           <span>{file.ext.toUpperCase()}</span>
-          {media?.hasAlpha && <span className="text-accent-soft">прозрачность</span>}
         </div>
 
         {/* Масштаб — в правом нижнем углу: верхний занят сведениями о файле.

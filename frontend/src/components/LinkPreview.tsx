@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ChevronDown, Download, Pause, Play, Scissors, SkipBack } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { AlertTriangle, ChevronDown, Download, Pause, Play, RefreshCw, Scissors, SkipBack } from 'lucide-react'
 import { api } from '../lib/api'
 import { humanDuration, timecode } from '../lib/format'
 import { loadPrefs, savePrefs } from '../lib/prefs'
@@ -11,6 +11,104 @@ import { Button, Dropdown, IconButton, Modal, Spinner } from './ui'
 
 /** Ключ громкости общий с плеером медиатеки: настраивают её один раз. */
 const VOLUME_KEY = 'sgh.volume'
+
+type Trim = { in: number | null; out: number | null }
+
+/**
+ * Разметка одной ссылки — живёт дольше окна. Разбор ссылки, кадры и волна
+ * готовятся долго, поэтому закрытое окно их не бросает: открыли ту же ссылку
+ * снова — всё на месте, вместе с метками и местом просмотра. Другая ссылка
+ * заводит новую разметку, а недоделанное для прежней обрывается.
+ */
+interface Session {
+  url: string
+  info: ResolvedLink | null
+  loading: boolean
+  error: string | null
+  token: string | null
+  strip: FilmstripInfo | null
+  stripLoading: boolean
+  peaks: number[] | null
+  peaksLoading: boolean
+  trim: Trim
+  time: number
+  duration: number
+  aborter: AbortController
+}
+
+let session: Session | null = null
+const listeners = new Set<() => void>()
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+/** Правка разметки — только своей: ответ для прежней ссылки не в счёт. */
+function patchSession(owner: AbortController, patch: Partial<Session>) {
+  if (!session || session.aborter !== owner) return
+  session = { ...session, ...patch }
+  listeners.forEach((listener) => listener())
+}
+
+/** Новая разметка. keep — метки и место, когда ту же ссылку подключают заново. */
+function startSession(url: string, keep?: Pick<Session, 'trim' | 'time' | 'duration'>) {
+  session?.aborter.abort()
+  const aborter = new AbortController()
+  const { signal } = aborter
+  session = {
+    url,
+    info: null,
+    loading: true,
+    error: null,
+    token: null,
+    strip: null,
+    stripLoading: false,
+    peaks: null,
+    peaksLoading: false,
+    trim: keep?.trim ?? { in: null, out: null },
+    time: keep?.time ?? 0,
+    duration: keep?.duration ?? 0,
+    aborter,
+  }
+  listeners.forEach((listener) => listener())
+  const set = (patch: Partial<Session>) => patchSession(aborter, patch)
+
+  api
+    .resolveLink(url, signal)
+    .then((info) => {
+      // Запомненное качество предпросмотра, если у ссылки такое есть.
+      const wanted = loadPrefs().previewHeight
+      const same = info.previewOptions?.find((item) => item.height === wanted)
+      set({
+        info,
+        loading: false,
+        token: same?.token ?? info.previewToken ?? null,
+        duration: session?.duration || info.duration || 0,
+      })
+      // Кадры и волна на дорожках — их программа строит по ссылке, не
+      // скачивая ролик: кадры — отдельными переходами по потоку, волну — по
+      // потоку одного звука. Пока готовятся, на дорожках заглушка.
+      if (!info.previewToken) return
+      set({ stripLoading: true })
+      api
+        .streamStrip(info.previewToken, signal)
+        .then((strip) => set({ strip, stripLoading: false }))
+        .catch(() => set({ strip: null, stripLoading: false }))
+      // Отдельного потока звука нет — волну строим по самому ролику, но только
+      // у коротких: иначе ради неё пришлось бы тянуть весь файл.
+      const sound = info.audioToken ?? ((info.duration ?? 0) <= 600 ? info.previewToken : null)
+      if (!sound) return
+      set({ peaksLoading: true })
+      api
+        .streamWaveform(sound, signal)
+        .then((data) => set({ peaks: data.peaks, peaksLoading: false }))
+        .catch(() => set({ peaks: null, peaksLoading: false }))
+    })
+    .catch((err) => set({ error: (err as Error).message, loading: false }))
+}
 
 /**
  * Просмотр видео по ссылке до скачивания.
@@ -37,91 +135,62 @@ export function LinkPreview({
   const revealQueue = useStore((state) => state.revealQueue)
 
   const videoRef = useRef<HTMLVideoElement>(null)
-  const [info, setInfo] = useState<ResolvedLink | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Звук качества, где картинка идёт без него: играет рядом с видео.
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const current = useSyncExternalStore(subscribe, () => session)
+  const live = current && current.url === url ? current : null
+  // Правка всегда уходит в разметку этой ссылки, какая она сейчас: обработчик
+  // клавиш живёт с открытия окна, когда разметки могло ещё не быть.
+  const urlRef = useRef(url)
+  urlRef.current = url
+  const set = useCallback((patch: Partial<Session>) => {
+    if (session && session.url === urlRef.current) patchSession(session.aborter, patch)
+  }, [])
+  const info = live?.info ?? null
+  const loading = live?.loading ?? false
+  const error = live?.error ?? null
+  const token = live?.token ?? null
+  const strip = live?.strip ?? null
+  const stripLoading = live?.stripLoading ?? false
+  const peaks = live?.peaks ?? null
+  const peaksLoading = live?.peaksLoading ?? false
+  const trim = live?.trim ?? { in: null, out: null }
+  const time = live?.time ?? 0
+  const duration = live?.duration ?? 0
+  const option = info?.previewOptions?.find((item) => item.token === token)
+  // Картинка без звука: звук играет отдельным потоком, видео молчит.
+  const separate = Boolean(option?.separate && info?.audioToken)
+  const setError = (value: string | null) => set({ error: value })
+  const setTrim = (value: Trim) => set({ trim: value })
+  const setTime = (value: number) => set({ time: value })
+  const setDuration = (value: number) => set({ duration: value })
+  const setToken = (value: string) => set({ token: value })
   const [playing, setPlaying] = useState(false)
   const [muted, setMuted] = useState(false)
   // Громкость общая с плеером медиатеки — человек настраивает её один раз.
   const [volume, setVolume] = useState(
     () => Number(localStorage.getItem(VOLUME_KEY) ?? '1') || 0,
   )
-  const [time, setTime] = useState(0)
-  const [duration, setDuration] = useState(0)
-  const [trim, setTrim] = useState<{ in: number | null; out: number | null }>({
-    in: null,
-    out: null,
-  })
   const [busy, setBusy] = useState(false)
-  // Качество предпросмотра: какой из потоков ссылки играть.
-  const [token, setToken] = useState<string | null>(null)
-  // Куда вернуться после смены качества — новый поток начинается с нуля.
+  // Куда вернуться, когда поток открылся заново: после смены качества,
+  // переподключения или повторного открытия окна.
   const resume = useRef<{ at: number; play: boolean } | null>(null)
-  const [strip, setStrip] = useState<FilmstripInfo | null>(null)
-  const [stripLoading, setStripLoading] = useState(false)
-  const [peaks, setPeaks] = useState<number[] | null>(null)
-  const [peaksLoading, setPeaksLoading] = useState(false)
 
+  // Открыли окно: та же ссылка — разметка уже есть, другая — новая.
   useEffect(() => {
+    // Закрытое окно уносит с собой видео — а с ним и воспроизведение.
+    if (!open) setPlaying(false)
     if (!open || !url) return
-    let cancelled = false
-    setInfo(null)
-    setToken(null)
-    setStrip(null)
-    setPeaks(null)
-    setError(null)
-    setTrim({ in: null, out: null })
-    setTime(0)
-    setDuration(0)
-    setLoading(true)
-
-    api
-      .resolveLink(url)
-      .then((data) => {
-        if (cancelled) return
-        setInfo(data)
-        if (data.duration) setDuration(data.duration)
-        // Запомненное качество предпросмотра, если у ссылки такое есть.
-        const wanted = loadPrefs().previewHeight
-        const same = data.previewOptions?.find((item) => item.height === wanted)
-        setToken(same?.token ?? data.previewToken)
-      })
-      .catch((err) => !cancelled && setError((err as Error).message))
-      .finally(() => !cancelled && setLoading(false))
-
-    return () => {
-      cancelled = true
-    }
+    if (!session || session.url !== url) startSession(url)
+    resume.current = { at: session?.time ?? 0, play: false }
   }, [open, url])
 
-  // Кадры и волна на дорожках — их программа строит по ссылке, не скачивая
-  // ролик: кадры — отдельными переходами по потоку, волну — по потоку одного
-  // звука. Пока готовятся, на дорожках заглушка.
-  useEffect(() => {
-    if (!info?.previewToken) return
-    let alive = true
-    setStripLoading(true)
-    api
-      .streamStrip(info.previewToken)
-      .then((data) => alive && setStrip(data))
-      .catch(() => alive && setStrip(null))
-      .finally(() => alive && setStripLoading(false))
-    // Отдельного потока звука нет — волну строим по самому ролику, но только
-    // у коротких: иначе ради неё пришлось бы тянуть весь файл.
-    const sound = info.audioToken ?? ((info.duration ?? 0) <= 600 ? info.previewToken : null)
-    if (!sound) return () => {
-      alive = false
-    }
-    setPeaksLoading(true)
-    api
-      .streamWaveform(sound)
-      .then((data) => alive && setPeaks(data.peaks))
-      .catch(() => alive && setPeaks(null))
-      .finally(() => alive && setPeaksLoading(false))
-    return () => {
-      alive = false
-    }
-  }, [info])
+  /** Разбирает ссылку заново — метки и место просмотра остаются. */
+  const reconnect = () => {
+    const at = videoRef.current?.currentTime ?? time
+    resume.current = { at, play: false }
+    startSession(url, { trim, time: at, duration })
+  }
 
   const seek = useCallback((value: number) => {
     const video = videoRef.current
@@ -146,9 +215,25 @@ export function LinkPreview({
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
+    const audio = audioRef.current
     video.volume = muted ? 0 : volume
-    video.muted = muted
-  }, [volume, muted, info])
+    video.muted = muted || separate
+    if (audio) {
+      audio.volume = muted ? 0 : volume
+      audio.muted = muted
+    }
+  }, [volume, muted, info, separate])
+
+  /** Ставит отдельный звук туда же, где картинка, и в то же состояние. */
+  const syncSound = (force = false) => {
+    const video = videoRef.current
+    const audio = audioRef.current
+    if (!video || !audio || !separate) return
+    // Мелкое расхождение не трогаем: каждая перестановка звука — щелчок.
+    if (force || Math.abs(audio.currentTime - video.currentTime) > 0.2) audio.currentTime = video.currentTime
+    if (video.paused || video.readyState < 3) audio.pause()
+    else if (audio.paused) void audio.play().catch(() => undefined)
+  }
 
   const ensureTrim = (total: number) => {
     if (total > 0 && trim.in === null && trim.out === null) setTrim({ in: 0, out: total })
@@ -316,7 +401,16 @@ export function LinkPreview({
       />
     </>
   )
-  const right = shownHeight ? (
+  const right = (
+    <>
+    <IconButton
+      className="h-7 w-7"
+      onClick={reconnect}
+      title="Подключиться заново: ссылка разберётся ещё раз, метки останутся. Если поток оборвался или застыл"
+    >
+      <RefreshCw size={13} />
+    </IconButton>
+    {shownHeight ? (
     <Dropdown
       value={token ?? ''}
       align="right"
@@ -334,7 +428,7 @@ export function LinkPreview({
         title={
           qualities.length > 1
             ? 'Качество предпросмотра. Скачается всё равно то качество, что выбрано справа'
-            : 'Других качеств предпросмотра сайт не даёт: браузер играет только потоки, где картинка и звук вместе'
+            : 'Других качеств предпросмотра сайт не даёт'
         }
         className="font-mono tabular-nums"
       >
@@ -342,7 +436,9 @@ export function LinkPreview({
       </span>
       {qualities.length > 1 && <ChevronDown size={12} className="text-ink-faint" />}
     </Dropdown>
-  ) : null
+    ) : null}
+    </>
+  )
 
   return (
     <Modal open={open} onClose={onClose} title="Разметка до скачивания" wide>
@@ -356,7 +452,11 @@ export function LinkPreview({
       {error && (
         <div className="flex items-start gap-2.5 rounded-xl border border-danger/40 bg-danger/10 px-3.5 py-3 text-[12.5px] leading-relaxed text-danger">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          <span>{error}</span>
+          <span className="min-w-0 flex-1 select-text">{error}</span>
+          <Button className="-my-1 shrink-0" onClick={reconnect}>
+            <RefreshCw size={13} />
+            Подключиться заново
+          </Button>
         </div>
       )}
 
@@ -390,15 +490,35 @@ export function LinkPreview({
                       if (back.play) void event.currentTarget.play().catch(() => undefined)
                     }
                   }}
-                  onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
-                  onPlay={() => setPlaying(true)}
-                  onPause={() => setPlaying(false)}
+                  onTimeUpdate={(event) => {
+                    setTime(event.currentTarget.currentTime)
+                    syncSound()
+                  }}
+                  onPlay={() => {
+                    setPlaying(true)
+                    syncSound(true)
+                  }}
+                  onPause={() => {
+                    setPlaying(false)
+                    syncSound()
+                  }}
+                  onPlaying={() => syncSound(true)}
+                  onWaiting={() => audioRef.current?.pause()}
+                  onSeeked={() => syncSound(true)}
                   onError={() =>
-                    setError('Источник оборвал поток. Попробуйте скачать черновик.')
+                    setError('Источник оборвал поток. Подключитесь заново или скачайте черновик.')
                   }
                   onClick={togglePlay}
                   playsInline
                 />
+                {separate && (
+                  <audio
+                    ref={audioRef}
+                    src={`/api/stream/${info.audioToken}`}
+                    preload="auto"
+                    onLoadedMetadata={() => syncSound(true)}
+                  />
+                )}
               </div>
 
               <div className="-mx-5 border-b border-line-soft">

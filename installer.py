@@ -38,6 +38,20 @@ GET_PIP = "https://bootstrap.pypa.io/get-pip.py"
 #: Чтобы дочерние процессы не открывали чёрных окон.
 CREATE_NO_WINDOW = 0x08000000
 
+#: Цвета окна установки — те же, что у самой программы (index.css).
+BG = "#1b1b1b"
+SURFACE = "#202020"
+SURFACE_2 = "#272727"
+SURFACE_3 = "#313131"
+LINE = "#3b3b3b"
+LINE_SOFT = "#2d2d2d"
+INK = "#f4f4f4"
+INK_DIM = "#b5b5b5"
+INK_FAINT = "#8b8b8b"
+ACCENT = "#169c91"
+ACCENT_STRONG = "#12857b"
+DANGER = "#ef7a73"
+
 
 def own_dir() -> Path:
     """Папка, в которой лежит сам файл."""
@@ -360,31 +374,55 @@ class Worker:
 
 
 class Wizard:
-    """Окно установки: настройка, ход дела, итог."""
+    """Окно установки: настройка, ход дела, итог.
+
+    Нарисовано в цветах самой программы — тёмный фон, бирюза. Стандартные
+    виджеты tkinter светлые и выглядят чужими, поэтому кнопки, переключатели
+    и полоса хода дела — свои, из простых прямоугольников.
+    """
+
+    WIDTH = 520
 
     def __init__(self, update_target: Path | None = None) -> None:
         import tkinter as tk
-        from tkinter import ttk
+        from tkinter import font as tkfont
 
         self.tk = tk
-        self.ttk = ttk
         self.update_target = update_target
+        # Чёткий текст на экранах с увеличением: без этого Windows растягивает
+        # окно картинкой, и всё мылится. Размеры ниже — через px().
+        with contextlib.suppress(Exception):
+            import ctypes
+
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
         self.root = tk.Tk()
+        self.scale = max(1.0, self.root.winfo_fpixels("1i") / 96)
         self.root.title(
             f"Обновление {APP_NAME}" if update_target else f"Установка {APP_NAME}"
         )
         self.root.resizable(False, False)
+        self.root.configure(bg=BG)
         # Крестик обязан останавливать работу, а не оставлять её в фоне.
         self.root.protocol("WM_DELETE_WINDOW", self.close_request)
 
         icon = payload_dir() / "assets" / "icon.ico"
         if icon.exists():
-            try:
+            with contextlib.suppress(Exception):
                 self.root.iconbitmap(str(icon))
-            except Exception:
-                pass
+        self.logo = None
+        size = 48 if self.scale < 1.25 else 72 if self.scale < 1.75 else 96
+        logo = payload_dir() / "assets" / f"icon-{size}.png"
+        if logo.exists():
+            with contextlib.suppress(Exception):
+                self.logo = tk.PhotoImage(file=str(logo))
 
-        self.frame = ttk.Frame(self.root, padding=(26, 22))
+        family = "Segoe UI Variable Text" if "Segoe UI Variable Text" in tkfont.families() else "Segoe UI"
+        self.font = (family, 10)
+        self.small = (family, 9)
+        self.strong = (family, 10, "bold")
+        self.title_font = (family, 15, "bold")
+
+        self.frame = tk.Frame(self.root, bg=BG, padx=self.px(28), pady=self.px(24))
         self.frame.pack(fill="both", expand=True)
 
         self.path = tk.StringVar(value=str(default_target()))
@@ -404,7 +442,115 @@ class Wizard:
             self.show_update()
         else:
             self.show_setup()
+        self.dark_title()
         self.center()
+
+    # --- оформление -----------------------------------------------------
+
+    def px(self, value: float) -> int:
+        """Размер с поправкой на увеличение экрана."""
+        return round(value * self.scale)
+
+    def dark_title(self) -> None:
+        """Тёмная полоса заголовка, как у самой программы (Windows 10 20H1+)."""
+        with contextlib.suppress(Exception):
+            import ctypes
+
+            self.root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            value = ctypes.c_int(1)
+            # 20 — DWMWA_USE_IMMERSIVE_DARK_MODE.
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+
+    def header(self, title: str, subtitle: str) -> None:
+        tk = self.tk
+        row = tk.Frame(self.frame, bg=BG)
+        row.pack(fill="x", pady=(0, self.px(20)))
+        if self.logo is not None:
+            tk.Label(row, image=self.logo, bg=BG).pack(side="left", padx=(0, self.px(14)))
+        text = tk.Frame(row, bg=BG)
+        text.pack(side="left", fill="x")
+        tk.Label(text, text=title, font=self.title_font, fg=INK, bg=BG).pack(anchor="w")
+        tk.Label(
+            text, text=subtitle, font=self.font, fg=INK_DIM, bg=BG,
+            justify="left", wraplength=self.px(self.WIDTH - 50),
+        ).pack(anchor="w")
+
+    def note(self, parent, text: str, color: str = INK_FAINT, pady=(0, 0)) -> None:
+        self.tk.Label(
+            parent, text=text, font=self.small, fg=color, bg=parent["bg"],
+            justify="left", wraplength=self.px(self.WIDTH),
+        ).pack(anchor="w", pady=tuple(self.px(v) for v in pady))
+
+    def card(self, pady=(0, 16)):
+        """Плашка-раздел: чуть светлее фона, как карточки в правой колонке."""
+        box = self.tk.Frame(self.frame, bg=SURFACE, padx=self.px(16), pady=self.px(12),
+                            highlightthickness=1, highlightbackground=LINE_SOFT)
+        box.pack(fill="x", pady=tuple(self.px(v) for v in pady))
+        return box
+
+    def button(self, parent, text: str, command, primary: bool = False, side: str = "right"):
+        """Кнопка из надписи: стандартная ttk-кнопка на тёмном фоне — белое пятно."""
+        tk = self.tk
+        normal = ACCENT_STRONG if primary else SURFACE_3
+        hover = ACCENT if primary else LINE
+        label = tk.Label(
+            parent, text=text, font=self.strong if primary else self.font,
+            fg=INK, bg=normal, padx=self.px(18), pady=self.px(7), cursor="hand2",
+        )
+        state = {"on": True}
+
+        def enable(on: bool) -> None:
+            state["on"] = on
+            label.config(fg=INK if on else INK_FAINT, bg=normal if on else SURFACE_2,
+                         cursor="hand2" if on else "arrow")
+
+        label.bind("<Enter>", lambda _e: state["on"] and label.config(bg=hover))
+        label.bind("<Leave>", lambda _e: state["on"] and label.config(bg=normal))
+        label.bind("<ButtonRelease-1>", lambda _e: state["on"] and command())
+        label.enable = enable
+        label.pack(side=side, padx=(self.px(8), 0) if side == "right" else (0, self.px(8)))
+        return label
+
+    def toggle(self, parent, text: str, variable, command=None) -> None:
+        """Переключатель как в программе: бирюзовый, когда включён."""
+        tk = self.tk
+        row = tk.Frame(parent, bg=parent["bg"], cursor="hand2")
+        row.pack(anchor="w", fill="x", pady=self.px(3))
+        u = self.px
+        canvas = tk.Canvas(row, width=u(34), height=u(18), bg=parent["bg"], highlightthickness=0,
+                           cursor="hand2")
+        canvas.pack(side="left")
+        label = tk.Label(row, text=text, font=self.font, fg=INK, bg=parent["bg"], cursor="hand2")
+        label.pack(side="left", padx=(u(10), 0))
+
+        def draw(*_args) -> None:
+            canvas.delete("all")
+            on = variable.get()
+            fill = ACCENT if on else LINE
+            # Капсула из двух кругов и прямоугольника: у Canvas нет скруглений.
+            canvas.create_oval(u(1), u(1), u(17), u(17), fill=fill, outline=fill)
+            canvas.create_oval(u(17), u(1), u(33), u(17), fill=fill, outline=fill)
+            canvas.create_rectangle(u(9), u(1), u(25), u(17), fill=fill, outline=fill)
+            x = 19 if on else 3
+            canvas.create_oval(u(x), u(3), u(x + 12), u(15), fill=INK, outline=INK)
+
+        def flip(_event=None) -> None:
+            variable.set(not variable.get())
+            if command:
+                command()
+
+        for widget in (row, canvas, label):
+            widget.bind("<ButtonRelease-1>", flip)
+        # Перерисовка по самой переменной: её меняют и не нажатием.
+        trace = variable.trace_add("write", draw)
+        canvas.bind("<Destroy>", lambda _e: variable.trace_remove("write", trace))
+        draw()
+
+    def footer(self):
+        row = self.tk.Frame(self.frame, bg=BG)
+        row.pack(fill="x", pady=(self.px(4), 0))
+        return row
 
     def center(self) -> None:
         self.root.update_idletasks()
@@ -416,6 +562,8 @@ class Wizard:
     def clear(self) -> None:
         for child in self.frame.winfo_children():
             child.destroy()
+        # Распорка: окно одной ширины на всех экранах, а не по самой длинной строке.
+        self.tk.Frame(self.frame, width=self.px(self.WIDTH), height=0, bg=BG).pack()
 
     def close_request(self) -> None:
         """Крестик: во время установки спрашиваем, иначе просто уходим."""
@@ -431,133 +579,96 @@ class Wizard:
 
     def show_update(self) -> None:
         """Экран для тех, у кого программа уже стоит."""
-        ttk = self.ttk
         self.clear()
         target = self.update_target
         if target is None:
             self.show_setup()
             return
 
-        ttk.Label(self.frame, text="Обновление", font=("Segoe UI", 14, "bold")).pack(
-            anchor="w"
+        self.header(
+            "Обновление",
+            f"Установлена версия {read_version(target) or 'неизвестная'}, "
+            f"этот файл принёс {payload_version() or 'новую'}.",
         )
-        ttk.Label(
-            self.frame,
-            text=(
-                f"Установлена версия {read_version(target) or 'неизвестная'}, "
-                f"этот файл принёс {payload_version() or 'новую'}."
-            ),
-        ).pack(anchor="w", pady=(2, 10))
 
-        ttk.Label(
-            self.frame,
-            text="Папка программы:" + chr(10) + str(target),
-            justify="left",
-            foreground="#555555",
-        ).pack(anchor="w", pady=(0, 10))
+        box = self.card()
+        self.note(box, "Папка программы", pady=(0, 2))
+        self.tk.Label(box, text=str(target), font=self.font, fg=INK, bg=SURFACE,
+                      justify="left", wraplength=self.px(self.WIDTH - 40)).pack(anchor="w")
 
-        ttk.Label(
+        self.note(
             self.frame,
-            text=(
-                "Обновятся только файлы программы. Python, ffmpeg и загрузчики"
-                + chr(10)
-                + "останутся на месте — скачивать их заново не придётся."
-                + chr(10)
-                + "Настройки и скачанные файлы не трогаются."
-            ),
-            justify="left",
-            foreground="#555555",
-        ).pack(anchor="w", pady=(0, 16))
-
-        ttk.Checkbutton(
-            self.frame,
-            text="Открыть программу после обновления",
-            variable=self.want_open,
-        ).pack(anchor="w", pady=(0, 14))
-
-        buttons = ttk.Frame(self.frame)
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Отмена", command=self.root.destroy).pack(side="right")
-        ttk.Button(buttons, text="Обновить", command=self.start_update).pack(
-            side="right", padx=(0, 8)
+            "Обновятся только файлы программы. Python, ffmpeg и загрузчики останутся "
+            "на месте — скачивать их заново не придётся. Настройки и скачанные файлы "
+            "не трогаются.",
+            pady=(0, 14),
         )
+        self.toggle(self.frame, "Открыть программу после обновления", self.want_open)
+
+        buttons = self.footer()
+        buttons.pack_configure(pady=(self.px(18), 0))
+        self.button(buttons, "Отмена", self.root.destroy)
+        self.button(buttons, "Обновить", self.start_update, primary=True)
         # Запасной выход: поставить свежую копию отдельно, ничего не трогая.
-        ttk.Button(buttons, text="Установить отдельно…", command=self.show_setup).pack(
-            side="left"
-        )
+        self.button(buttons, "Установить отдельно…", self.show_setup, side="left")
 
     def start_update(self) -> None:
         """Обновление отличается от установки только пропуском тяжёлых шагов."""
         target = self.update_target
         if target is None:
             return
-        self.show_progress()
+        self.show_progress("Обновляю")
         self.working = True
         self.worker = Worker(target, False, self.queue, update=True)
         threading.Thread(target=self.worker.run, name="update", daemon=True).start()
         self.root.after(100, self.pump)
 
     def show_setup(self) -> None:
-        ttk = self.ttk
+        tk = self.tk
         self.clear()
 
-        ttk.Label(self.frame, text=APP_NAME, font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(
-            self.frame,
-            text="Скачивание, сжатие и простой монтаж видео, звука и картинок.",
-        ).pack(anchor="w", pady=(2, 16))
+        self.header(APP_NAME, "Скачивание, сжатие и простой монтаж видео, звука и картинок.")
 
-        ttk.Checkbutton(
-            self.frame,
-            text="Установить туда же, где лежит файл установщик",
-            variable=self.here,
-            command=self.toggle_place,
-        ).pack(anchor="w")
-
-        row = ttk.Frame(self.frame)
-        row.pack(fill="x", pady=(6, 14))
-        self.path_entry = ttk.Entry(row, textvariable=self.path, width=52)
-        self.path_entry.pack(side="left")
-        self.browse_button = ttk.Button(row, text="Обзор…", command=self.choose)
-        self.browse_button.pack(side="left", padx=(8, 0))
+        box = self.card()
+        self.toggle(box, "Установить туда же, где лежит этот файл", self.here, self.toggle_place)
+        row = tk.Frame(box, bg=SURFACE)
+        row.pack(fill="x", pady=(self.px(8), self.px(2)))
+        self.path_entry = tk.Entry(
+            row, textvariable=self.path, font=self.font, relief="flat",
+            bg=SURFACE_2, fg=INK, insertbackground=INK,
+            disabledbackground=SURFACE_2, disabledforeground=INK_FAINT,
+            highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
+        )
+        self.path_entry.pack(side="left", fill="x", expand=True, ipady=self.px(5), ipadx=self.px(6))
+        self.browse_button = self.button(row, "Обзор…", self.choose)
+        self.browse_button.config(pady=self.px(5), padx=self.px(12))
         self.toggle_place()
 
-        ttk.Checkbutton(
-            self.frame, text="Создать ярлык на рабочем столе",
-            variable=self.want_shortcut,
-        ).pack(anchor="w")
-        ttk.Checkbutton(
-            self.frame, text="Открыть программу после установки",
-            variable=self.want_open,
-        ).pack(anchor="w", pady=(2, 14))
+        options = self.card()
+        self.toggle(options, "Создать ярлык на рабочем столе", self.want_shortcut)
+        self.toggle(options, "Открыть программу после установки", self.want_open)
 
-        ttk.Label(
+        self.note(
             self.frame,
-            text=(
-                "Во время установки программа скачает то, что ей нужно для работы:\n"
-                "Python, ffmpeg и загрузчики — около 250 МБ. Это делается один раз."
-            ),
-            justify="left",
-            foreground="#555555",
-        ).pack(anchor="w", pady=(0, 16))
-
-        buttons = ttk.Frame(self.frame)
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Отмена", command=self.root.destroy).pack(side="right")
-        ttk.Button(buttons, text="Установить", command=self.start).pack(
-            side="right", padx=(0, 8)
+            "Во время установки программа скачает то, что ей нужно для работы: "
+            "Python, ffmpeg и загрузчики — около 250 МБ. Это делается один раз.",
+            pady=(0, 18),
         )
+
+        buttons = self.footer()
+        self.button(buttons, "Отмена", self.root.destroy)
+        self.button(buttons, "Установить", self.start, primary=True)
 
     def toggle_place(self) -> None:
         """Поле пути живёт, только когда человек снял галочку."""
         if self.here.get():
             self.path.set(str(default_target()))
-            state = "disabled"
+            on = False
         else:
             self.path.set(str(system_target()))
-            state = "normal"
-        self.path_entry.config(state=state)
-        self.browse_button.config(state=state)
+            on = True
+        self.path_entry.config(state="normal" if on else "disabled")
+        self.browse_button.enable(on)
 
     def choose(self) -> None:
         from tkinter import filedialog
@@ -568,26 +679,29 @@ class Wizard:
 
     # --- страница 2: ход дела -------------------------------------------
 
-    def show_progress(self) -> None:
-        ttk = self.ttk
+    def show_progress(self, title: str = "Устанавливаю") -> None:
+        tk = self.tk
         self.clear()
 
-        ttk.Label(self.frame, text="Устанавливаю", font=("Segoe UI", 14, "bold")).pack(
-            anchor="w"
+        self.header(
+            title,
+            "Можно свернуть окно — программа сообщит, когда закончит.",
         )
-        ttk.Label(
-            self.frame,
-            text="Можно свернуть окно — программа сообщит, когда закончит.",
-        ).pack(anchor="w", pady=(2, 16))
 
-        self.bar = ttk.Progressbar(self.frame, length=470, maximum=100)
-        self.bar.pack()
-        self.status = ttk.Label(self.frame, text="Начинаю…")
-        self.status.pack(anchor="w", pady=(10, 16))
+        self.bar = tk.Canvas(self.frame, width=self.px(self.WIDTH), height=self.px(6), bg=SURFACE_3,
+                             highlightthickness=0)
+        self.bar.pack(fill="x")
+        self.bar_fill = self.bar.create_rectangle(0, 0, 0, self.px(6), fill=ACCENT, outline=ACCENT)
+        self.status = tk.Label(self.frame, text="Начинаю…", font=self.font, fg=INK_DIM, bg=BG,
+                               justify="left", wraplength=self.px(self.WIDTH), anchor="w")
+        self.status.pack(anchor="w", fill="x", pady=(self.px(10), self.px(18)))
 
-        buttons = ttk.Frame(self.frame)
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Отмена", command=self.cancel).pack(side="right")
+        buttons = self.footer()
+        self.button(buttons, "Отмена", self.cancel)
+
+    def set_progress(self, percent: float) -> None:
+        width = self.bar.winfo_width() or self.px(self.WIDTH)
+        self.bar.coords(self.bar_fill, 0, 0, width * max(0.0, min(percent, 100.0)) / 100, self.px(6))
 
     def start(self) -> None:
         from tkinter import messagebox
@@ -623,7 +737,7 @@ class Wizard:
                     if text:
                         self.status.config(text=text)
                     if percent is not None:
-                        self.bar.config(value=percent)
+                        self.set_progress(percent)
                 elif kind == "done":
                     self.working = False
                     self.show_done()
@@ -643,46 +757,32 @@ class Wizard:
     # --- страница 3: итог ------------------------------------------------
 
     def show_done(self) -> None:
-        ttk = self.ttk
         self.clear()
+        updated = bool(self.worker and self.worker.update)
+        self.header("Готово", f"{APP_NAME} {'обновлён' if updated else 'установлен'}.")
 
-        ttk.Label(self.frame, text="Готово", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(
-            self.frame,
-            text=(
-                f"{APP_NAME} "
-                f"{'обновлён' if self.worker and self.worker.update else 'установлен'}"
-                f" в:\n{self.worker.target}"
-            ),
-            justify="left",
-        ).pack(anchor="w", pady=(4, 18))
+        box = self.card(pady=(0, 18))
+        self.note(box, "Папка программы", pady=(0, 2))
+        self.tk.Label(box, text=str(self.worker.target if self.worker else ""), font=self.font,
+                      fg=INK, bg=SURFACE, justify="left", wraplength=self.px(self.WIDTH - 40)).pack(anchor="w")
 
-        buttons = ttk.Frame(self.frame)
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Закрыть", command=self.finish).pack(side="right")
+        buttons = self.footer()
+        self.button(buttons, "Открыть программу" if self.want_open.get() else "Закрыть",
+                    self.finish, primary=True)
         self.center()
 
     def show_error(self, text: str) -> None:
-        ttk = self.ttk
         self.clear()
+        self.header("Установка не завершилась",
+                    "Чаще всего это интернет или антивирус. Проверьте соединение "
+                    "и запустите установку ещё раз.")
 
-        ttk.Label(
-            self.frame, text="Установка не завершилась", font=("Segoe UI", 14, "bold")
-        ).pack(anchor="w")
-        ttk.Label(
-            self.frame,
-            text=(
-                f"{text}\n\n"
-                "Чаще всего это интернет или антивирус. Проверьте соединение\n"
-                "и запустите установку ещё раз."
-            ),
-            justify="left",
-            wraplength=470,
-        ).pack(anchor="w", pady=(6, 18))
+        box = self.card(pady=(0, 18))
+        self.tk.Label(box, text=text, font=self.small, fg=DANGER, bg=SURFACE,
+                      justify="left", wraplength=self.px(self.WIDTH - 40)).pack(anchor="w")
 
-        buttons = ttk.Frame(self.frame)
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Закрыть", command=self.root.destroy).pack(side="right")
+        buttons = self.footer()
+        self.button(buttons, "Закрыть", self.root.destroy)
         self.center()
 
     def finish(self) -> None:

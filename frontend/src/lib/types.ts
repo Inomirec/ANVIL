@@ -335,7 +335,8 @@ export interface ResolvedLink {
   previewHeight: number | null
   previewNote: string | null
   /** Все качества предпросмотра, какие есть у ссылки. */
-  previewOptions?: { height: number; token: string }[]
+  /** separate — картинка без звука: звук играет отдельно, из audioToken. */
+  previewOptions?: { height: number; token: string; separate?: boolean }[]
   /** Поток одного звука — по нему строится волна. */
   audioToken?: string | null
 }

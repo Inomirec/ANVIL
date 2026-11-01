@@ -42,6 +42,14 @@ CHUNK = 256 * 1024
 #: Скачивается всё равно максимальное качество, это только для разметки.
 PREVIEW_MAX_HEIGHT = 480
 
+#: Качества предпросмотра из раздельных потоков — когда слитного такой высоты
+#: нет (у YouTube слитный обычно один, 360p). Картинка и звук идут двумя
+#: потоками, окно проигрывает их вместе.
+SEPARATE_HEIGHTS = (480, 720)
+
+#: Кодеки картинки по убыванию предпочтения: H.264 легче всех декодировать.
+_VIDEO_CODECS = ("avc1", "vp9", "vp09", "av01")
+
 
 @dataclass(slots=True)
 class Stream:
@@ -127,6 +135,24 @@ def _pick_progressive(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
     return candidates[0]
 
 
+def _video_only(formats: list[dict[str, Any]], height: int) -> dict[str, Any] | None:
+    """Поток одной картинки нужной высоты — для качества выше слитного."""
+    found = []
+    for item in formats:
+        protocol = str(item.get("protocol") or "")
+        if not protocol.startswith("http") or "m3u8" in protocol or "dash" in protocol:
+            continue
+        if not item.get("url") or item.get("acodec") != "none" or int(item.get("height") or 0) != height:
+            continue
+        vcodec = str(item.get("vcodec") or "")
+        rank = next((i for i, name in enumerate(_VIDEO_CODECS) if vcodec.startswith(name)), None)
+        if rank is None or str(item.get("ext") or "") not in {"mp4", "webm"}:
+            continue
+        found.append((rank, item.get("tbr") or 1e9, item))
+    found.sort(key=lambda entry: entry[:2])
+    return found[0][2] if found else None
+
+
 def _pick_audio(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Самый лёгкий поток одного звука — по нему строится волна.
 
@@ -142,6 +168,8 @@ def _pick_audio(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
         and "dash" not in str(item.get("protocol") or "")
         and item.get("url")
     ]
+    # Звук с пометкой drc — с выровненной громкостью: для волны он врёт.
+    audio = [item for item in audio if "drc" not in str(item.get("format_id") or "")] or audio
     audio.sort(key=lambda item: item.get("abr") or item.get("tbr") or 1e9)
     return audio[0] if audio else None
 
@@ -184,7 +212,8 @@ async def resolve(url: str) -> dict[str, Any]:
         "previewToken": None,
         "previewHeight": None,
         "previewNote": None,
-        #: Все качества предпросмотра, какие есть у ссылки: [{height, token}].
+        #: Все качества предпросмотра, какие есть у ссылки: [{height, token,
+        #: separate}]. У separate звук берётся из audioToken.
         "previewOptions": [],
         #: Поток одного звука для волны; нет — волна строится по предпросмотру.
         "audioToken": None,
@@ -231,9 +260,16 @@ async def resolve(url: str) -> dict[str, Any]:
     height = int(chosen.get("height") or 0)
     result["previewToken"] = options.get(height) or enlist(chosen, f"h{height}")
     result["previewHeight"] = chosen.get("height")
-    result["previewOptions"] = [
-        {"height": key, "token": value} for key, value in sorted(options.items(), reverse=True)
-    ]
+    # Высоты, которых нет слитным потоком, — картинкой отдельно от звука.
+    separate: dict[int, str] = {}
+    if sound:
+        for wanted in SEPARATE_HEIGHTS:
+            video = None if wanted in options else _video_only(formats, wanted)
+            if video:
+                separate[wanted] = enlist(video, f"v{wanted}")
+    listed = [{"height": key, "token": value, "separate": False} for key, value in options.items()]
+    listed += [{"height": key, "token": value, "separate": True} for key, value in separate.items()]
+    result["previewOptions"] = sorted(listed, key=lambda item: -int(item["height"]))
     if sound:
         result["audioToken"] = enlist(sound, "audio")
     return result
@@ -287,7 +323,7 @@ async def refresh(stream: Stream) -> bool:
             (
                 str(item["token"])
                 for item in data.get("previewOptions") or []
-                if f"h{item['height']}" == stream.pick
+                if f"{'v' if item.get('separate') else 'h'}{item['height']}" == stream.pick
             ),
             str(data.get("previewToken") or ""),
         )

@@ -160,7 +160,7 @@ export function ExportPanel({
     }
   })
   const [streamCopy, setStreamCopy] = useState(false)
-  const [suffix, setSuffix] = useState('_sig')
+  const [suffix, setSuffix] = useState('_anvil')
   // Высота, которая стоит на второй кнопке разрешения: последняя выбранная.
   const [listHeight, setListHeight] = useState(() => {
     const prefs = loadPrefs()
@@ -250,8 +250,8 @@ export function ExportPanel({
     setStreamCopy(Boolean(preset.options.stream_copy))
     // Имя, которое человек уже поправил руками, не трогаем.
     setSuffix((current) =>
-      current === '_sig' || Object.values(PRESET_SUFFIX).includes(current)
-        ? PRESET_SUFFIX[preset.id] ?? '_sig'
+      current === '_anvil' || Object.values(PRESET_SUFFIX).includes(current)
+        ? PRESET_SUFFIX[preset.id] ?? '_anvil'
         : current,
     )
   }
